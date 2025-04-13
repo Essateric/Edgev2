@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Optional: you can add some base styles */
+body {
+  @apply bg-black text-white;
+}
+
+/* Make time slot borders darker */
+.rbc-time-content > * > .rbc-time-slot {
+  border-top: 1px solid #ccc; /* Make slot lines more visible */
+}
+
+/* Adjust the slot group height to make each 15 min bigger */
+.rbc-timeslot-group {
+  min-height: 40px; /* Adjust to your preference */
+}
+
+/* Optional: Make "Now" line more visible */
+.rbc-now-indicator {
+  background-color: red;
+  height: 3px;
+  z-index: 999;
+}
