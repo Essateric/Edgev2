@@ -41,13 +41,31 @@ body {
   height: 100%;
   display: flex;
   align-items: center; /* Center the text inside */
+  border-left: 1px solid #444; /* Gray vertical grid line */
 }
+
 
 /* Now indicator (red line showing now) */
 .rbc-now-indicator {
   background-color: rgb(0, 157, 255);
   height: 3px;
   z-index: 999;
+}
+
+/* Calendar Navigation Buttons */
+.rbc-toolbar button {
+  @apply text-white border border-gray-500 rounded px-3 py-1;
+  background-color: #1a1a1a; /* Optional: subtle dark background */
+}
+
+.rbc-toolbar button:disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+.rbc-toolbar button:hover:not(:disabled) {
+  @apply text-white;
+  background-color: #333333;
+  box-shadow: 0 0 10px #facc15; /* Tailwind's yellow-400 */
 }
 
 /* Responsive Adjustments */
