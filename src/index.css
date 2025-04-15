@@ -2,24 +2,63 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Optional: you can add some base styles */
+/* Base body */
 body {
-  @apply bg-black text-white;
+  @apply bg-black text-gray-300;
 }
 
-/* Make time slot borders darker */
-.rbc-time-content > * > .rbc-time-slot {
-  border-top: 1px solid #ccc; /* Make slot lines more visible */
+/* Calendar Gutter Styles (Time Column) */
+.rbc-time-gutter {
+  color: #9b611e; /* Chrome bronze */
+  font-size: 0.75rem;
 }
 
-/* Adjust the slot group height to make each 15 min bigger */
+/* Each slot in gutter (small 15min times) */
+.rbc-time-gutter .rbc-time-slot {
+  font-size: 0.65rem;
+  color: #9b9b9b; /* Gray color for small times */
+}
+
+/* Big hour labels */
+.rbc-time-gutter .rbc-time-slot:first-child {
+  font-size: 0.85rem;
+  font-weight: bold;
+  color: #9b611e; /* Bronze again for full hours */
+}
+
+/* 15-min Block (timeslot group) */
 .rbc-timeslot-group {
-  min-height: 40px; /* Adjust to your preference */
+  min-height: 40px; /* Adjust height for clean layout */
+  padding: 0;
+  margin: 0;
+  border-bottom: 1px dotted #555; /* Light dotted line */
 }
 
-/* Optional: Make "Now" line more visible */
+/* Individual time slots */
+.rbc-time-slot {
+  padding: 0;
+  margin: 0;
+  height: 100%;
+  display: flex;
+  align-items: center; /* Center the text inside */
+}
+
+/* Now indicator (red line showing now) */
 .rbc-now-indicator {
-  background-color: red;
+  background-color: rgb(0, 157, 255);
   height: 3px;
   z-index: 999;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+  .rbc-timeslot-group {
+    min-height: 30px; /* Smaller slots on tablet */
+  }
+}
+
+@media (max-width: 500px) {
+  .rbc-timeslot-group {
+    min-height: 25px; /* Even smaller on mobile */
+  }
 }
