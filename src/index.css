@@ -7,43 +7,67 @@ body {
   @apply bg-black text-gray-300;
 }
 
+/* Make vertical lines between 15-min slots more visible */
+.rbc-day-slot .rbc-time-slot {
+  border-top: 1px solid #c2b1b1; /* Use black or any visible color */
+}
+
 /* Calendar Gutter Styles (Time Column) */
 .rbc-time-gutter {
   color: #9b611e; /* Chrome bronze */
   font-size: 0.75rem;
 }
 
-/* Each slot in gutter (small 15min times) */
-.rbc-time-gutter .rbc-time-slot {
-  font-size: 0.65rem;
-  color: #9b9b9b; /* Gray color for small times */
-}
-
 /* Big hour labels */
 .rbc-time-gutter .rbc-time-slot:first-child {
   font-size: 0.85rem;
   font-weight: bold;
-  color: #9b611e; /* Bronze again for full hours */
+  color: #9b611e;
 }
 
-/* 15-min Block (timeslot group) */
-.rbc-timeslot-group {
-  min-height: 40px; /* Adjust height for clean layout */
-  padding: 0;
-  margin: 0;
-  border-bottom: 1px dotted #555; /* Light dotted line */
-}
-
-/* Individual time slots */
-.rbc-time-slot {
-  padding: 0;
-  margin: 0;
-  height: 100%;
+.rbc-time-gutter .rbc-time-slot {
+  justify-content: center;
+  align-items: center;
   display: flex;
-  align-items: center; /* Center the text inside */
-  border-left: 1px solid #444; /* Gray vertical grid line */
+  height: 32px;
+  font-size: 0.85rem;
+  font-weight: bold;
+  color: #dba15f;
 }
 
+
+/* Group (each hour block) */
+.rbc-timeslot-group {
+  min-height: 40px; /* 4 slots × 10px = 40px per hour */
+  border-bottom: 1px dotted #555; /* horizontal line */
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  margin: 0;
+}
+
+/* Each 15-minute slot inside the group */
+.rbc-time-slot {
+  min-height: 20px !important;
+  height: 32px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-left: 1px solid #707135; /* vertical grid lines */
+  padding: 0;
+  margin: 0;
+  line-height: normal;
+}
+
+/* Gutter-specific alignment */
+.rbc-time-gutter .rbc-time-slot {
+  justify-content: center;
+  align-items: center;
+  /*height: auto; /* Let flex layout handle height */
+  display: flex;
+  min-height: 20px !important;
+  height: 32px !important;
+}
 
 /* Now indicator (red line showing now) */
 .rbc-now-indicator {
@@ -52,10 +76,35 @@ body {
   z-index: 999;
 }
 
+/* Keep the grid/table background white */
+.rbc-time-content {
+  background-color: white !important;
+}
+
+/* Optional: maintain white background inside each cell */
+.rbc-day-slot,
+.rbc-time-slot {
+  background-color: white !important;
+}
+
+/* Force time gutter width to stay fixed */
+.rbc-time-header-gutter,
+.rbc-time-gutter {
+  min-width: 72px !important;
+  max-width: 72px !important;
+  width: 72px !important;
+  box-sizing: border-box;
+}
+
+/* Optional: prevent header content shift */
+.rbc-header {
+  min-width: 100px;
+}
+
 /* Calendar Navigation Buttons */
 .rbc-toolbar button {
   @apply text-white border border-gray-500 rounded px-3 py-1;
-  background-color: #1a1a1a; /* Optional: subtle dark background */
+  background-color: #1a1a1a;
 }
 
 .rbc-toolbar button:disabled {
@@ -65,18 +114,18 @@ body {
 .rbc-toolbar button:hover:not(:disabled) {
   @apply text-white;
   background-color: #333333;
-  box-shadow: 0 0 10px #facc15; /* Tailwind's yellow-400 */
+  box-shadow: 0 0 10px #facc15;
 }
 
 /* Responsive Adjustments */
 @media (max-width: 768px) {
   .rbc-timeslot-group {
-    min-height: 30px; /* Smaller slots on tablet */
+    height: 20px;
   }
 }
 
 @media (max-width: 500px) {
   .rbc-timeslot-group {
-    min-height: 25px; /* Even smaller on mobile */
+    height: 25px;
   }
 }

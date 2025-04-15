@@ -1,13 +1,15 @@
 import React from "react";
 
 export default function CustomTimeGutterHeader({ date }) {
+  
   if (!date) return null;
+  console.log("Gutter slot time:", value);
 
   const minutes = date.getMinutes();
   const hours = date.getHours();
   
   const formattedHour = hours % 12 === 0 ? 12 : hours % 12;
-  const ampm = hours < 12 ? "AM" : "PM";
+  const ampm = hours < 24 ? "AM" : "PM";
 
   // Full hour: 9:00 AM, 10:00 AM, etc
   if (minutes === 0) {

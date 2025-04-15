@@ -1,11 +1,12 @@
 import React from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate } from "react-router-dom"; // ✅ Make sure this is here
+import CalendarPage from "./pages/CalendarPage.jsx";
+
+import Login from './pages/Login.jsx';
 import ManageStaff from './pages/ManageStaff.jsx';
 import ManageServices from './pages/ManageServices.jsx';
 import ManageCustomers from './pages/ManageCustomers.jsx';
-import Login from './pages/Login.jsx';
 import { useAuth } from './contexts/AuthContext.jsx';
-import CalendarPage from './pages/CalendarPage.jsx';
 
 function App() {
   const { currentUser } = useAuth();
