@@ -1,27 +1,40 @@
-import React from 'react';
-import { Routes, Route, Navigate } from "react-router-dom"; // ✅ Make sure this is here
+import { Routes, Route, Navigate } from "react-router-dom";
+import { useAuth } from "./contexts/AuthContext";
+import Login from "./pages/Login.jsx";
+import Dashboard from "./pages/Dashboard";
 import CalendarPage from "./pages/CalendarPage.jsx";
-
-import Login from './pages/Login.jsx';
-import ManageStaff from './pages/ManageStaff.jsx';
-import ManageServices from './pages/ManageServices.jsx';
-import ManageCustomers from './pages/ManageCustomers.jsx';
-import { useAuth } from './contexts/AuthContext.jsx';
+import ManageClients from "./pages/ManageClients.jsx";
+import ManageServices from "./pages/ManageServices.jsx";
+import ManageStaff from "./pages/ManageStaff.jsx";
+import Settings from "./pages/Settings.jsx"; // ← include this if you're using it
+import StaffLayout from "./layouts/StaffLayout.jsx";
+import { Toaster } from "react-hot-toast";
 
 function App() {
   const { currentUser } = useAuth();
 
   return (
+    <Toaster position="top-right" reverseOrder={false} />,
     <Routes>
       {!currentUser ? (
-        <Route path="*" element={<Login />} />
+        <>
+          {/* Not logged in: go to login page */}
+          <Route path="*" element={<Login />} />
+        </>
       ) : (
         <>
-          <Route path="/" element={<CalendarPage />} />
-          <Route path="/manage-staff" element={<ManageStaff />} />
-          <Route path="/manage-services" element={<ManageServices />} />
-          <Route path="/manage-customers" element={<ManageCustomers />} />
-          <Route path="*" element={<Navigate to="/" />} />
+          {/* Logged in: use StaffLayout wrapper */}
+          <Route element={<StaffLayout />}>
+          <Route path="/dashboard" element={<Dashboard />} />
+            <Route index element={<CalendarPage />} />
+            <Route path="manage-clients" element={<ManageClients />} />
+            <Route path="manage-staff" element={<ManageStaff />} />
+            <Route path="manage-services" element={<ManageServices />} />
+            <Route path="settings" element={<Settings />} />
+
+            {/* Only catch unmatched paths inside layout */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
         </>
       )}
     </Routes>

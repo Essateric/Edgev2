@@ -1,0 +1,4 @@
+name,email,hours,service_category,service_name,price,duration
+Martin,martin@example.com,9am - 6pm,Cut and Finish,Cut and Blow Dry,25,30
+Annalise,annalise@example.com,10am - 5pm,Gents,Wet Cut,15,30
+Daisy,daisy@example.com,9am - 4pm,Cut and Finish,Dry Cut,15,45
