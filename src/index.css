@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+.react-select__control,
+.react-select__single-value,
+.react-select__menu,
+.react-select__option {
+  font-family: inherit;
+  font-size: 1rem;
+}
+
 /* Base body */
 body {
   @apply bg-black text-gray-300;
@@ -17,7 +25,7 @@ body {
   color: transparent;
   background-clip: text;
   -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  -webkit-text-fill-color: transparent; 
   animation: shine 4s linear infinite;
 }
 
@@ -46,6 +54,10 @@ body {
 /* Make vertical lines between 15-min slots more visible */
 .rbc-day-slot .rbc-time-slot {
   border-top: 1px solid #c2b1b1; /* Use black or any visible color */
+}
+
+.rbc-event{
+  border-radius: 1%;
 }
 
 /* Calendar Gutter Styles (Time Column) */
@@ -167,4 +179,9 @@ body {
   .rbc-timeslot-group {
     height: 25px;
   }
+}
+
+.rbc-event {
+  width: 100% !important;
+  left: 0 !important;
 }
