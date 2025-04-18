@@ -28,7 +28,7 @@ function App() {
           <Route path="/dashboard" element={<Dashboard />} />
             <Route index element={<CalendarPage />} />
             <Route path="manage-clients" element={<ManageClients />} />
-            <Route path="manage-staff" element={<ManageStaff />} />
+            <Route path="staff" element={<ManageStaff />} />
             <Route path="manage-services" element={<ManageServices />} />
             <Route path="settings" element={<Settings />} />
 
