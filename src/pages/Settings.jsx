@@ -1,14 +1,43 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import toast from "react-hot-toast";
-import { resetClients } from "../scripts/resetClients";
+import { seedStaff } from "../scripts/seedStaffData";
+import { seedClients } from "../scripts/seedClients";
 import { exportClientsToCSV } from "../scripts/exportClients";
 import CsvStaffUploader from "../components/CsvStaffUploader";
 import CsvClientUploader from "../components/CsvClientUploader";
 import Button from "../components/Button";
 import ImportClientsButton from "../components/ImportClientsButton";
+import { getDocs, collection} from "firebase/firestore";
+import { db } from "../firebase";
+
 
 export default function Settings() {
+  const [seedingStaff, setSeedingStaff] = useState(false);
   const [seedingClients, setSeedingClients] = useState(false);
+  const [staffList, setStaffList] = useState([]);
+
+  useEffect(() => {
+    const fetchStaff = async () => {
+      const snap = await getDocs(collection(db, "staff"));
+      setStaffList(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    };
+    fetchStaff();
+  }, []);
+
+  const handleSeedStaff = async () => {
+    setSeedingStaff(true);
+    toast.loading("Seeding staff...");
+    try {
+      await seedStaff();
+      toast.dismiss();
+      toast.success("Staff seeded successfully");
+    } catch {
+      toast.dismiss();
+      toast.error("Failed to seed staff.");
+    } finally {
+      setSeedingStaff(false);
+    }
+  };
 
   const handleSeedClients = async () => {
     setSeedingClients(true);
@@ -28,6 +57,24 @@ export default function Settings() {
   return (
     <div className="p-6 text-black space-y-8">
       <h1 className="text-2xl font-bold text-bronze">Settings</h1>
+
+      {/* Seed Data */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <SettingCard
+          title="Seed Staff Data"
+          description="Adds demo staff members and services. Use for testing only."
+          buttonLabel={seedingStaff ? "Seeding..." : "Seed Staff"}
+          onClick={handleSeedStaff}
+          disabled={seedingStaff}
+        />
+        <SettingCard
+          title="Seed Client Data"
+          description="Adds demo clients with notes. Useful for dashboard visuals and testing."
+          buttonLabel={seedingClients ? "Seeding..." : "Seed Clients"}
+          onClick={handleSeedClients}
+          disabled={seedingClients}
+        />
+      </div>
 
       {/* CSV Upload */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -71,6 +118,7 @@ export default function Settings() {
           Delete All Clients (disabled)
         </Button>
       </div>
+      
     </div>
   );
 }

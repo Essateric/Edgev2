@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo } from "react";
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "../firebase";
 import Button from "./Button";
+import { SaveRetainedBooking } from "../utils/SaveRetainedBooking"; // adjust path if needed
 
 const fallbackCategories = ["Cut and Finish", "Gents", "Highlights"];
 const fallbackServices = [
@@ -66,24 +67,62 @@ export default function NewBooking({ stylistName, stylistId, selectedSlot, onBac
         price: service.basePrice,
       });
 
+const handleConfirm = () => {
+  if (!selectedSlot || basket.length === 0) return;
+
+  const events = [];
+  let currentTime = new Date(selectedSlot.start);
+
+  basket.forEach((service) => {
+    const endTime = new Date(currentTime.getTime() + (service.baseDuration || 0) * 60000);
+
+    events.push({
+      title: service.name,
+      start: new Date(currentTime),
+      end: new Date(endTime),
+      resourceId: stylistId,
+      duration: service.baseDuration,
+      price: service.basePrice,
+    });
+
+    // 🔒 Save chemical service data to Firestore
+    SaveRetainedBooking({
+      clientId: selectedClient,
+      clientName: clients.find(c => c.id === selectedClient)?.firstName + " " + clients.find(c => c.id === selectedClient)?.lastName,
+      stylistId,
+      stylistName,
+      service,
+      start: new Date(currentTime),
+      end: new Date(endTime),
+    });
+
+    currentTime = endTime;
+  });
+
+  onConfirm(events);
+};
+
+
       currentTime = endTime;
+      
     });
 
     onConfirm(events);
   };
 
   return (
-    <div className="fixed inset-0 bg-white z-50 overflow-hidden p-4 rounded shadow-xl max-w-7xl mx-auto">
-      <h2 className="text-xl font-bold text-bronze mb-4">Select Services</h2>
+    <div className="fixed inset-0 bg-white z-50 overflow-hidden p-6 rounded shadow-xl max-w-7xl mx-auto">
+      <h2 className="text-2xl font-bold text-bronze mb-4">Select Services</h2>
 
       <div className="grid grid-cols-3 gap-4 h-[70vh]">
+        {/* Category List */}
         <div className="overflow-y-auto border-r pr-2">
           {categories.map((cat) => (
             <button
               key={cat}
               onClick={() => setSelectedCategory(cat)}
-              className={`block w-full text-left px-3 py-2 rounded border mb-2 ${
-                selectedCategory === cat ? "bg-bronze text-white" : "border-bronze text-bronze"
+              className={`block w-full text-left px-3 py-2 rounded border mb-2 transition ${
+                selectedCategory === cat ? "bg-bronze text-white" : "border-bronze text-bronze hover:bg-bronze/10"
               }`}
             >
               {cat}
@@ -91,14 +130,15 @@ export default function NewBooking({ stylistName, stylistId, selectedSlot, onBac
           ))}
         </div>
 
+        {/* Services */}
         <div className="overflow-y-auto col-span-1">
           {filteredServices.length === 0 ? (
-            <p>No services available for this stylist in this category.</p>
+            <p className="text-sm text-gray-500">No services available for this stylist in this category.</p>
           ) : (
             filteredServices.map((service, i) => (
               <div
                 key={i}
-                className="border border-gray-300 rounded p-2 flex justify-between items-center mb-2"
+                className="border border-gray-300 rounded p-3 flex justify-between items-center mb-3"
               >
                 <div>
                   <p className="font-medium text-bronze">{service.name}</p>
@@ -106,22 +146,25 @@ export default function NewBooking({ stylistName, stylistId, selectedSlot, onBac
                     £{service.basePrice} • {service.baseDuration} mins
                   </p>
                 </div>
-                <Button onClick={() => addToBasket(service)}>Add</Button>
+                <Button onClick={() => addToBasket(service)} className="text-sm px-3 py-1">
+                  Add
+                </Button>
               </div>
             ))
           )}
         </div>
 
-        <div className="border-l pl-2 overflow-y-auto">
-          <h4 className="font-semibold mb-2">Selected Services</h4>
+        {/* Basket */}
+        <div className="border-l pl-4 overflow-y-auto">
+          <h4 className="font-semibold text-lg text-bronze mb-2">Selected Services</h4>
           {basket.length === 0 ? (
-            <p>No services selected yet.</p>
+            <p className="text-sm text-gray-500">No services selected yet.</p>
           ) : (
-            <ul className="space-y-2">
+            <ul className="space-y-3">
               {basket.map((item, index) => (
                 <li
                   key={index}
-                  className="flex justify-between items-center border rounded px-2 py-1"
+                  className="flex justify-between items-center border border-gray-300 rounded px-3 py-2"
                 >
                   <div>
                     <p className="font-medium text-bronze">{item.name}</p>
@@ -131,7 +174,7 @@ export default function NewBooking({ stylistName, stylistId, selectedSlot, onBac
                   </div>
                   <button
                     onClick={() => removeFromBasket(index)}
-                    className="text-sm text-red-500"
+                    className="text-xs text-red-500 hover:underline"
                   >
                     Remove
                   </button>
@@ -143,13 +186,13 @@ export default function NewBooking({ stylistName, stylistId, selectedSlot, onBac
           {basket.length > 0 && (
             <div className="mt-4">
               <p className="font-semibold text-sm text-bronze">
-                Total: £{totalCost} • {totalDuration} mins
+                Total: £{totalCost} • {Math.floor(totalDuration / 60)}h {totalDuration % 60}m
               </p>
               <div className="flex justify-between mt-4">
                 <Button onClick={onBack} className="bg-gray-300 text-black hover:bg-gray-400">
                   Back
                 </Button>
-                <Button onClick={handleConfirm} className="bg-green-600 text-white">
+                <Button onClick={handleConfirm} className="bg-green-600 text-white hover:bg-green-700">
                   Confirm Booking
                 </Button>
               </div>
@@ -158,6 +201,7 @@ export default function NewBooking({ stylistName, stylistId, selectedSlot, onBac
         </div>
       </div>
 
+      {/* Cancel at bottom */}
       <div className="mt-6 text-right">
         <Button onClick={onCancel} className="bg-red-500 text-white hover:bg-red-600">
           Cancel

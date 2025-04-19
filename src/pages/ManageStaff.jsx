@@ -286,27 +286,34 @@ export default function ManageStaff() {
           {editingId ? "Update Staff" : "Add Staff"}
         </button>
       </form>
-
       <div className="mt-6">
-        <h3 className="text-lg font-bold text-chrome mb-2">Current Staff</h3>
-        {staff.map((member) => (
-          <div key={member.id} className="border-bronze p-4 rounded mb-2 bg-white flex justify-between">
-            <div>
-              <p className="font-bold text-bronze border-bronze">{member.name}</p>
-              <p className="text-sm text-bronze border-bronze">{member.email}</p>
-              <ul className="text-sm mt-2 text-bronze border-bronze">
-                {member.services?.map((s, i) => (
-                  <li key={i}>• {s.name} - £{s.price} ({s.duration?.hours || 0}h {s.duration?.minutes || 0}m)</li>
-                ))}
-              </ul>
-            </div>
-            <div className="flex gap-2 items-center">
-              <button onClick={() => handleEdit(member)} className="text-blue-500 underline">Edit</button>
-              <button onClick={() => handleDelete(member.id)} className="text-red-500 underline">Delete</button>
-            </div>
+  <h3 className="text-lg font-bold text-chrome mb-4">Current Staff</h3>
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    {staff.map((member) => (
+      <div key={member.id} className="bg-white rounded-2xl shadow-md p-4 border border-gray-200">
+        <div className="flex justify-between items-start mb-2">
+          <div>
+            <h4 className="text-lg font-semibold text-gray-800">{member.name}</h4>
+            <p className="text-sm text-gray-500">{member.email}</p>
           </div>
-        ))}
+          <div className="text-sm space-x-4">
+            <button onClick={() => handleEdit(member)} className="text-blue-600 hover:underline">Edit</button>
+            <button onClick={() => handleDelete(member.id)} className="text-red-500 hover:underline">Delete</button>
+          </div>
+        </div>
+        <ul className="mt-2 space-y-1 text-sm text-gray-700">
+          {member.services?.map((s, i) => (
+            <li key={i} className="flex justify-between border-b py-1 last:border-b-0">
+              <span>{s.name}</span>
+              <span className="text-gray-600 whitespace-nowrap">£{s.price} ({s.duration?.hours || 0}h {s.duration?.minutes || 0}m)</span>
+            </li>
+          ))}
+        </ul>
       </div>
+    ))}
+  </div>
+</div>
+
     </div>
   );
 }

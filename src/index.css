@@ -175,13 +175,28 @@ body {
   }
 }
 
+/* Make each event (especially background blockers) stretch full width */
+.rbc-event {
+  width: 100% !important;
+  left: 0 !important;
+  right: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+}
+
+/* Remove shadow or borders if needed */
+.rbc-event-content {
+  width: 100% !important;
+  height: 100%;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 @media (max-width: 500px) {
   .rbc-timeslot-group {
     height: 25px;
   }
-}
-
-.rbc-event {
-  width: 100% !important;
-  left: 0 !important;
 }
