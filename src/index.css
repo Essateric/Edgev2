@@ -77,6 +77,28 @@ body {
   color: #9b611e;
 }
 
+.rbc-time-slot {
+  min-height: 24px !important;
+  height: 24px !important;
+  display: flex;
+  align-items: center;
+}
+
+.rbc-time-slot .rbc-label {
+  display: block !important;
+  font-size: 11px;
+  color: #555;
+  text-align: right;
+  padding-right: 4px;
+}
+
+/* Bronze for full-hour slots */
+.rbc-time-gutter .rbc-time-slot:nth-child(4n+1) .rbc-label {
+  color: #9b611e;
+  font-weight: bold;
+}
+
+
 .rbc-time-gutter .rbc-time-slot {
   justify-content: center;
   align-items: center;
@@ -154,6 +176,7 @@ body {
 /* Optional: prevent header content shift */
 .rbc-header {
   min-width: 100px;
+  background: #000;
 }
 
 /* Calendar Navigation Buttons */

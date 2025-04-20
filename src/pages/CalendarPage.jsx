@@ -13,24 +13,15 @@ import Modal from "../components/Modal";
 import NewBooking from "../components/NewBooking";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "react-big-calendar/lib/addons/dragAndDrop/styles.css";
+import "../styles/calendarStyles.css";
 import Select from "react-select";
 import useUnavailableTimeBlocks from "../components/UnavailableTimeBlocks";
 import UseSalonClosedBlocks from "../components/UseSalonClosedBlocks";
-import TimeSlotLabel from "../components/TimeSlotLabel";
 import BookingDetailModal from "../components/BookingDetailModal";
 import BookingPopUp from "../components/BookingPopUp";
 import CustomCalendarEvent from "../components/CustomCalendarEvent";
 
 const DnDCalendar = withDragAndDrop(Calendar);
-
-const EventWithClientName = ({ event }) => {
-  return (
-    <div className="rbc-event-content text-white text-xs leading-tight text-center px-1">
-      <div className="font-semibold text-sm truncate">{event.title}</div>
-      {event.clientName && <div className="italic truncate">{event.clientName}</div>}
-    </div>
-  );
-};
 
 const locales = { "en-GB": enGB };
 const localizer = dateFnsLocalizer({
@@ -68,7 +59,9 @@ export default function CalendarPage() {
   const customFormats = {
     dayHeaderFormat: (date, culture, localizer) =>
       format(date, "eeee do MMMM", { locale: enGB }),
+    slotLabelFormat: (date) => format(date, "HH:mm"), // or "hh:mm a" for AM/PM
   };
+  
 
   useEffect(() => {
     const fetchClients = async () => {
@@ -183,7 +176,6 @@ export default function CalendarPage() {
         }}
         style={{ height: "90vh" }}
         components={{
-          timeGutterSlot: ({ value }) => <TimeSlotLabel value={value} />,
           event: CustomCalendarEvent,
         }}
       />
