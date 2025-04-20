@@ -1,53 +1,54 @@
-// src/components/UseSalonClosedBlocks.jsx
 import { useEffect, useState } from "react";
 
-export default function UseSalonClosedBlocks(stylistList, open = "09:00", close = "20:00") {
+export default function UseSalonClosedBlocks(stylistList, visibleDate, open = "09:00", close = "20:00") {
   const [closedBlocks, setClosedBlocks] = useState([]);
 
   useEffect(() => {
-    if (!stylistList.length) return;
+    if (!stylistList.length || !visibleDate) return;
 
     const result = [];
-    const today = new Date();
 
-    // Parse open/close times once
-    const [openHour, openMinute] = open.split(":").map(Number);
-    const [closeHour, closeMinute] = close.split(":").map(Number);
+    const today = new Date(visibleDate);
+    today.setHours(0, 0, 0, 0); // 👈 ensures consistency
 
-    // Loop through each day in the week (Sunday to Saturday)
-    for (let i = 0; i < 7; i++) {
-      const date = new Date(today);
-      date.setDate(today.getDate() - today.getDay() + i);
+    const openTime = typeof open === "string" ? open : "09:00";
+    const closeTime = typeof close === "string" ? close : "20:00";
+    const [openHour, openMinute] = openTime.split(":").map(Number);
+    const [closeHour, closeMinute] = closeTime.split(":").map(Number);
 
-      stylistList.forEach((stylist) => {
-        // Morning block: Midnight to salon opening
-        const morningStart = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0);
-        const morningEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate(), openHour, openMinute);
+    for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
+      for (let i = 0; i < 7; i++) {
+        const date = new Date(today);
+        date.setDate(today.getDate() - today.getDay() + i + weekOffset * 7);
 
-        // Evening block: Salon closing to 11:59 PM
-        const eveningStart = new Date(date.getFullYear(), date.getMonth(), date.getDate(), closeHour, closeMinute);
-        const eveningEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59);
+        stylistList.forEach((stylist) => {
+          const morningStart = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0);
+          const morningEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate(), openHour, openMinute);
 
-        result.push({
-          start: morningStart,
-          end: morningEnd,
-          resourceId: stylist.id,
-          title: "Salon Closed",
-          isSalonClosed: true,
+          const eveningStart = new Date(date.getFullYear(), date.getMonth(), date.getDate(), closeHour, closeMinute);
+          const eveningEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59);
+
+          result.push({
+            start: morningStart,
+            end: morningEnd,
+            resourceId: stylist.id,
+            title: "Salon Closed",
+            isSalonClosed: true,
+          });
+
+          result.push({
+            start: eveningStart,
+            end: eveningEnd,
+            resourceId: stylist.id,
+            title: "Salon Closed",
+            isSalonClosed: true,
+          });
         });
-
-        result.push({
-          start: eveningStart,
-          end: eveningEnd,
-          resourceId: stylist.id,
-          title: "Salon Closed",
-          isSalonClosed: true,
-        });
-      });
+      }
     }
 
     setClosedBlocks(result);
-  }, [stylistList, open, close]);
+  }, [stylistList, visibleDate, open, close]); // ✅ include visibleDate here
 
   return closedBlocks;
 }

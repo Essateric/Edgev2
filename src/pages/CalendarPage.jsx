@@ -7,7 +7,7 @@ import {
 import withDragAndDrop from "react-big-calendar/lib/addons/dragAndDrop";
 import { format, parse, startOfWeek, getDay } from "date-fns";
 import enGB from "date-fns/locale/en-GB";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, getDoc, doc } from "firebase/firestore";
 import { db } from "../firebase";
 import Modal from "../components/Modal";
 import NewBooking from "../components/NewBooking";
@@ -17,9 +17,20 @@ import Select from "react-select";
 import useUnavailableTimeBlocks from "../components/UnavailableTimeBlocks";
 import UseSalonClosedBlocks from "../components/UseSalonClosedBlocks";
 import TimeSlotLabel from "../components/TimeSlotLabel";
+import BookingDetailModal from "../components/BookingDetailModal";
+import BookingPopUp from "../components/BookingPopUp";
+import CustomCalendarEvent from "../components/CustomCalendarEvent";
 
 const DnDCalendar = withDragAndDrop(Calendar);
 
+const EventWithClientName = ({ event }) => {
+  return (
+    <div className="rbc-event-content text-white text-xs leading-tight text-center px-1">
+      <div className="font-semibold text-sm truncate">{event.title}</div>
+      {event.clientName && <div className="italic truncate">{event.clientName}</div>}
+    </div>
+  );
+};
 
 const locales = { "en-GB": enGB };
 const localizer = dateFnsLocalizer({
@@ -38,86 +49,63 @@ export default function CalendarPage() {
   const [selectedClient, setSelectedClient] = useState("");
   const [step, setStep] = useState(1);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const unavailableBlocks = useUnavailableTimeBlocks(stylistList);
-  const salonClosedBlocks = UseSalonClosedBlocks(stylistList);
+  const [selectedBooking, setSelectedBooking] = useState(null);
+  const [viewBookingModalOpen, setViewBookingModalOpen] = useState(false);
+  const [visibleDate, setVisibleDate] = useState(new Date());
+  const [calendarSettings, setCalendarSettings] = useState(null);
 
 
   useEffect(() => {
+    const fetchCalendarSettings = async () => {
+      const snap = await getDoc(doc(db, "config", "calendarSettings"));
+      if (snap.exists()) setCalendarSettings(snap.data());
+    };
+    fetchCalendarSettings();
+  }, [])
+
+  const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
+  const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
+  const customFormats = {
+    dayHeaderFormat: (date, culture, localizer) =>
+      format(date, "eeee do MMMM", { locale: enGB }),
+  };
+
+  useEffect(() => {
     const fetchClients = async () => {
-      const clientSnapshot = await getDocs(collection(db, "clients"));
-      const clientList = clientSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setClients(clientList);
+      const snapshot = await getDocs(collection(db, "clients"));
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setClients(data);
     };
 
     const fetchStylists = async () => {
-      const stylistSnapshot = await getDocs(collection(db, "staff"));
-      const stylistData = stylistSnapshot.docs.map((doc) => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          title: data.name || "Unnamed Stylist",
-          weeklyHours: data.weeklyHours || {},
-        };
+      const snapshot = await getDocs(collection(db, "staff"));
+      const data = snapshot.docs.map(doc => {
+        const d = doc.data();
+        return { id: doc.id, title: d.name || "Unnamed Stylist", weeklyHours: d.weeklyHours || {} };
       });
-      setStylistList(stylistData);
+      setStylistList(data);
+    };
+
+    const fetchEvents = async () => {
+      const snapshot = await getDocs(collection(db, "bookings"));
+      const data = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        start: doc.data().start?.toDate?.() || new Date(),
+        end: doc.data().end?.toDate?.() || new Date(),
+      }));
+      setEvents(data);
     };
 
     fetchClients();
     fetchStylists();
+    fetchEvents();
   }, []);
 
-  useEffect(() => {
-    setTimeout(() => {
-      document.querySelectorAll(".rbc-time-slot").forEach((slot) => {
-        const raw = slot.getAttribute("data-time");
-        if (!raw) return;
-  
-        const time = new Date(raw);
-        const mins = time.getMinutes();
-        const hrs = time.getHours();
-        const formattedHour = hrs % 12 === 0 ? 12 : hrs % 12;
-        const ampm = hrs < 12 ? "AM" : "PM";
-  
-        slot.innerHTML = "";
-  
-        const label = document.createElement("div");
-        label.style.fontSize = "0.7rem";
-        label.style.textAlign = "center";
-        label.style.width = "100%";
-        label.style.color = mins === 0 ? "#cd7f32" : "#999";
-  
-        label.innerText =
-          mins === 0
-            ? `${formattedHour}:00 ${ampm}`
-            : `:${String(mins).padStart(2, "0")}`;
-  
-        slot.appendChild(label);
-      });
-    }, 200);
-  });
-  
   const moveEvent = useCallback(({ event, start, end, resourceId }) => {
-    const updatedEvent = {
-      ...event,
-      start,
-      end,
-      resourceId,
-    };
-    setEvents((prev) => prev.map((evt) => (evt === event ? updatedEvent : evt)));
+    const updated = { ...event, start, end, resourceId };
+    setEvents(prev => prev.map(e => (e.id === event.id ? updated : e)));
   }, []);
-
-  const clientOptions = clients.map((client) => ({
-    value: client.id,
-    label: `${client.firstName || ""} ${client.lastName || ""} - ${client.mobile || ""}`,
-  }));
-
-  function isWithinWorkingHours(slotStart, slotEnd, workingHours) {
-    const formatTime = (date) => format(date, "HH:mm");
-    return (
-      formatTime(slotStart) >= workingHours.start &&
-      formatTime(slotEnd) <= workingHours.end
-    );
-  }
 
   const handleModalCancel = () => {
     setIsModalOpen(false);
@@ -126,19 +114,24 @@ export default function CalendarPage() {
     setSelectedClient("");
   };
 
+  const clientOptions = clients.map(client => ({
+    value: client.id,
+    label: `${client.firstName} ${client.lastName} - ${client.mobile}`,
+  }));
+
   return (
     <div className="p-4">
       <h1 className="text-2xl font-bold metallic-text mb-4">The Edge HD Salon</h1>
-      <TimeSlotLabel />
       <DnDCalendar
         localizer={localizer}
         events={[...events, ...unavailableBlocks, ...salonClosedBlocks]}
         startAccessor="start"
         endAccessor="end"
+        formats={customFormats}
         resources={stylistList}
         resourceIdAccessor="id"
         resourceTitleAccessor="title"
-        resourceAccessor={(event) => event.resourceId}
+        resourceAccessor={e => e.resourceId}
         defaultView={Views.DAY}
         views={[Views.DAY]}
         step={15}
@@ -146,39 +139,28 @@ export default function CalendarPage() {
         min={new Date(2025, 0, 1, 9, 0)}
         max={new Date(2025, 0, 1, 20, 0)}
         scrollToTime={new Date(2025, 0, 1, 9, 0)}
-        showNowIndicator={true}
-        selectable={true}
+        showNowIndicator
+        selectable
         onSelectSlot={(slotInfo) => {
           const stylist = stylistList.find(s => s.id === slotInfo.resourceId);
           if (!stylist) return;
-        
-          const day = format(slotInfo.start, "EEEE");
-          const workingHours = stylist.weeklyHours?.[day];
-        
-          // 💥 New check: If this slot overlaps with any unavailable block, skip
-          const overlapsUnavailable = unavailableBlocks.some(block =>
-            block.resourceId === slotInfo.resourceId &&
-            slotInfo.start < block.end &&
-            slotInfo.end > block.start
-          );
-          if (overlapsUnavailable) return; // Do nothing if it's a greyed-out time
-        
-          if (!workingHours || workingHours.off) {
-            alert(`${stylist.title} is off on ${day}`);
-            return;
-          }
-        
-          if (
-            format(slotInfo.start, "HH:mm") >= workingHours.start &&
-            format(slotInfo.end, "HH:mm") <= workingHours.end
-          ) {
-            setSelectedSlot(slotInfo);
-            setStep(1);
-            setIsModalOpen(true);
-          } else {
-            alert(`${stylist.title} works on ${day} from ${workingHours.start} to ${workingHours.end}`);
-          }    
+          setSelectedSlot(slotInfo);
+          setStep(1);
+          setIsModalOpen(true);
         }}
+        onSelectEvent={(event) => {
+          if (event.isUnavailable || event.isSalonClosed) return;
+          setSelectedBooking(event);
+          setViewBookingModalOpen(true);
+        }}
+        onRangeChange={(range) => {
+          if (Array.isArray(range)) {
+            setVisibleDate(range[0]); // day/week views
+          } else {
+            setVisibleDate(range.start); // month view
+          }
+        }}
+        
         onEventDrop={moveEvent}
         resizable
         onEventResize={moveEvent}
@@ -189,100 +171,88 @@ export default function CalendarPage() {
             padding: 0,
             fontSize: 0,
             pointerEvents: "none",
-            width: "100%", // ✅ Fill full column width
-            margin: 0, 
-            zIndex: 1, // optional, just to layer correctly
+            width: "100%",
+            margin: 0,
+            zIndex: 1,
           };
-
-          if (event.isUnavailable) {
-            return {
-              style: {
-                backgroundColor: "#36454F",
-                opacity: 0.7,
-          ...baseStyle,
-              },
-            };
-          }
-          if (event.isSalonClosed) {
-            return {
-              style: {
-                backgroundColor: "#333333", // beige
-                opacity: .7,
-                ...baseStyle,
-              },
-            };
-          }
-          return {};
+          if (event.isUnavailable) return { style: { backgroundColor: "#36454F", opacity: 0.7, ...baseStyle,  pointerEvents: "none", zIndex:1,}, className: "non-working-block", };
+          if (event.isSalonClosed) return { style: { backgroundColor: "#333333", opacity: 0.7, ...baseStyle }, className: "salon-closed-block", };
+          return {     style: {
+            zIndex: 2, // 👈 Always on top
+          },};
         }}
         style={{ height: "90vh" }}
         components={{
-          timeGutterSlot: ({ value }) => {
-            const minutes = value.getMinutes();
-            const hours = value.getHours();
-            const formattedHour = hours % 12 === 0 ? 12 : hours % 12;
-            const ampm = hours < 12 ? "AM" : "PM";
-            const paddedMinutes = minutes.toString().padStart(2, "0");
-          
-            return (
-              <div style={{ textAlign: "center", fontSize: "0.75rem", lineHeight: "32px" }}>
-                {minutes === 0 ? (
-                  <span style={{ fontWeight: "bold", color: "#cd7f32" }}>
-                    {formattedHour}:00 {ampm}
-                  </span>
-                ) : (
-                  <span style={{ color: "#999" }}>:{paddedMinutes}</span>
-                )}
-              </div>
-            );
-          },
-          
-       }}
+          timeGutterSlot: ({ value }) => <TimeSlotLabel value={value} />,
+          event: CustomCalendarEvent,
+        }}
+      />
+
+      <BookingPopUp
+        isOpen={!!selectedBooking}
+        booking={selectedBooking}
+        onClose={() => setSelectedBooking(null)}
+        onEdit={() => {
+          setSelectedSlot({
+            start: selectedBooking.start,
+            end: selectedBooking.end,
+            resourceId: selectedBooking.resourceId,
+          });
+          setStep(1);
+          setIsModalOpen(true);
+          setSelectedClient(selectedBooking.clientId);
+          setSelectedBooking(null);
+        }}
+        onDeleteSuccess={(deletedId) => {
+          setEvents(prev => prev.filter(e => e.id !== deletedId));
+          setSelectedBooking(null);
+        }}
       />
 
       <Modal isOpen={isModalOpen} onClose={handleModalCancel}>
         {step === 1 && (
           <>
             <h3 className="text-lg font-bold mb-4 text-bronze">Select Client</h3>
-            {selectedSlot?.start && selectedSlot?.end && (
-              <p className="text-sm mb-2 text-bronze">
-                Time: {format(new Date(selectedSlot.start), "dd/MM/yyyy HH:mm")} – {format(new Date(selectedSlot.end), "HH:mm")}
-              </p>
-            )}
             <Select
               options={clientOptions}
-              value={clientOptions.find((opt) => opt.value === selectedClient) || null}
+              value={clientOptions.find(opt => opt.value === selectedClient) || null}
               onChange={(selected) => setSelectedClient(selected?.value)}
               placeholder="-- Select Client --"
               className="react-select-container"
               classNamePrefix="react-select"
               styles={{
-                control: (base, state) => ({
+                control: (base) => ({
                   ...base,
-                  backgroundColor: "#fff",
-                  borderColor: "#cd7f32",
-                  boxShadow: state.isFocused ? "0 0 0 1px #cd7f32" : "none",
-                  "&:hover": {
-                    borderColor: "#cd7f32",
-                  },
+                  backgroundColor: "white",
+                  color: "black",
                 }),
-                singleValue: (base) => ({ ...base, color: "#cd7f32" }),
-                placeholder: (base) => ({ ...base, color: "#cd7f32" }),
-                input: (base) => ({ ...base, color: "#cd7f32", opacity: 1 }),
-                option: (base, state) => ({
+                menu: (base) => ({
                   ...base,
-                  backgroundColor: state.isSelected ? "#cd7f32" : "#fff",
-                  color: state.isSelected ? "#fff" : "#cd7f32",
-                  "&:hover": {
-                    backgroundColor: "#f5f5f5",
-                    color: "#cd7f32",
-                  },
+                  backgroundColor: "white",
+                  color: "black",
                 }),
-                menu: (base) => ({ ...base, zIndex: 9999 }),
+                singleValue: (base) => ({
+                  ...base,
+                  color: "black",
+                }),
+                option: (base, { isFocused, isSelected }) => ({
+                  ...base,
+                  backgroundColor: isSelected
+                    ? "#9b611e"
+                    : isFocused
+                    ? "#f1e0c5"
+                    : "white",
+                  color: "black",
+                }),
               }}
             />
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={handleModalCancel} className="text-gray-500">Cancel</button>
-              <button onClick={() => setStep(2)} className="bg-bronze text-white px-4 py-2 rounded" disabled={!selectedClient}>Next</button>
+              <button
+                onClick={() => setStep(2)}
+                className="bg-bronze text-white px-4 py-2 rounded"
+                disabled={!selectedClient}
+              >Next</button>
             </div>
           </>
         )}
@@ -292,23 +262,15 @@ export default function CalendarPage() {
             <h3 className="text-lg font-bold mb-4 text-bronze">Review Details</h3>
             {(() => {
               const selectedClientObj = clients.find(c => c.id === selectedClient);
-              return (
+              return selectedClientObj && (
                 <>
-                  <p className="text-sm text-gray-700 mb-1">
-                    Client: {`${selectedClientObj?.firstName ?? ""} ${selectedClientObj?.lastName ?? ""}`}
-                  </p>
-                  <p className="text-sm text-gray-700 mb-1">
-                    Phone: {selectedClientObj?.mobile ?? "N/A"}
-                  </p>
+                  <p className="text-sm text-gray-700 mb-1">Client: {`${selectedClientObj.firstName} ${selectedClientObj.lastName}`}</p>
+                  <p className="text-sm text-gray-700 mb-1">Phone: {selectedClientObj.mobile}</p>
                 </>
               );
             })()}
-            <p className="text-sm text-gray-700 mb-1">
-              Time: {format(selectedSlot?.start, "dd/MM/yyyy HH:mm")} – {format(selectedSlot?.end, "HH:mm")}
-            </p>
-            <p className="text-sm text-gray-700 mb-3">
-              Stylist: {stylistList.find(s => s.id === selectedSlot?.resourceId)?.title || "N/A"}
-            </p>
+            <p className="text-sm text-gray-700 mb-1">Time: {format(selectedSlot?.start, "dd/MM/yyyy HH:mm")} – {format(selectedSlot?.end, "HH:mm")}</p>
+            <p className="text-sm text-gray-700 mb-3">Stylist: {stylistList.find(s => s.id === selectedSlot?.resourceId)?.title || "N/A"}</p>
             <div className="flex justify-between mt-4">
               <button onClick={() => setStep(1)} className="text-gray-500">Back</button>
               <button onClick={() => setStep(3)} className="bg-bronze text-white px-4 py-2 rounded">Next</button>
@@ -322,6 +284,8 @@ export default function CalendarPage() {
           stylistName={stylistList.find(s => s.id === selectedSlot?.resourceId)?.title}
           stylistId={selectedSlot?.resourceId}
           selectedSlot={selectedSlot}
+          clients={clients}
+          selectedClient={selectedClient}
           onBack={() => setStep(2)}
           onCancel={handleModalCancel}
           onConfirm={(newEvents) => {
@@ -331,6 +295,27 @@ export default function CalendarPage() {
           }}
         />
       )}
+
+      <BookingDetailModal
+        isOpen={viewBookingModalOpen}
+        onClose={() => setViewBookingModalOpen(false)}
+        booking={selectedBooking}
+        stylistList={stylistList}
+        onEdit={() => {
+          setSelectedSlot({
+            start: new Date(selectedBooking.start),
+            end: new Date(selectedBooking.end),
+            resourceId: selectedBooking.resourceId,
+          });
+          setStep(3);
+          setIsModalOpen(true);
+          setViewBookingModalOpen(false);
+        }}
+        onCancelBooking={() => {
+          alert("Cancel logic goes here");
+          setViewBookingModalOpen(false);
+        }}
+      />
     </div>
   );
 }

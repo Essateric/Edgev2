@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useMemo } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, addDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import Button from "./Button";
-import { SaveRetainedBooking } from "../utils/SaveRetainedBooking"; // adjust path if needed
+import SaveRetainedBooking from "../utils/SaveRetainedBooking"; // adjust path if needed
 
 const fallbackCategories = ["Cut and Finish", "Gents", "Highlights"];
 const fallbackServices = [
@@ -11,7 +11,7 @@ const fallbackServices = [
   { name: "Half Head Highlights", category: "Highlights", basePrice: 50, baseDuration: 60, stylist: ["Daisy"] },
 ];
 
-export default function NewBooking({ stylistName, stylistId, selectedSlot, onBack, onCancel, onConfirm }) {
+export default function NewBooking({ stylistName, stylistId, selectedSlot, onBack, onCancel, onConfirm, selectedClient, clients }) {
   const [categories, setCategories] = useState([]);
   const [services, setServices] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState("Cut and Finish");
@@ -49,65 +49,54 @@ export default function NewBooking({ stylistName, stylistId, selectedSlot, onBac
   const totalCost = basket.reduce((sum, s) => sum + (s.basePrice || 0), 0);
   const totalDuration = basket.reduce((sum, s) => sum + (s.baseDuration || 0), 0);
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!selectedSlot || basket.length === 0) return;
 
     const events = [];
     let currentTime = new Date(selectedSlot.start);
 
-    basket.forEach((service) => {
+    for (const service of basket) {
       const endTime = new Date(currentTime.getTime() + (service.baseDuration || 0) * 60000);
 
-      events.push({
+      const newEvent = {
         title: service.name,
         start: new Date(currentTime),
         end: new Date(endTime),
         resourceId: stylistId,
         duration: service.baseDuration,
         price: service.basePrice,
+      };
+
+      events.push(newEvent);
+
+      // 🔒 Save chemical service data (optional retained bookings)
+      await SaveRetainedBooking({
+        clientId: selectedClient,
+        clientName:
+          clients.find((c) => c.id === selectedClient)?.firstName +
+          " " +
+          clients.find((c) => c.id === selectedClient)?.lastName,
+        stylistId,
+        stylistName,
+        service,
+        start: newEvent.start,
+        end: newEvent.end,
       });
 
-const handleConfirm = () => {
-  if (!selectedSlot || basket.length === 0) return;
-
-  const events = [];
-  let currentTime = new Date(selectedSlot.start);
-
-  basket.forEach((service) => {
-    const endTime = new Date(currentTime.getTime() + (service.baseDuration || 0) * 60000);
-
-    events.push({
-      title: service.name,
-      start: new Date(currentTime),
-      end: new Date(endTime),
-      resourceId: stylistId,
-      duration: service.baseDuration,
-      price: service.basePrice,
-    });
-
-    // 🔒 Save chemical service data to Firestore
-    SaveRetainedBooking({
-      clientId: selectedClient,
-      clientName: clients.find(c => c.id === selectedClient)?.firstName + " " + clients.find(c => c.id === selectedClient)?.lastName,
-      stylistId,
-      stylistName,
-      service,
-      start: new Date(currentTime),
-      end: new Date(endTime),
-    });
-
-    currentTime = endTime;
-  });
-
-  onConfirm(events);
-};
-
-
-      currentTime = endTime;
+      // ✅ Save general bookings to Firestore
+      await addDoc(collection(db, "bookings"), {
+        ...newEvent,
+        start: newEvent.start instanceof Date ? newEvent.start : new Date(newEvent.start),
+        end: newEvent.end instanceof Date ? newEvent.end : new Date(newEvent.end),
+        clientId: selectedClient,
+        clientName: clients.find((c) => c.id === selectedClient)?.firstName + " " + clients.find((c) => c.id === selectedClient)?.lastName,
+        createdAt: new Date(),
+      });
       
-    });
+      currentTime = endTime;
+    }
 
-    onConfirm(events);
+    onConfirm(events); // Update UI
   };
 
   return (

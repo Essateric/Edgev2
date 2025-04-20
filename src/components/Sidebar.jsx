@@ -10,7 +10,7 @@ const navItems = [
   { label: "Clients", icon: <FaUser />, path: "/clients" },
   { label: "Calendar", icon: <FaCalendarAlt />, path: "/calendar" },
   { label: "Staff", icon: <FaUsers />, path: "/staff" },
-  { label: "Services", icon: <FaCut />, path: "/services" },
+  { label: "Services", icon: <FaCut />, path: "/manage-services" },
   { label: "Settings", icon: <FaCog />, path: "/settings" },
 ];
 

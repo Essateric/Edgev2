@@ -10,6 +10,10 @@
   font-size: 1rem;
 }
 
+.rbc-event-label {
+  display: none !important;
+}
+
 /* Base body */
 body {
   @apply bg-black text-gray-300;
@@ -183,6 +187,18 @@ body {
   margin: 0 !important;
   padding: 0 !important;
   border-radius: 0 !important;
+}
+
+.rbc-event-content {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  width: 100%;
+  padding: 0.5rem;
+  text-align: center;
+  overflow: hidden;
 }
 
 /* Remove shadow or borders if needed */
