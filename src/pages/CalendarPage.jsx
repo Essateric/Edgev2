@@ -20,6 +20,7 @@ import UseSalonClosedBlocks from "../components/UseSalonClosedBlocks";
 import BookingDetailModal from "../components/BookingDetailModal";
 import BookingPopUp from "../components/BookingPopUp";
 import CustomCalendarEvent from "../components/CustomCalendarEvent";
+import UseTimeSlotLabel from "../utils/UseTimeSlotLabel";
 
 const DnDCalendar = withDragAndDrop(Calendar);
 
@@ -44,6 +45,8 @@ export default function CalendarPage() {
   const [viewBookingModalOpen, setViewBookingModalOpen] = useState(false);
   const [visibleDate, setVisibleDate] = useState(new Date());
   const [calendarSettings, setCalendarSettings] = useState(null);
+
+  UseTimeSlotLabel(9, 20, 15);
 
 
   useEffect(() => {
