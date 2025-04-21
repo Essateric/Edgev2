@@ -21,6 +21,7 @@ import BookingDetailModal from "../components/BookingDetailModal";
 import BookingPopUp from "../components/BookingPopUp";
 import CustomCalendarEvent from "../components/CustomCalendarEvent";
 import UseTimeSlotLabel from "../utils/UseTimeSlotLabel";
+import AddGridTimeLabels from "../utils/AddGridTimeLabels";
 
 const DnDCalendar = withDragAndDrop(Calendar);
 
@@ -45,9 +46,9 @@ export default function CalendarPage() {
   const [viewBookingModalOpen, setViewBookingModalOpen] = useState(false);
   const [visibleDate, setVisibleDate] = useState(new Date());
   const [calendarSettings, setCalendarSettings] = useState(null);
-
+  
   UseTimeSlotLabel(9, 20, 15);
-
+  AddGridTimeLabels(9, 20, 15);
 
   useEffect(() => {
     const fetchCalendarSettings = async () => {

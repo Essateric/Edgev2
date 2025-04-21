@@ -1,34 +1,35 @@
 import { useEffect } from "react";
-import { GenerateTimeSlots } from "./GenerateTimeSlots"; // Make sure this is PascalCase
+import { GenerateTimeSlots } from "./GenerateTimeSlots";
 
 export default function UseTimeSlotLabel(startHour = 9, endHour = 20, interval = 15) {
   useEffect(() => {
     const slots = GenerateTimeSlots(startHour, endHour, interval);
-    const gutterSlots = document.querySelectorAll(".rbc-time-gutter .rbc-time-slot");
+    const allTimeSlots = document.querySelectorAll(".rbc-time-slot");
 
-    gutterSlots.forEach((slot, index) => {
+    allTimeSlots.forEach((slot, index) => {
       if (index >= slots.length) return;
 
-      const time = slots[index]; // e.g. "09:15 AM"
-      const minutePart = time.match(/:(\d{2})/); // Extract just the :15, :30, :45
-
+      const time = slots[index];
+      const minutePart = time.match(/:(\d{2})/);
       const isHour = time.includes(":00");
       const isQuarter = [":15", ":30", ":45"].some((m) => time.includes(m));
 
-      if (!isHour && isQuarter && minutePart) {
-        slot.innerHTML = "";
-        const label = document.createElement("div");
-        label.textContent = minutePart[0]; // ":15", ":30", ":45"
-        label.style.fontSize = "0.65rem";
-        label.style.textAlign = "center";
-        label.style.color = "#999";
-        label.style.fontFamily = "inherit";
-        slot.appendChild(label);
-      }
+      // Only show for quarter increments or hours
+      if (!isHour && !isQuarter) return;
 
-      if (!isHour && !isQuarter) {
-        slot.innerHTML = ""; // Hide anything that’s not 15/30/45
-      }
+      const label = document.createElement("div");
+      label.textContent = isHour ? "" : minutePart[0]; // Skip showing full hour text
+      label.style.fontSize = "0.6rem";
+      label.style.color = "#aaa"; // Light grey
+      label.style.position = "absolute";
+      label.style.top = "2px";
+      label.style.right = "4px";
+      label.style.fontFamily = "inherit";
+      label.style.pointerEvents = "none";
+
+      slot.style.position = "relative"; // Make sure parent is positioned
+      slot.appendChild(label);
     });
   }, [startHour, endHour, interval]);
+  
 }
