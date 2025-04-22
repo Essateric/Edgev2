@@ -17,7 +17,6 @@ import "../styles/calendarStyles.css";
 import Select from "react-select";
 import useUnavailableTimeBlocks from "../components/UnavailableTimeBlocks";
 import UseSalonClosedBlocks from "../components/UseSalonClosedBlocks";
-import BookingDetailModal from "../components/BookingDetailModal";
 import BookingPopUp from "../components/BookingPopUp";
 import CustomCalendarEvent from "../components/CustomCalendarEvent";
 import UseTimeSlotLabel from "../utils/UseTimeSlotLabel";
@@ -213,6 +212,8 @@ export default function CalendarPage() {
           setEvents(prev => prev.filter(e => e.id !== deletedId));
           setSelectedBooking(null);
         }}
+        stylistList={stylistList}
+        clients={clients}  
       />
 
       <Modal isOpen={isModalOpen} onClose={handleModalCancel}>
@@ -302,26 +303,6 @@ export default function CalendarPage() {
         />
       )}
 
-      <BookingDetailModal
-        isOpen={viewBookingModalOpen}
-        onClose={() => setViewBookingModalOpen(false)}
-        booking={selectedBooking}
-        stylistList={stylistList}
-        onEdit={() => {
-          setSelectedSlot({
-            start: new Date(selectedBooking.start),
-            end: new Date(selectedBooking.end),
-            resourceId: selectedBooking.resourceId,
-          });
-          setStep(3);
-          setIsModalOpen(true);
-          setViewBookingModalOpen(false);
-        }}
-        onCancelBooking={() => {
-          alert("Cancel logic goes here");
-          setViewBookingModalOpen(false);
-        }}
-      />
     </div>
   );
 }

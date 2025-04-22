@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from "react";
-import { collection, getDocs, addDoc } from "firebase/firestore";
+import { collection, getDocs, addDoc, doc, serverTimestamp } from "firebase/firestore";
 import { db } from "../firebase";
 import Button from "./Button";
 import SaveRetainedBooking from "../utils/SaveRetainedBooking"; // adjust path if needed
@@ -53,13 +53,21 @@ export default function NewBooking({ stylistName, stylistId, selectedSlot, onBac
     if (!selectedSlot || basket.length === 0) return;
 
     const events = [];
+    const bookingId = doc(collection(db, "bookings")).id;
+
     let currentTime = new Date(selectedSlot.start);
 
     for (const service of basket) {
       const endTime = new Date(currentTime.getTime() + (service.baseDuration || 0) * 60000);
 
       const newEvent = {
+        bookingId,
+        clientName:
+        clients.find((c) => c.id === selectedClient)?.firstName +
+        " " +
+        clients.find((c) => c.id === selectedClient)?.lastName,
         title: service.name,
+        category: service.category || "Uncategorised",
         start: new Date(currentTime),
         end: new Date(endTime),
         resourceId: stylistId,
@@ -83,15 +91,16 @@ export default function NewBooking({ stylistName, stylistId, selectedSlot, onBac
         end: newEvent.end,
       });
 
-      // ✅ Save general bookings to Firestore
-      await addDoc(collection(db, "bookings"), {
+      const docRef = await addDoc(collection(db, "bookings"), {
         ...newEvent,
         start: newEvent.start instanceof Date ? newEvent.start : new Date(newEvent.start),
         end: newEvent.end instanceof Date ? newEvent.end : new Date(newEvent.end),
         clientId: selectedClient,
         clientName: clients.find((c) => c.id === selectedClient)?.firstName + " " + clients.find((c) => c.id === selectedClient)?.lastName,
-        createdAt: new Date(),
+        createdAt: serverTimestamp(),
       });
+      
+      newEvent.id = docRef.id;
       
       currentTime = endTime;
     }

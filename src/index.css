@@ -98,6 +98,12 @@ body {
   font-weight: bold;
 }
 
+.p-6{
+  background-color:white;
+  color:gray;
+padding: .5rem;
+border-radius: 5px;
+}
 
 .rbc-time-gutter .rbc-time-slot {
   justify-content: center;
