@@ -7,7 +7,7 @@ import {
 import withDragAndDrop from "react-big-calendar/lib/addons/dragAndDrop";
 import { format, parse, startOfWeek, getDay } from "date-fns";
 import enGB from "date-fns/locale/en-GB";
-import { collection, getDocs, getDoc, doc } from "firebase/firestore";
+import { collection, getDocs, getDoc, doc, updateDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import Modal from "../components/Modal";
 import NewBooking from "../components/NewBooking";
@@ -46,7 +46,7 @@ export default function CalendarPage() {
   const [viewBookingModalOpen, setViewBookingModalOpen] = useState(false);
   const [visibleDate, setVisibleDate] = useState(new Date());
   const [calendarSettings, setCalendarSettings] = useState(null);
-  
+
   UseTimeSlotLabel(9, 20, 15);
   AddGridTimeLabels(9, 20, 15);
 
@@ -63,9 +63,8 @@ export default function CalendarPage() {
   const customFormats = {
     dayHeaderFormat: (date, culture, localizer) =>
       format(date, "eeee do MMMM", { locale: enGB }),
-    slotLabelFormat: (date) => format(date, "HH:mm"), // or "hh:mm a" for AM/PM
+    slotLabelFormat: (date) => format(date, "HH:mm"),
   };
-  
 
   useEffect(() => {
     const fetchClients = async () => {
@@ -99,9 +98,20 @@ export default function CalendarPage() {
     fetchEvents();
   }, []);
 
-  const moveEvent = useCallback(({ event, start, end, resourceId }) => {
+  const moveEvent = useCallback(async ({ event, start, end, resourceId }) => {
     const updated = { ...event, start, end, resourceId };
-    setEvents(prev => prev.map(e => (e.id === event.id ? updated : e)));
+
+    try {
+      const bookingRef = doc(db, "bookings", event.id);
+      await updateDoc(bookingRef, {
+        start: start,
+        end: end,
+        resourceId: resourceId
+      });
+      setEvents(prev => prev.map(e => (e.id === event.id ? updated : e)));
+    } catch (error) {
+      console.error("Failed to move booking:", error);
+    }
   }, []);
 
   const handleModalCancel = () => {
@@ -121,7 +131,7 @@ export default function CalendarPage() {
       <h1 className="text-2xl font-bold metallic-text mb-4">The Edge HD Salon</h1>
       <DnDCalendar
         localizer={localizer}
-        events={[...events, ...unavailableBlocks, ...salonClosedBlocks]}
+        events={[...events, ...unavailableBlocks, ]}//...salonClosedBlocks]}
         startAccessor="start"
         endAccessor="end"
         formats={customFormats}
