@@ -1,12 +1,4 @@
 import React, { useState, useEffect } from "react";
-import {
-  collection,
-  getDocs,
-  doc,
-  updateDoc,
-  addDoc,
-} from "firebase/firestore";
-import { db } from "../firebase";
 import Card from "../components/Card.jsx";
 import Button from "../components/Button.jsx";
 import toast from "react-hot-toast";
@@ -30,8 +22,6 @@ export default function ManageServices({ staffId }) {
     "Tints",
     "Blow Dry",
     "Gents",
-    "Children",
-    "Uncategorized",
   ];
 
   const fetchServices = async () => {

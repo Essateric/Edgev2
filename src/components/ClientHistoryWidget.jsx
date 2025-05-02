@@ -1,8 +1,6 @@
 // src/components/ClientHistoryWidget.jsx
 
 import { useState, useEffect } from "react";
-import { collection, getDocs } from "firebase/firestore";
-import { db } from "../firebase";
 import { FaChevronDown, FaChevronUp } from "react-icons/fa";
 
 export default function ClientHistoryWidget() {

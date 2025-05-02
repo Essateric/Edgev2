@@ -7,9 +7,6 @@ import CsvStaffUploader from "../components/CsvStaffUploader";
 import CsvClientUploader from "../components/CsvClientUploader";
 import Button from "../components/Button";
 import ImportClientsButton from "../components/ImportClientsButton";
-import { getDocs, collection} from "firebase/firestore";
-import { db } from "../firebase";
-
 
 export default function Settings() {
   const [seedingStaff, setSeedingStaff] = useState(false);

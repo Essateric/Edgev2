@@ -1,7 +1,5 @@
 // 🔼 all imports stay at the top
 import { useEffect, useState } from "react";
-import { collection, query, where, getDocs, doc, deleteDoc } from "firebase/firestore";
-import { db } from "../firebase";
 import Modal from "./Modal";
 import Button from "./Button";
 import { format } from "date-fns";

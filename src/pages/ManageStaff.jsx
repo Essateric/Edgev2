@@ -1,13 +1,5 @@
 import React, { useEffect, useState } from "react";
-import {
-  collection,
-  getDocs,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  doc,
-} from "firebase/firestore";
-import { db } from "../firebase";
+import { supabase } from "../supabaseClient";
 
 export default function ManageStaff() {
   const [staff, setStaff] = useState([]);
@@ -33,17 +25,24 @@ export default function ManageStaff() {
   }, []);
 
   async function fetchData() {
-    const staffSnap = await getDocs(collection(db, "staff"));
-    setStaff(staffSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    const { data: staffData, error: staffError } = await supabase.from("staff").select("*");
+    if (staffError) {
+      console.error("Error fetching staff:", staffError.message);
+      return;
+    }
+    setStaff(staffData.map(doc => ({ id: doc.id, ...doc })));
 
-    const servicesSnap = await getDocs(collection(db, "services"));
-    setServicesList(servicesSnap.docs.map(doc => ({
+    const { data: servicesData, error: servicesError } = await supabase.from("services").select("id, name, category");
+    if (servicesError) {
+      console.error("Error fetching services:", servicesError.message);
+      return;
+    }
+    setServicesList(servicesData.map(doc => ({
       id: doc.id,
-      name: doc.data().name,
-      category: doc.data().category,
+      name: doc.name,
+      category: doc.category,
     })));
   }
-
   function handleChange(e) {
     setForm({ ...form, [e.target.name]: e.target.value });
   }
@@ -103,9 +102,25 @@ export default function ManageStaff() {
     }
 
     if (editingId) {
-      await updateDoc(doc(db, "staff", editingId), form);
+      await supabase.from("staff")
+  .update({
+    name: form.name,
+    email: form.email,
+    services: form.services,
+    weekly_hours: form.weeklyHours,
+  })
+  .eq("id", editingId);
+
     } else {
-      await addDoc(collection(db, "staff"), form);
+      await supabase.from("staff").insert([
+        {
+          name: form.name,
+          email: form.email,
+          services: form.services,
+          weekly_hours: form.weeklyHours, // matches your state structure
+        }
+      ]);
+      
     }
 
     setForm({

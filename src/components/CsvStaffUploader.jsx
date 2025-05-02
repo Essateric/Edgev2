@@ -1,7 +1,5 @@
 import { useState } from "react";
 import Papa from "papaparse";
-import { collection, addDoc, getDocs, query, where } from "firebase/firestore";
-import { db } from "../firebase";
 import toast from "react-hot-toast";
 
 export default function CsvUploader() {

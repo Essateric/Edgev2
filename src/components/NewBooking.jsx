@@ -1,6 +1,4 @@
 import React, { useEffect, useState, useMemo } from "react";
-import { collection, getDocs, addDoc, doc, serverTimestamp } from "firebase/firestore";
-import { db } from "../firebase";
 import Button from "./Button";
 import SaveRetainedBooking from "../utils/SaveRetainedBooking"; // adjust path if needed
 

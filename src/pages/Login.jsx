@@ -4,6 +4,8 @@ import { useAuth } from "../contexts/AuthContext.jsx";
 import Card from "../components/Card.jsx";
 import Button from "../components/Button.jsx";
 import PinPad from "../components/PinPad.jsx";
+import { toast } from "react-hot-toast";
+
 
 export default function Login() {
   const { login, loginWithPin } = useAuth();
@@ -15,13 +17,18 @@ export default function Login() {
 
   const handlePinLogin = async () => {
     try {
+      if (pin.length !== 4) {
+        toast.error("Enter 4-digit PIN");
+        return;
+      }
+  
       await loginWithPin(pin);
-      window.location.href = "/";
-    } catch (err) {
-      console.error(err);
-      setError("Invalid PIN");
+      // Redirect or show success message
+    } catch (error) {
+      toast.error(error.message || "Login failed");
     }
   };
+  
 
   const handleEmailLogin = async (e) => {
     e.preventDefault();
@@ -88,3 +95,4 @@ export default function Login() {
     </div>
   );
 }
+

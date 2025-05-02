@@ -1,6 +1,3 @@
-import { collection, doc, writeBatch, query, where, getDocs } from "firebase/firestore";
-import { db } from "../firebase";
-
 // Delay between batches (ms)
 const wait = (ms) => new Promise((res) => setTimeout(res, ms));
 

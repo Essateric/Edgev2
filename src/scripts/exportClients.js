@@ -1,5 +1,3 @@
-import { collection, getDocs } from "firebase/firestore";
-import { db } from "../firebase";
 import Papa from "papaparse";
 
 export async function exportClientsToCSV() {

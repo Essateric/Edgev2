@@ -1,69 +1,56 @@
-// src/contexts/AuthContext.jsx
-import React, { createContext, useContext, useEffect, useState } from "react";
-import { auth, db } from "../firebase";
-import {
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signOut,
-} from "firebase/auth";
-import { getDocs, collection } from "firebase/firestore";
+import React, { createContext, useContext, useState, useEffect } from "react";
+import { supabase } from "../supabaseClient"; // Make sure this points to your Supabase client file
 
 const AuthContext = createContext();
 
-export function useAuth() {
-  return useContext(AuthContext);
-}
+const useAuth = () => useContext(AuthContext);
 
-export function AuthProvider({ children }) {
+const AuthProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(null);
-  const [role, setRole] = useState(null);
-  const [loading, setLoading] = useState(true);
 
-  // Email/Password login
+  // Email/Password login (using Supabase Auth)
   const login = async (email, password) => {
-    const userCred = await signInWithEmailAndPassword(auth, email, password);
-    setCurrentUser(userCred.user);
-    setRole("manager"); // You can extend this logic
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    setCurrentUser(data.user);
+    localStorage.setItem("user", JSON.stringify(data.user)); // Optional
   };
 
-  // PIN Login
+  // PIN Login (search staff table manually)
   const loginWithPin = async (pin) => {
-    const snapshot = await getDocs(collection(db, "staff"));
-    const match = snapshot.docs.find((doc) => doc.data().pin === pin);
-    if (!match) throw new Error("Invalid PIN");
+    const { data, error } = await supabase
+      .from('staff')
+      .select('*')
+      .eq('pin', pin)
+      .single(); // Only expect one match
 
-    const user = { ...match.data(), id: match.id };
-    localStorage.setItem("pinUser", JSON.stringify(user));
-    setCurrentUser(user);
-    setRole(user.role || "staff");
+    if (error || !data) {
+      throw new Error('Invalid PIN');
+    }
+
+    setCurrentUser(data);
+    localStorage.setItem('user', JSON.stringify(data)); // Optional
   };
 
-  const logout = () => {
-    localStorage.removeItem("pinUser");
+  // Logout
+  const logout = async () => {
+    await supabase.auth.signOut();
     setCurrentUser(null);
-    setRole(null);
-    return signOut(auth).catch(() => {}); // No error if signed in with PIN
+    localStorage.removeItem('user');
   };
 
+  // Keep user logged in on refresh (Optional improvement)
   useEffect(() => {
-    const localUser = localStorage.getItem("pinUser");
-    if (localUser) {
-      const parsed = JSON.parse(localUser);
-      setCurrentUser(parsed);
-      setRole(parsed.role || "staff");
-      setLoading(false);
-    } else {
-      const unsubscribe = onAuthStateChanged(auth, (user) => {
-        if (user) {
-          setCurrentUser(user);
-          setRole("manager");
-        } else {
-          setCurrentUser(null);
-          setRole(null);
-        }
-        setLoading(false);
-      });
-      return unsubscribe;
+    const storedUser = localStorage.getItem('user');
+    if (storedUser) {
+      setCurrentUser(JSON.parse(storedUser));
     }
   }, []);
 
@@ -71,15 +58,14 @@ export function AuthProvider({ children }) {
     <AuthContext.Provider
       value={{
         currentUser,
-        role,
         login,
         loginWithPin,
         logout,
-        isManager: role === "manager",
-        isStaff: role === "staff",
       }}
     >
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
-}
+};
+
+export { AuthProvider, useAuth };

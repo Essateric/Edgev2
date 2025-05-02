@@ -7,8 +7,6 @@ import {
 import withDragAndDrop from "react-big-calendar/lib/addons/dragAndDrop";
 import { format, parse, startOfWeek, getDay } from "date-fns";
 import enGB from "date-fns/locale/en-GB";
-import { collection, getDocs, getDoc, doc, updateDoc } from "firebase/firestore";
-import { db } from "../firebase";
 import Modal from "../components/Modal";
 import NewBooking from "../components/NewBooking";
 import "react-big-calendar/lib/css/react-big-calendar.css";
@@ -21,6 +19,7 @@ import BookingPopUp from "../components/BookingPopUp";
 import CustomCalendarEvent from "../components/CustomCalendarEvent";
 import UseTimeSlotLabel from "../utils/UseTimeSlotLabel";
 import AddGridTimeLabels from "../utils/AddGridTimeLabels";
+import { supabase } from "../supabaseClient";
 
 const DnDCalendar = withDragAndDrop(Calendar);
 
@@ -51,62 +50,111 @@ export default function CalendarPage() {
 
   useEffect(() => {
     const fetchCalendarSettings = async () => {
-      const snap = await getDoc(doc(db, "config", "calendarSettings"));
-      if (snap.exists()) setCalendarSettings(snap.data());
+      const { data, error } = await supabase
+        .from('config')
+        .select('*')
+        .eq('id', 'calendarSettings')
+        .single();
+
+      if (error) {
+        console.error("Error fetching calendar settings:", error.message);
+        return;
+      }
+
+      if (data) {
+        setCalendarSettings(data);
+      }
     };
+
     fetchCalendarSettings();
-  }, [])
+  }, []);
+
+  useEffect(() => {
+    const fetchClients = async () => {
+      const { data, error } = await supabase
+        .from('clients')
+        .select('*');
+
+      if (error) {
+        console.error("Error fetching clients:", error.message);
+        return;
+      }
+
+      if (data) {
+        setClients(data);
+      }
+    };
+
+    const fetchStylists = async () => {
+      const { data, error } = await supabase
+        .from('staff')
+        .select('*');
+
+      if (error) {
+        console.error("Error fetching stylists:", error.message);
+        return;
+      }
+
+      if (data) {
+        const stylists = data.map(item => ({
+          id: item.id,
+          title: item.name || "Unnamed Stylist",
+          weeklyHours: item.weeklyHours || {},
+        }));
+
+        setStylistList(stylists);
+      }
+    };
+
+    const fetchEvents = async () => {
+      const { data, error } = await supabase
+        .from('bookings')
+        .select('*');
+
+      if (error) {
+        console.error("Error fetching events:", error.message);
+        return;
+      }
+
+      if (data) {
+        const events = data.map(item => ({
+          id: item.id,
+          ...item,
+          start: item.start ? new Date(item.start) : new Date(),
+          end: item.end ? new Date(item.end) : new Date(),
+        }));
+
+        setEvents(events);
+      }
+    };
+
+    const fetchData = async () => {
+      await fetchClients();
+      await fetchStylists();
+      await fetchEvents();
+    };
+
+    fetchData();
+  }, []);
 
   const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
+
   const customFormats = {
     dayHeaderFormat: (date, culture, localizer) =>
       format(date, "eeee do MMMM", { locale: enGB }),
     slotLabelFormat: (date) => format(date, "HH:mm"),
   };
 
-  useEffect(() => {
-    const fetchClients = async () => {
-      const snapshot = await getDocs(collection(db, "clients"));
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setClients(data);
-    };
-
-    const fetchStylists = async () => {
-      const snapshot = await getDocs(collection(db, "staff"));
-      const data = snapshot.docs.map(doc => {
-        const d = doc.data();
-        return { id: doc.id, title: d.name || "Unnamed Stylist", weeklyHours: d.weeklyHours || {} };
-      });
-      setStylistList(data);
-    };
-
-    const fetchEvents = async () => {
-      const snapshot = await getDocs(collection(db, "bookings"));
-      const data = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        start: doc.data().start?.toDate?.() || new Date(),
-        end: doc.data().end?.toDate?.() || new Date(),
-      }));
-      setEvents(data);
-    };
-
-    fetchClients();
-    fetchStylists();
-    fetchEvents();
-  }, []);
-
   const moveEvent = useCallback(async ({ event, start, end, resourceId }) => {
     const updated = { ...event, start, end, resourceId };
 
     try {
-      const bookingRef = doc(db, "bookings", event.id);
-      await updateDoc(bookingRef, {
-        start: start,
-        end: end,
-        resourceId: resourceId
-      });
+      await supabase
+        .from('bookings')
+        .update({ start, end, resourceId })
+        .eq('id', event.id);
+
       setEvents(prev => prev.map(e => (e.id === event.id ? updated : e)));
     } catch (error) {
       console.error("Failed to move booking:", error);
@@ -130,7 +178,7 @@ export default function CalendarPage() {
       <h1 className="text-2xl font-bold metallic-text mb-4">The Edge HD Salon</h1>
       <DnDCalendar
         localizer={localizer}
-        events={[...events, ...unavailableBlocks, ]}//...salonClosedBlocks]}
+        events={[...events, ...unavailableBlocks]}
         startAccessor="start"
         endAccessor="end"
         formats={customFormats}
@@ -161,12 +209,11 @@ export default function CalendarPage() {
         }}
         onRangeChange={(range) => {
           if (Array.isArray(range)) {
-            setVisibleDate(range[0]); // day/week views
+            setVisibleDate(range[0]);
           } else {
-            setVisibleDate(range.start); // month view
+            setVisibleDate(range.start);
           }
         }}
-        
         onEventDrop={moveEvent}
         resizable
         onEventResize={moveEvent}
@@ -181,11 +228,9 @@ export default function CalendarPage() {
             margin: 0,
             zIndex: 1,
           };
-          if (event.isUnavailable) return { style: { backgroundColor: "#36454F", opacity: 0.7, ...baseStyle,  pointerEvents: "none", zIndex:1,}, className: "non-working-block", };
-          if (event.isSalonClosed) return { style: { backgroundColor: "#333333", opacity: 0.7, ...baseStyle }, className: "salon-closed-block", };
-          return {     style: {
-            zIndex: 2, // 👈 Always on top
-          },};
+          if (event.isUnavailable) return { style: { backgroundColor: "#36454F", opacity: 0.7, ...baseStyle }, className: "non-working-block" };
+          if (event.isSalonClosed) return { style: { backgroundColor: "#333333", opacity: 0.7, ...baseStyle }, className: "salon-closed-block" };
+          return { style: { zIndex: 2 } };
         }}
         style={{ height: "90vh" }}
         components={{
@@ -213,7 +258,7 @@ export default function CalendarPage() {
           setSelectedBooking(null);
         }}
         stylistList={stylistList}
-        clients={clients}  
+        clients={clients}
       />
 
       <Modal isOpen={isModalOpen} onClose={handleModalCancel}>
@@ -228,27 +273,16 @@ export default function CalendarPage() {
               className="react-select-container"
               classNamePrefix="react-select"
               styles={{
-                control: (base) => ({
-                  ...base,
-                  backgroundColor: "white",
-                  color: "black",
-                }),
-                menu: (base) => ({
-                  ...base,
-                  backgroundColor: "white",
-                  color: "black",
-                }),
-                singleValue: (base) => ({
-                  ...base,
-                  color: "black",
-                }),
+                control: (base) => ({ ...base, backgroundColor: "white", color: "black" }),
+                menu: (base) => ({ ...base, backgroundColor: "white", color: "black" }),
+                singleValue: (base) => ({ ...base, color: "black" }),
                 option: (base, { isFocused, isSelected }) => ({
                   ...base,
                   backgroundColor: isSelected
                     ? "#9b611e"
                     : isFocused
-                    ? "#f1e0c5"
-                    : "white",
+                      ? "#f1e0c5"
+                      : "white",
                   color: "black",
                 }),
               }}
@@ -259,7 +293,9 @@ export default function CalendarPage() {
                 onClick={() => setStep(2)}
                 className="bg-bronze text-white px-4 py-2 rounded"
                 disabled={!selectedClient}
-              >Next</button>
+              >
+                Next
+              </button>
             </div>
           </>
         )}
@@ -302,7 +338,6 @@ export default function CalendarPage() {
           }}
         />
       )}
-
     </div>
   );
 }

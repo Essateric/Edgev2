@@ -6,38 +6,63 @@ import CalendarPage from "./pages/CalendarPage.jsx";
 import ManageClients from "./pages/ManageClients.jsx";
 import ManageServices from "./pages/ManageServices.jsx";
 import ManageStaff from "./pages/ManageStaff.jsx";
-import Settings from "./pages/Settings.jsx"; // ← include this if you're using it
+import Settings from "./pages/Settings.jsx";
 import StaffLayout from "./layouts/StaffLayout.jsx";
 import { Toaster } from "react-hot-toast";
+import ProtectedRoute from "./components/ProtectedRoute.jsx"; // Make sure you have this file
 
 function App() {
   const { currentUser } = useAuth();
 
   return (
-    <Toaster position="top-right" reverseOrder={false} />,
-    <Routes>
-      {!currentUser ? (
-        <>
-          {/* Not logged in: go to login page */}
-          <Route path="*" element={<Login />} />
-        </>
-      ) : (
-        <>
-          {/* Logged in: use StaffLayout wrapper */}
-          <Route element={<StaffLayout />}>
-          <Route path="/dashboard" element={<Dashboard />} />
-            <Route index element={<CalendarPage />} />
-            <Route path="manage-clients" element={<ManageClients />} />
-            <Route path="staff" element={<ManageStaff />} />
-            <Route path="manage-services" element={<ManageServices />} />
-            <Route path="settings" element={<Settings />} />
+    <>
+      <Toaster position="top-right" reverseOrder={false} />
+      <Routes>
+        {!currentUser ? (
+          <>
+            {/* Not logged in: go to login page */}
+            <Route path="*" element={<Login />} />
+          </>
+        ) : (
+          <>
+            {/* Logged in: use StaffLayout wrapper */}
+            <Route element={<StaffLayout />}>
+              {/* Calendar and Dashboard are visible to ALL STAFF */}
+              <Route path="/" element={<CalendarPage />} />
+              <Route path="/dashboard" element={<Dashboard />} />
 
-            {/* Only catch unmatched paths inside layout */}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Route>
-        </>
-      )}
-    </Routes>
+              {/* Only Admin can see these pages */}
+              <Route path="/manage-clients" element={
+                <ProtectedRoute requiredRole="Admin">
+                  <ManageClients />
+                </ProtectedRoute>
+              } />
+              
+              <Route path="/staff" element={
+                <ProtectedRoute requiredRole="Admin">
+                  <ManageStaff />
+                </ProtectedRoute>
+              } />
+              
+              <Route path="/manage-services" element={
+                <ProtectedRoute requiredRole="Admin">
+                  <ManageServices />
+                </ProtectedRoute>
+              } />
+              
+              <Route path="/settings" element={
+                <ProtectedRoute requiredRole="Admin">
+                  <Settings />
+                </ProtectedRoute>
+              } />
+
+              {/* Catch all unmatched paths */}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Route>
+          </>
+        )}
+      </Routes>
+    </>
   );
 }
 

@@ -1,17 +1,13 @@
-import { collection, addDoc } from "firebase/firestore";
-import { db } from "../firebase";
+import { supabase } from "../supabaseClient";
 
-// List of chemical categories that must be retained
 const CHEMICAL_CATEGORIES = ["Highlights", "Tints", "Treatments"];
 
-/**
- * Save retained booking to Firestore if it's in a chemical category
- */
 export default async function SaveRetainedBooking({ clientId, clientName, stylistId, stylistName, service, start, end }) {
-  if (!CHEMICAL_CATEGORIES.includes(service.category)) return;
-
-  const retainedData = {
-    clientId,
+  const { data, error } = await supabase
+    .from('retainedBookings') // Your Supabase table
+    .insert([
+      {
+       clientId,
     clientName,
     stylistId,
     stylistName,
@@ -22,7 +18,13 @@ export default async function SaveRetainedBooking({ clientId, clientName, stylis
     start,
     end,
     createdAt: new Date().toISOString(),
-  };
+      }
+    ]);
 
-  await addDoc(collection(db, "retainedBookings"), retainedData);
+  if (error) {
+    console.error("Error saving retained booking:", error.message);
+    throw new Error(error.message);
+  }
+
+  return data;
 }
