@@ -11,7 +11,7 @@ import Modal from "../components/Modal";
 import NewBooking from "../components/NewBooking";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "react-big-calendar/lib/addons/dragAndDrop/styles.css";
-import "../styles/calendarStyles.css";
+import "../styles/CalendarStyles.css";
 import Select from "react-select";
 import useUnavailableTimeBlocks from "../components/UnavailableTimeBlocks";
 import UseSalonClosedBlocks from "../components/UseSalonClosedBlocks";
