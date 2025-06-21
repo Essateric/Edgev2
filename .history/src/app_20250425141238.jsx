@@ -7,7 +7,7 @@ import ManageClients from "./pages/ManageClients.jsx";
 import ManageServices from "./pages/ManageServices.jsx";
 import ManageStaff from "./pages/ManageStaff.jsx";
 import Settings from "./pages/Settings.jsx";
-import StaffLayout from "../layouts/StaffLayout.jsx";
+import StaffLayout from "./layouts/StaffLayout.jsx";
 import { Toaster } from "react-hot-toast";
 import ProtectedRoute from "./components/ProtectedRoute.jsx"; // Make sure you have this file
 
