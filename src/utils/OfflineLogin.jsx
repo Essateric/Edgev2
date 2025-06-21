@@ -1,5 +1,5 @@
 // src/utils/OfflineLogin.jsx
-import { getStaffPins } from './pinCache';
+import { getStaffPins } from './PinCache.jsx';
 
 // Used when offline to check local cached PINs
 export async function tryOfflineLogin(enteredPin) {
