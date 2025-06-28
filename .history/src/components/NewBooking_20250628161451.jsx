@@ -28,12 +28,12 @@ export default function NewBooking({
     ? `${client.first_name} ${client.last_name}`
     : "Unknown Client";
 
-const timeLabel = selectedSlot
-  ? `${format(selectedSlot.start, "eeee dd MMM yyyy")} ${format(
-      selectedSlot.start,
-      "HH:mm"
-    )} - ${format(selectedSlot.end, "HH:mm")}`
-  : "No Time Selected";
+  const timeLabel = selectedSlot
+    ? `${format(selectedSlot.start, "eeee dd MMM yyyy")} ${format(
+        selectedSlot.start,
+        "HH:mm"
+      )} - ${format(selectedSlot.end, "HH:mm")}`
+    : "";
 
   // Fetch services
   useEffect(() => {
@@ -101,90 +101,55 @@ const timeLabel = selectedSlot
     0
   );
 
-const handleConfirm = async () => {
-  if (!selectedSlot || basket.length === 0 || !selectedClient) return;
-  setLoading(true);
-  try {
-    const bookingId = crypto.randomUUID();
+  const handleConfirm = async () => {
+    if (!selectedSlot || basket.length === 0 || !selectedClient) return;
+    setLoading(true);
+    try {
+      const bookingId = crypto.randomUUID();
+      const clientName = client.first_name;
+      let currentTime = new Date(selectedSlot.start);
 
-    const clientData = clients.find((c) => c.id === selectedClient);
-    const clientName = clientData ? `${clientData.first_name} ${clientData.last_name}` : "Unknown";
+      const events = [];
+      for (const item of basket) {
+        const endTime = new Date(
+          currentTime.getTime() + (item.displayDuration || 0) * 60000
+        );
 
-    let currentTime = new Date(selectedSlot.start);
+        const event = {
+          bookingId,
+          clientName,
+          title: item.name,
+          category: item.category,
+          start: currentTime,
+          end: endTime,
+          resourceId: stylistId,
+          duration: item.displayDuration,
+          price: item.displayPrice,
+          clientId: selectedClient,
+          createdAt: new Date().toISOString(),
+        };
 
-    const events = [];
+        await supabase.from("bookings").insert([event]);
+        await SaveRetainedBooking({
+          clientId: selectedClient,
+          clientName,
+          stylistId,
+          stylistName,
+          service: item,
+          start: event.start,
+          end: event.end,
+        });
 
-    for (const item of basket) {
-      const endTime = new Date(
-        currentTime.getTime() + (item.displayDuration || 0) * 60000
-      );
-
-      const bookingData = {
-        booking_id: bookingId,
-        client_id: selectedClient,
-        client_name: clientName,
-        title: item.name,
-        category: item.category,
-        start: currentTime.toISOString(),
-        end: endTime.toISOString(),
-        resource_id: stylistId,
-        duration: item.displayDuration,
-        price: item.displayPrice,
-        created_at: new Date().toISOString(),
-      };
-
-      // ✅ Insert into bookings
-      const { error: bookingError } = await supabase
-        .from("bookings")
-        .insert([bookingData]);
-
-      if (bookingError) {
-        console.error("Booking insert error:", bookingError);
-        throw bookingError;
+        events.push(event);
+        currentTime = endTime;
       }
 
-      // ✅ Insert into retained_bookings
-      const { error: retainedError } = await supabase
-        .from("retained_bookings")
-        .insert([
-          {
-            client_id: selectedClient,
-            client_name: clientName,
-            stylist_id: stylistId,
-            stylist_name: stylistName,
-            service_name: item.name,
-            category: item.category,
-            price: item.displayPrice,
-            duration: item.displayDuration,
-            start: currentTime.toISOString(),
-            end: endTime.toISOString(),
-            created_at: new Date().toISOString(),
-          },
-        ]);
-
-      if (retainedError) {
-        console.error("Retained booking error:", retainedError);
-        throw retainedError;
-      }
-
-      const event = {
-        ...bookingData,
-        start: currentTime,
-        end: endTime,
-      };
-
-      events.push(event);
-      currentTime = endTime;
+      onConfirm(events);
+      setBasket([]);
+    } finally {
+      setLoading(false);
     }
-
-    onConfirm(events);
-    setBasket([]);
-  } catch (error) {
-    console.error("Error during booking:", error);
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -193,9 +158,17 @@ const handleConfirm = async () => {
   <h2 className="text-lg font-bold text-bronze">
     Booking for {clientLabel}
   </h2>
-  <p className="text-sm text-gray-700">{timeLabel}</p>
-  <p className="text-sm text-gray-700">Stylist: {stylistName || 'Unknown'}</p>
+  <p className="text-sm">
+    {selectedSlot
+      ? `${format(selectedSlot.start, "eeee dd MMM yyyy HH:mm")} - ${format(
+          selectedSlot.end,
+          "HH:mm"
+        )}`
+      : ""}
+  </p>
+  <p className="text-sm">Stylist: {stylistName}</p>
 </div>
+      </div>
 
       {/* Main content */}
       <div className="flex-1 overflow-auto p-4">

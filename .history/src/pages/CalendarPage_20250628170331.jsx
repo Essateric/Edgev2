@@ -27,6 +27,7 @@ import "react-big-calendar/lib/css/react-big-calendar.css";
 import "react-big-calendar/lib/addons/dragAndDrop/styles.css";
 import "../styles/CalendarStyles.css";
 
+
 const DnDCalendar = withDragAndDrop(Calendar);
 const locales = { "en-GB": enGB };
 const localizer = dateFnsLocalizer({
@@ -45,36 +46,34 @@ export default function CalendarPage() {
 
   const [selectedSlot, setSelectedSlot] = useState(null);
   const [selectedClient, setSelectedClient] = useState("");
-  const [clientObj, setClientObj] = useState(null);
   const [step, setStep] = useState(1);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedBooking, setSelectedBooking] = useState(null);
   const [visibleDate, setVisibleDate] = useState(new Date());
 
-  const stylist = stylistList.find((s) => s.id === selectedSlot?.resourceId);
+const clientObj = selectedClient
+  ? clients.find((c) => c.id === selectedClient)
+  : null;
 
-  const bookingTitle = selectedSlot
-    ? `Booking for ${clientObj ? clientObj.first_name + ' ' + clientObj.last_name : 'Unknown Client'} • ${format(selectedSlot.start, "eeee dd MMM yyyy")} ${format(
-        selectedSlot.start,
-        "HH:mm"
-      )} - ${format(selectedSlot.end, "HH:mm")} • Stylist: ${stylist?.title ?? ''}`
-    : 'Booking';
+const stylist = selectedSlot
+  ? stylistList.find((s) => s.id === selectedSlot.resourceId)
+  : null;
+
+
+const bookingTitle = selectedSlot
+  ? `Booking for ${clientObj ? clientObj.first_name + ' ' + clientObj.last_name : 'Select Client'} • ${format(selectedSlot.start, "eeee dd MMM yyyy")} ${format(selectedSlot.start, "HH:mm")} - ${format(selectedSlot.end, "HH:mm")} • Stylist: ${stylist?.title || "Unknown"}`
+  : "Booking";
+
 
   UseTimeSlotLabel(9, 20, 15);
   AddGridTimeLabels(9, 20, 15);
 
   useEffect(() => {
     const fetchData = async () => {
-      console.log("Fetching data...");
-
       const { data: clientsData } = await supabase.from("clients").select("*");
       const { data: staffData } = await supabase.from("staff").select("*");
       const { data: bookingsData } = await supabase.from("bookings").select("*");
-
-      console.log("Clients:", clientsData);
-      console.log("Staff:", staffData);
-      console.log("Bookings Raw:", bookingsData);
 
       setClients(clientsData || []);
       setStylistList(
@@ -89,7 +88,6 @@ export default function CalendarPage() {
           ...b,
           start: new Date(b.start),
           end: new Date(b.end),
-          resourceId: b.resource_id, // ✅ Standardize key for frontend
         }))
       );
     };
@@ -102,13 +100,10 @@ export default function CalendarPage() {
   const moveEvent = useCallback(async ({ event, start, end, resourceId }) => {
     const updated = { ...event, start, end, resourceId };
     try {
-      console.log("Moving event:", updated);
-
       await supabase
         .from("bookings")
-        .update({ start, end, resource_id: resourceId }) // ✅ Send snake_case to DB
+        .update({ start, end, resourceId })
         .eq("id", event.id);
-
       setEvents((prev) =>
         prev.map((e) => (e.id === event.id ? updated : e))
       );
@@ -121,7 +116,6 @@ export default function CalendarPage() {
     setIsModalOpen(false);
     setSelectedSlot(null);
     setSelectedClient("");
-    setClientObj(null);
     setStep(1);
   };
 
@@ -141,7 +135,7 @@ export default function CalendarPage() {
         resources={stylistList}
         resourceIdAccessor="id"
         resourceTitleAccessor="title"
-        resourceAccessor={(e) => e.resourceId} // ✅ Always camelCase frontend
+        resourceAccessor={(e) => e.resourceId}
         defaultView={Views.DAY}
         views={[Views.DAY]}
         step={15}
@@ -152,7 +146,6 @@ export default function CalendarPage() {
         selectable
         showNowIndicator
         onSelectSlot={(slot) => {
-          console.log("Selected slot:", slot);
           setSelectedSlot(slot);
           setIsModalOpen(true);
           setStep(1);
@@ -208,8 +201,7 @@ export default function CalendarPage() {
             end: selectedBooking.end,
             resourceId: selectedBooking.resourceId,
           });
-          setSelectedClient(selectedBooking.client_id);
-          setClientObj(clients.find((c) => c.id === selectedBooking.client_id));
+          setSelectedClient(selectedBooking.clientId);
           setIsModalOpen(true);
           setStep(1);
           setSelectedBooking(null);
@@ -228,35 +220,34 @@ export default function CalendarPage() {
         clients={clients}
         selectedSlot={selectedSlot}
         selectedClient={selectedClient}
-        setSelectedClient={(id) => {
-          setSelectedClient(id);
-          setClientObj(clients.find((c) => c.id === id));
-        }}
+        setSelectedClient={setSelectedClient}
         onNext={() => setStep(2)}
       />
 
-      <RightDrawer
-        isOpen={step === 2}
-        onClose={handleModalCancel}
-        widthClass="w-full sm:w-[80%] md:w-[60%] xl:w-[50%]"
-        title={bookingTitle}
-      >
-        <NewBooking
-          stylistName={stylist?.title}
-          stylistId={selectedSlot?.resourceId}
-          selectedSlot={selectedSlot}
-          clients={clients}
-          selectedClient={selectedClient}
-          clientObj={clientObj}
-          onBack={() => setStep(1)}
-          onCancel={handleModalCancel}
-          onConfirm={(newEvents) => {
-            console.log("New events confirmed:", newEvents);
-            setEvents((prev) => [...prev, ...newEvents]);
-            setStep(3);
-          }}
-        />
-      </RightDrawer>
+<RightDrawer
+  isOpen={step === 2}
+  onClose={handleModalCancel}
+  widthClass="w-full sm:w-[80%] md:w-[60%] xl:w-[50%]"
+  title={bookingTitle}
+>
+  <NewBooking
+    stylistName={
+      stylistList.find((s) => s.id === selectedSlot?.resourceId)?.title
+    }
+    stylistId={selectedSlot?.resourceId}
+    selectedSlot={selectedSlot}
+    clients={clients}
+    selectedClient={selectedClient}
+    onBack={() => setStep(1)}
+    onCancel={handleModalCancel}
+    onConfirm={(newEvents) => {
+      setEvents((prev) => [...prev, ...newEvents]);
+      setStep(3);
+    }}
+  />
+</RightDrawer>
+
+
 
       <ReviewModal
         isOpen={step === 3}

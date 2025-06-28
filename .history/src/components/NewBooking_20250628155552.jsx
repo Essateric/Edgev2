@@ -1,15 +1,14 @@
 import React, { useEffect, useState, useMemo } from "react";
-import { format } from "date-fns";
-import { supabase } from "../supabaseClient";
-import SaveRetainedBooking from "../utils/SaveRetainedBooking";
 import Button from "./Button";
+import SaveRetainedBooking from "../utils/SaveRetainedBooking";
+import { supabase } from "../supabaseClient";
+import { format } from "date-fns";
 
 export default function NewBooking({
   stylistName,
   stylistId,
   selectedSlot,
-  selectedClient,
-  clients,
+  client,
   onBack,
   onCancel,
   onConfirm,
@@ -23,17 +22,9 @@ export default function NewBooking({
 
   const [staffServiceOverrides, setStaffServiceOverrides] = useState([]);
 
-  const client = clients.find((c) => c.id === selectedClient);
   const clientLabel = client
-    ? `${client.first_name} ${client.last_name}`
+    ? `${client.first_name} ${client.last_name} - ${client.mobile}`
     : "Unknown Client";
-
-const timeLabel = selectedSlot
-  ? `${format(selectedSlot.start, "eeee dd MMM yyyy")} ${format(
-      selectedSlot.start,
-      "HH:mm"
-    )} - ${format(selectedSlot.end, "HH:mm")}`
-  : "No Time Selected";
 
   // Fetch services
   useEffect(() => {
@@ -101,107 +92,75 @@ const timeLabel = selectedSlot
     0
   );
 
-const handleConfirm = async () => {
-  if (!selectedSlot || basket.length === 0 || !selectedClient) return;
-  setLoading(true);
-  try {
-    const bookingId = crypto.randomUUID();
+  const handleConfirm = async () => {
+    if (!selectedSlot || basket.length === 0 || !client) return;
+    setLoading(true);
+    try {
+      const bookingId = crypto.randomUUID();
+      const clientName = client.first_name;
+      let currentTime = new Date(selectedSlot.start);
 
-    const clientData = clients.find((c) => c.id === selectedClient);
-    const clientName = clientData ? `${clientData.first_name} ${clientData.last_name}` : "Unknown";
+      const events = [];
+      for (const item of basket) {
+        const endTime = new Date(
+          currentTime.getTime() + (item.displayDuration || 0) * 60000
+        );
 
-    let currentTime = new Date(selectedSlot.start);
+        const event = {
+          bookingId,
+          clientName,
+          title: item.name,
+          category: item.category,
+          start: currentTime,
+          end: endTime,
+          resourceId: stylistId,
+          duration: item.displayDuration,
+          price: item.displayPrice,
+          clientId: client.id,
+          createdAt: new Date().toISOString(),
+        };
 
-    const events = [];
+        await supabase.from("bookings").insert([event]);
+        await SaveRetainedBooking({
+          clientId: client.id,
+          clientName,
+          stylistId,
+          stylistName,
+          service: item,
+          start: event.start,
+          end: event.end,
+        });
 
-    for (const item of basket) {
-      const endTime = new Date(
-        currentTime.getTime() + (item.displayDuration || 0) * 60000
-      );
-
-      const bookingData = {
-        booking_id: bookingId,
-        client_id: selectedClient,
-        client_name: clientName,
-        title: item.name,
-        category: item.category,
-        start: currentTime.toISOString(),
-        end: endTime.toISOString(),
-        resource_id: stylistId,
-        duration: item.displayDuration,
-        price: item.displayPrice,
-        created_at: new Date().toISOString(),
-      };
-
-      // ✅ Insert into bookings
-      const { error: bookingError } = await supabase
-        .from("bookings")
-        .insert([bookingData]);
-
-      if (bookingError) {
-        console.error("Booking insert error:", bookingError);
-        throw bookingError;
+        events.push(event);
+        currentTime = endTime;
       }
 
-      // ✅ Insert into retained_bookings
-      const { error: retainedError } = await supabase
-        .from("retained_bookings")
-        .insert([
-          {
-            client_id: selectedClient,
-            client_name: clientName,
-            stylist_id: stylistId,
-            stylist_name: stylistName,
-            service_name: item.name,
-            category: item.category,
-            price: item.displayPrice,
-            duration: item.displayDuration,
-            start: currentTime.toISOString(),
-            end: endTime.toISOString(),
-            created_at: new Date().toISOString(),
-          },
-        ]);
-
-      if (retainedError) {
-        console.error("Retained booking error:", retainedError);
-        throw retainedError;
-      }
-
-      const event = {
-        ...bookingData,
-        start: currentTime,
-        end: endTime,
-      };
-
-      events.push(event);
-      currentTime = endTime;
+      onConfirm(events);
+      setBasket([]);
+    } finally {
+      setLoading(false);
     }
-
-    onConfirm(events);
-    setBasket([]);
-  } catch (error) {
-    console.error("Error during booking:", error);
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="h-full flex flex-col">
       {/* Header */}
-<div className="mb-4">
-  <h2 className="text-lg font-bold text-bronze">
-    Booking for {clientLabel}
-  </h2>
-  <p className="text-sm text-gray-700">{timeLabel}</p>
-  <p className="text-sm text-gray-700">Stylist: {stylistName || 'Unknown'}</p>
-</div>
+      <div className="p-4 border-b">
+        <h2 className="text-lg font-semibold text-bronze">
+          Booking for {clientLabel}
+        </h2>
+        <p className="text-sm text-gray-700">
+          {format(selectedSlot?.start, "eeee dd MMM yyyy HH:mm")} -{" "}
+          {format(selectedSlot?.end, "HH:mm")}
+        </p>
+        <p className="text-sm text-gray-700">Stylist: {stylistName}</p>
+      </div>
 
-      {/* Main content */}
+      {/* Main Content */}
       <div className="flex-1 overflow-auto p-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 h-full">
           {/* Categories */}
-          <div className="border border-bronze rounded p-2 bg-white overflow-y-auto">
+          <div className="border rounded p-2 overflow-y-auto">
             {categories.map((cat) => (
               <button
                 key={cat}
@@ -219,7 +178,7 @@ const handleConfirm = async () => {
           </div>
 
           {/* Services */}
-          <div className="border border-bronze rounded p-2 bg-white overflow-y-auto">
+          <div className="border rounded p-2 overflow-y-auto">
             {filteredServices.length === 0 && (
               <p className="text-sm text-gray-500">
                 No services in this category.
@@ -242,24 +201,26 @@ const handleConfirm = async () => {
                       {mins > 0 || hrs === 0 ? `${mins}m` : ""}
                     </p>
                   </div>
-                  <button
+                  <Button
                     onClick={() => addToBasket(service)}
-                    className="bg-bronze text-white text-sm px-3 py-1 rounded hover:bg-bronze/90"
+                    className="text-sm px-3 py-1"
                   >
                     Add
-                  </button>
+                  </Button>
                 </div>
               );
             })}
           </div>
 
           {/* Basket */}
-          <div className="border border-bronze rounded p-2 bg-white flex flex-col">
+          <div className="border rounded p-2 flex flex-col">
             <h4 className="font-semibold text-lg text-bronze mb-2">
               Selected Services
             </h4>
             {basket.length === 0 ? (
-              <p className="text-sm text-gray-500">No services selected yet.</p>
+              <p className="text-sm text-gray-500">
+                No services selected yet.
+              </p>
             ) : (
               <ul className="space-y-3 flex-1 overflow-y-auto">
                 {basket.map((item, index) => {
@@ -273,7 +234,8 @@ const handleConfirm = async () => {
                       <div>
                         <p className="font-medium text-bronze">{item.name}</p>
                         <p className="text-sm text-gray-600">
-                          £{item.displayPrice} • {hrs > 0 ? `${hrs}h ` : ""}
+                          £{item.displayPrice} •{" "}
+                          {hrs > 0 ? `${hrs}h ` : ""}
                           {mins > 0 || hrs === 0 ? `${mins}m` : ""}
                         </p>
                       </div>
@@ -302,24 +264,21 @@ const handleConfirm = async () => {
         </div>
       </div>
 
-      {/* Footer buttons */}
-      <div className="flex justify-between border-t border-gray-300 px-4 py-3">
+      {/* Footer Buttons */}
+      <div className="flex justify-between p-4 border-t">
+        <Button onClick={onBack}>Back</Button>
         <div className="flex gap-2">
-          <Button onClick={onBack}>Back</Button>
-          <Button
-            onClick={onCancel}
-            className="bg-red-500 text-white hover:bg-red-600"
-          >
+          <Button onClick={onCancel} className="bg-red-500 text-white">
             Cancel
           </Button>
+          <Button
+            onClick={handleConfirm}
+            className="bg-green-600 text-white"
+            disabled={basket.length === 0 || loading}
+          >
+            {loading ? "Booking..." : "Confirm"}
+          </Button>
         </div>
-        <Button
-          onClick={handleConfirm}
-          className="bg-green-600 text-white hover:bg-green-700"
-          disabled={basket.length === 0 || loading}
-        >
-          {loading ? "Booking..." : "Confirm Booking"}
-        </Button>
       </div>
     </div>
   );

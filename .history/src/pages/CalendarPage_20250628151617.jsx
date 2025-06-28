@@ -7,19 +7,16 @@ import {
 import withDragAndDrop from "react-big-calendar/lib/addons/dragAndDrop";
 import { format, parse, startOfWeek, getDay } from "date-fns";
 import enGB from "date-fns/locale/en-GB";
-
-import BookingPopUp from "../components/BookingPopUp";
+import Modal from "../components/Modal";
 import RightDrawer from "../components/RightDrawer";
-import CustomCalendarEvent from "../components/CustomCalendarEvent";
-import SelectClientModal from "../components/SelectClientModal";
-import ReviewModal from "../components/ReviewModal";
 import NewBooking from "../components/NewBooking";
-
+import BookingPopUp from "../components/BookingPopUp";
+import CustomCalendarEvent from "../components/CustomCalendarEvent";
+import Select from "react-select";
 import useUnavailableTimeBlocks from "../components/UnavailableTimeBlocks";
 import UseSalonClosedBlocks from "../components/UseSalonClosedBlocks";
 import UseTimeSlotLabel from "../utils/UseTimeSlotLabel";
 import AddGridTimeLabels from "../utils/AddGridTimeLabels";
-
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
 
@@ -38,43 +35,24 @@ const localizer = dateFnsLocalizer({
 });
 
 export default function CalendarPage() {
-  const { currentUser } = useAuth();
   const [clients, setClients] = useState([]);
   const [stylistList, setStylistList] = useState([]);
   const [events, setEvents] = useState([]);
-
   const [selectedSlot, setSelectedSlot] = useState(null);
   const [selectedClient, setSelectedClient] = useState("");
-  const [clientObj, setClientObj] = useState(null);
   const [step, setStep] = useState(1);
-
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedBooking, setSelectedBooking] = useState(null);
   const [visibleDate, setVisibleDate] = useState(new Date());
-
-  const stylist = stylistList.find((s) => s.id === selectedSlot?.resourceId);
-
-  const bookingTitle = selectedSlot
-    ? `Booking for ${clientObj ? clientObj.first_name + ' ' + clientObj.last_name : 'Unknown Client'} • ${format(selectedSlot.start, "eeee dd MMM yyyy")} ${format(
-        selectedSlot.start,
-        "HH:mm"
-      )} - ${format(selectedSlot.end, "HH:mm")} • Stylist: ${stylist?.title ?? ''}`
-    : 'Booking';
 
   UseTimeSlotLabel(9, 20, 15);
   AddGridTimeLabels(9, 20, 15);
 
   useEffect(() => {
     const fetchData = async () => {
-      console.log("Fetching data...");
-
       const { data: clientsData } = await supabase.from("clients").select("*");
       const { data: staffData } = await supabase.from("staff").select("*");
       const { data: bookingsData } = await supabase.from("bookings").select("*");
-
-      console.log("Clients:", clientsData);
-      console.log("Staff:", staffData);
-      console.log("Bookings Raw:", bookingsData);
 
       setClients(clientsData || []);
       setStylistList(
@@ -89,7 +67,6 @@ export default function CalendarPage() {
           ...b,
           start: new Date(b.start),
           end: new Date(b.end),
-          resourceId: b.resource_id, // ✅ Standardize key for frontend
         }))
       );
     };
@@ -102,13 +79,10 @@ export default function CalendarPage() {
   const moveEvent = useCallback(async ({ event, start, end, resourceId }) => {
     const updated = { ...event, start, end, resourceId };
     try {
-      console.log("Moving event:", updated);
-
       await supabase
         .from("bookings")
-        .update({ start, end, resource_id: resourceId }) // ✅ Send snake_case to DB
+        .update({ start, end, resourceId })
         .eq("id", event.id);
-
       setEvents((prev) =>
         prev.map((e) => (e.id === event.id ? updated : e))
       );
@@ -121,18 +95,22 @@ export default function CalendarPage() {
     setIsModalOpen(false);
     setSelectedSlot(null);
     setSelectedClient("");
-    setClientObj(null);
     setStep(1);
   };
 
+  const { currentUser } = useAuth();
   if (!currentUser) return <div>Loading...</div>;
+
+  const clientOptions = clients.map((c) => ({
+    value: c.id,
+    label: `${c.first_name} ${c.last_name} - ${c.mobile}`,
+  }));
 
   return (
     <div className="p-4">
       <h1 className="text-2xl font-bold metallic-text mb-4">
         The Edge HD Salon
       </h1>
-
       <DnDCalendar
         localizer={localizer}
         events={[...events, ...unavailableBlocks, ...salonClosedBlocks]}
@@ -141,7 +119,7 @@ export default function CalendarPage() {
         resources={stylistList}
         resourceIdAccessor="id"
         resourceTitleAccessor="title"
-        resourceAccessor={(e) => e.resourceId} // ✅ Always camelCase frontend
+        resourceAccessor={(e) => e.resourceId}
         defaultView={Views.DAY}
         views={[Views.DAY]}
         step={15}
@@ -152,7 +130,6 @@ export default function CalendarPage() {
         selectable
         showNowIndicator
         onSelectSlot={(slot) => {
-          console.log("Selected slot:", slot);
           setSelectedSlot(slot);
           setIsModalOpen(true);
           setStep(1);
@@ -208,8 +185,7 @@ export default function CalendarPage() {
             end: selectedBooking.end,
             resourceId: selectedBooking.resourceId,
           });
-          setSelectedClient(selectedBooking.client_id);
-          setClientObj(clients.find((c) => c.id === selectedBooking.client_id));
+          setSelectedClient(selectedBooking.clientId);
           setIsModalOpen(true);
           setStep(1);
           setSelectedBooking(null);
@@ -222,52 +198,119 @@ export default function CalendarPage() {
         clients={clients}
       />
 
-      <SelectClientModal
-        isOpen={isModalOpen && step === 1}
-        onClose={handleModalCancel}
-        clients={clients}
-        selectedSlot={selectedSlot}
-        selectedClient={selectedClient}
-        setSelectedClient={(id) => {
-          setSelectedClient(id);
-          setClientObj(clients.find((c) => c.id === id));
-        }}
-        onNext={() => setStep(2)}
-      />
+      <Modal isOpen={isModalOpen} onClose={handleModalCancel}>
+        {step === 1 && (
+          <div>
+            <h3 className="text-lg font-bold mb-4 text-bronze">
+              Select Client
+            </h3>
+            <Select
+              options={clientOptions}
+              value={
+                clientOptions.find((opt) => opt.value === selectedClient) ||
+                null
+              }
+              onChange={(selected) => setSelectedClient(selected?.value)}
+              placeholder="-- Select Client --"
+              styles={{
+                control: (base) => ({
+                  ...base,
+                  backgroundColor: "white",
+                  color: "black",
+                }),
+                singleValue: (base) => ({ ...base, color: "black" }),
+                option: (base, { isFocused, isSelected }) => ({
+                  ...base,
+                  backgroundColor: isSelected
+                    ? "#9b611e"
+                    : isFocused
+                    ? "#f1e0c5"
+                    : "white",
+                  color: "black",
+                }),
+              }}
+            />
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={handleModalCancel}
+                className="text-gray-500"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => setStep(2)}
+                className="bg-bronze text-white px-4 py-2 rounded"
+                disabled={!selectedClient}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
-      <RightDrawer
-        isOpen={step === 2}
-        onClose={handleModalCancel}
-        widthClass="w-full sm:w-[80%] md:w-[60%] xl:w-[50%]"
-        title={bookingTitle}
-      >
-        <NewBooking
-          stylistName={stylist?.title}
-          stylistId={selectedSlot?.resourceId}
-          selectedSlot={selectedSlot}
-          clients={clients}
-          selectedClient={selectedClient}
-          clientObj={clientObj}
-          onBack={() => setStep(1)}
-          onCancel={handleModalCancel}
-          onConfirm={(newEvents) => {
-            console.log("New events confirmed:", newEvents);
-            setEvents((prev) => [...prev, ...newEvents]);
-            setStep(3);
-          }}
-        />
-      </RightDrawer>
+<RightDrawer isOpen={step === 2} onClose={handleModalCancel}>
+  <NewBooking
+    stylistName={stylistList.find(s => s.id === selectedSlot?.resourceId)?.title}
+    stylistId={selectedSlot?.resourceId}
+    selectedSlot={selectedSlot}
+    clients={clients}
+    selectedClient={selectedClient}
+    onBack={() => setStep(1)}
+    onCancel={handleModalCancel}
+    onConfirm={(newEvents) => {
+      setEvents(prev => [...prev, ...newEvents]);
+      setStep(3);
+    }}
+  />
+</RightDrawer>
 
-      <ReviewModal
-        isOpen={step === 3}
-        onClose={handleModalCancel}
-        clients={clients}
-        stylistList={stylistList}
-        selectedSlot={selectedSlot}
-        selectedClient={selectedClient}
-        onBack={() => setStep(2)}
-        onConfirm={handleModalCancel}
-      />
+
+      {step === 3 && (
+        <Modal isOpen={true} onClose={handleModalCancel}>
+          <h3 className="text-lg font-bold mb-4 text-bronze">
+            Review Details
+          </h3>
+          {(() => {
+            const clientObj = clients.find((c) => c.id === selectedClient);
+            const stylist = stylistList.find(
+              (s) => s.id === selectedSlot?.resourceId
+            );
+            return (
+              <>
+                <p className="text-sm text-gray-700 mb-1">
+                  Client: {clientObj?.first_name} {clientObj?.last_name}
+                </p>
+                <p className="text-sm text-gray-700 mb-1">
+                  Phone: {clientObj?.mobile}
+                </p>
+                <p className="text-sm text-gray-700 mb-1">
+                  Time: {format(selectedSlot?.start, "dd/MM/yyyy HH:mm")} -{" "}
+                  {format(selectedSlot?.end, "HH:mm")}
+                </p>
+                <p className="text-sm text-gray-700 mb-3">
+                  Stylist: {stylist?.title}
+                </p>
+              </>
+            );
+          })()}
+
+          <div className="flex justify-between mt-4">
+            <button
+              onClick={() => setStep(2)}
+              className="text-gray-500"
+            >
+              Back
+            </button>
+            <button
+              onClick={handleModalCancel}
+              className="bg-green-600 text-white px-4 py-2 rounded"
+            >
+              Confirm
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

@@ -11,10 +11,10 @@ export default function RightDrawer({
       } ${widthClass} overflow-y-auto`}
     >
       <div className="flex justify-between items-center p-4 border-b">
-        <h1 className="text-lg font-semibold text-bronze">
+        <h2 className="text-lg font-semibold text-bronze">
           {/* Booking for: {children?.props?.clientName || "Unknown Client"} */}
-          Service Selection
-        </h1>
+          Please select service 
+        </h2>
         <button onClick={onClose} className="text-gray-600 hover:text-black">
           ✕
         </button>
