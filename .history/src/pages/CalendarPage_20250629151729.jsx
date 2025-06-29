@@ -7,13 +7,10 @@ import {
 import withDragAndDrop from "react-big-calendar/lib/addons/dragAndDrop";
 import { format, parse, startOfWeek, getDay } from "date-fns";
 import enGB from "date-fns/locale/en-GB";
-import {
-  ChevronLeft,
-  ChevronRight,
-  Calendar as CalendarIcon,
-} from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon } from "lucide-react";
 
 import CalendarModal from "../components/CalendarModal";
+import DateNavigator from "../components/DateNavigator";
 import BookingPopUp from "../components/BookingPopUp";
 import RightDrawer from "../components/RightDrawer";
 import CustomCalendarEvent from "../components/CustomCalendarEvent";
@@ -33,6 +30,7 @@ import "react-big-calendar/lib/css/react-big-calendar.css";
 import "react-big-calendar/lib/addons/dragAndDrop/styles.css";
 import "../styles/CalendarStyles.css";
 
+// Setup calendar
 const DnDCalendar = withDragAndDrop(Calendar);
 
 const locales = { "en-GB": enGB };
@@ -54,9 +52,8 @@ export default function CalendarPage() {
   const [selectedSlot, setSelectedSlot] = useState(null);
   const [selectedClient, setSelectedClient] = useState("");
   const [clientObj, setClientObj] = useState(null);
-  const [basket, setBasket] = useState([]);
-
   const [step, setStep] = useState(1);
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedBooking, setSelectedBooking] = useState(null);
 
@@ -66,16 +63,11 @@ export default function CalendarPage() {
   const stylist = stylistList.find((s) => s.id === selectedSlot?.resourceId);
 
   const bookingTitle = selectedSlot
-    ? `Booking for ${
-        clientObj ? clientObj.first_name + " " + clientObj.last_name : "Unknown Client"
-      } • ${format(
-        selectedSlot.start,
-        "eeee dd MMM yyyy"
-      )} ${format(selectedSlot.start, "HH:mm")} - ${format(
-        selectedSlot.end,
-        "HH:mm"
-      )} • Stylist: ${stylist?.title ?? ""}`
-    : "Booking";
+    ? `Booking for ${clientObj ? clientObj.first_name + ' ' + clientObj.last_name : 'Unknown Client'} • ${format(selectedSlot.start, "eeee dd MMM yyyy")} ${format(
+      selectedSlot.start,
+      "HH:mm"
+    )} - ${format(selectedSlot.end, "HH:mm")} • Stylist: ${stylist?.title ?? ''}`
+    : 'Booking';
 
   UseTimeSlotLabel(9, 20, 15);
   AddGridTimeLabels(9, 20, 15);
@@ -94,17 +86,14 @@ export default function CalendarPage() {
           weeklyHours: s.weekly_hours || {},
         }))
       );
-setEvents(
-  bookingsData.map((b) => ({
-    ...b,
-    start: new Date(b.start),
-    end: new Date(b.end),
-    resourceId: b.resource_id,
-    stylistName:
-      stylistList.find((s) => s.id === b.resource_id)?.title || "Unknown",
-  }))
-);
-
+      setEvents(
+        (bookingsData || []).map((b) => ({
+          ...b,
+          start: new Date(b.start),
+          end: new Date(b.end),
+          resourceId: b.resource_id,
+        }))
+      );
     };
     fetchData();
   }, []);
@@ -112,52 +101,27 @@ setEvents(
   const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
 
-const moveEvent = useCallback(
-  async ({ event, start, end, resourceId }) => {
-    const newDuration = (new Date(end).getTime() - new Date(start).getTime()) / 60000;
-
-    const updated = {
-      ...event,
-      start,
-      end,
-      resourceId,
-      duration: newDuration,
-      stylistName:
-        stylistList.find((s) => s.id === resourceId)?.title || "Unknown",
-    };
-
+  const moveEvent = useCallback(async ({ event, start, end, resourceId }) => {
+    const updated = { ...event, start, end, resourceId };
     try {
-      // ✅ Update DB with new start, end and duration
       await supabase
         .from("bookings")
-        .update({
-          start,
-          end,
-          resource_id: resourceId,
-          duration: newDuration,
-        })
+        .update({ start, end, resource_id: resourceId })
         .eq("id", event.id);
 
-      // ✅ Update state
       setEvents((prev) =>
         prev.map((e) => (e.id === event.id ? updated : e))
       );
     } catch (error) {
-      console.error("Failed to move or resize booking:", error);
-      alert("Error updating booking");
+      console.error("Failed to move booking:", error);
     }
-  },
-  [stylistList]
-);
+  }, []);
 
-
-
-  const handleCancelBookingFlow = () => {
+  const handleModalCancel = () => {
     setIsModalOpen(false);
     setSelectedSlot(null);
     setSelectedClient("");
     setClientObj(null);
-    setBasket([]);
     setStep(1);
   };
 
@@ -165,21 +129,24 @@ const moveEvent = useCallback(
 
   return (
     <div className="p-4">
-      <div>
-        <h1 className="text-5xl font-bold metallic-text p-5">
-          The Edge HD Salon
-        </h1>
-      </div>
+      {/* 🔥 Toolbar */}
 
-      <div className="flex justify-between items-center mb-4">
+        <div>
+          <h1 className="text-5xl font-bold metallic-text p-5">
+            The Edge HD Salon
+          </h1>
+        </div>
+              <div className="flex justify-between items-center mb-4">
+
+
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setVisibleDate(new Date())}
-            className="bg-bronze px-4 py-2 rounded-lg border border-black hover:bg-black hover:text-white"
-          >
-            Today
-          </button>
-
+  onClick={() => setVisibleDate(new Date())}
+  className="bg-bronze px-4 py-2 rounded-lg border border-black hover:bg-black hover:text-white"
+>
+  Today
+</button>
+          {/* ⬅️ Back */}
           <button
             onClick={() =>
               setVisibleDate(
@@ -195,12 +162,13 @@ const moveEvent = useCallback(
             <ChevronLeft className="w-8 h-8 text-black" />
           </button>
 
+          {/* 📅 Date Display */}
           <div className="font-semibold">
-            <h1 className="text-2xl font-bold metallic-text p-5">
-              {format(visibleDate, "eeee dd MMMM yyyy")}
-            </h1>
+                      <h1 className="text-2xl font-bold metallic-text p-5">
+            {format(visibleDate, "eeee dd MMMM yyyy")}</h1>
           </div>
 
+          {/* ➡️ Next */}
           <button
             onClick={() =>
               setVisibleDate(
@@ -216,16 +184,19 @@ const moveEvent = useCallback(
             <ChevronRight className="w-8 h-8 text-black" />
           </button>
 
-          <button
-            onClick={() => setIsCalendarOpen(true)}
-            className="bg-bronze border border-black hover:bg-black text-white px-4 py-2 rounded flex items-center gap-2"
-          >
-            <CalendarIcon className="w-4 h-4" />
-            <span>Go to Date</span>
-          </button>
+          {/* 📅 Go to Date */}
+<button
+  onClick={() => setIsCalendarOpen(true)}
+  className="bg-bronze border border-black hover:bg-black text-white px-4 py-2 rounded flex items-center gap-2"
+>
+  <CalendarIcon className="w-4 h-4" />
+  <span>Go to Date</span>
+</button>
+
         </div>
       </div>
 
+      {/* 🔥 Main Calendar */}
       <DnDCalendar
         localizer={localizer}
         events={[...events, ...unavailableBlocks, ...salonClosedBlocks]}
@@ -253,6 +224,7 @@ const moveEvent = useCallback(
             setVisibleDate(range.start);
           }
         }}
+        
         onSelectSlot={(slot) => {
           setSelectedSlot(slot);
           setIsModalOpen(true);
@@ -289,10 +261,12 @@ const moveEvent = useCallback(
         style={{ height: "90vh" }}
         components={{
           event: CustomCalendarEvent,
-          toolbar: () => null,
-        }}
+  toolbar: () => null, // 🔥 Removes the default toolbar
+}}
+
       />
 
+      {/* 🔥 Modals */}
       <BookingPopUp
         isOpen={!!selectedBooking}
         booking={selectedBooking}
@@ -319,7 +293,7 @@ const moveEvent = useCallback(
 
       <SelectClientModal
         isOpen={isModalOpen && step === 1}
-        onClose={handleCancelBookingFlow}
+        onClose={handleModalCancel}
         clients={clients}
         selectedSlot={selectedSlot}
         selectedClient={selectedClient}
@@ -332,7 +306,7 @@ const moveEvent = useCallback(
 
       <RightDrawer
         isOpen={step === 2}
-        onClose={handleCancelBookingFlow}
+        onClose={handleModalCancel}
         widthClass="w-full sm:w-[80%] md:w-[60%] xl:w-[50%]"
         title={bookingTitle}
       >
@@ -343,29 +317,29 @@ const moveEvent = useCallback(
           clients={clients}
           selectedClient={selectedClient}
           clientObj={clientObj}
-          basket={basket}
-          setBasket={setBasket}
           onBack={() => setStep(1)}
-          onCancel={handleCancelBookingFlow}
-          onNext={() => setStep(3)} // ✅ Next goes to Review
+          onCancel={handleModalCancel}
+          onConfirm={(newEvents) => {
+            setEvents((prev) => [...prev, ...newEvents]);
+            setStep(3);
+          }}
         />
       </RightDrawer>
 
-      <ReviewModal
-        isOpen={step === 3}
-        onClose={handleCancelBookingFlow}
-        onBack={() => setStep(2)}
-        onConfirm={(newEvents) => {
-          setEvents((prev) => [...prev, ...newEvents]);
-          handleCancelBookingFlow(); // ✅ Close flow after booking
-        }}
-        clients={clients}
-        stylistList={stylistList}
-        selectedClient={selectedClient}
-        selectedSlot={selectedSlot}
-        basket={basket}
-      />
+<ReviewModal
+  isOpen={step === 3}
+  onClose={handleCancelBookingFlow} // Close everything
+  onBack={() => setStep(2)}          // Go back to NewBooking
+  onConfirm={() => setStep(2)}       // ✅ Go back to NewBooking to press "Confirm Booking"
+  clients={clients}
+  stylistList={stylistList}
+  selectedClient={selectedClient}
+  selectedSlot={selectedSlot}
+  basket={basket}
+/>
 
+
+      {/* 🔥 Calendar Modal */}
       <CalendarModal
         isOpen={isCalendarOpen}
         onClose={() => setIsCalendarOpen(false)}

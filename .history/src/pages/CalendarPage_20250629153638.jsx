@@ -114,42 +114,33 @@ setEvents(
 
 const moveEvent = useCallback(
   async ({ event, start, end, resourceId }) => {
-    const newDuration = (new Date(end).getTime() - new Date(start).getTime()) / 60000;
-
     const updated = {
       ...event,
       start,
       end,
       resourceId,
-      duration: newDuration,
       stylistName:
         stylistList.find((s) => s.id === resourceId)?.title || "Unknown",
     };
 
     try {
-      // ✅ Update DB with new start, end and duration
+      // ✅ Update DB
       await supabase
         .from("bookings")
-        .update({
-          start,
-          end,
-          resource_id: resourceId,
-          duration: newDuration,
-        })
+        .update({ start, end, resource_id: resourceId })
         .eq("id", event.id);
 
-      // ✅ Update state
+      // ✅ Update Local State
       setEvents((prev) =>
         prev.map((e) => (e.id === event.id ? updated : e))
       );
     } catch (error) {
-      console.error("Failed to move or resize booking:", error);
-      alert("Error updating booking");
+      console.error("Failed to move booking:", error);
+      alert("Failed to move booking");
     }
   },
   [stylistList]
 );
-
 
 
   const handleCancelBookingFlow = () => {

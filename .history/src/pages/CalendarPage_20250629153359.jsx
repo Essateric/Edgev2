@@ -112,45 +112,21 @@ setEvents(
   const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
 
-const moveEvent = useCallback(
-  async ({ event, start, end, resourceId }) => {
-    const newDuration = (new Date(end).getTime() - new Date(start).getTime()) / 60000;
-
-    const updated = {
-      ...event,
-      start,
-      end,
-      resourceId,
-      duration: newDuration,
-      stylistName:
-        stylistList.find((s) => s.id === resourceId)?.title || "Unknown",
-    };
-
+  const moveEvent = useCallback(async ({ event, start, end, resourceId }) => {
+    const updated = { ...event, start, end, resourceId };
     try {
-      // ✅ Update DB with new start, end and duration
       await supabase
         .from("bookings")
-        .update({
-          start,
-          end,
-          resource_id: resourceId,
-          duration: newDuration,
-        })
+        .update({ start, end, resource_id: resourceId })
         .eq("id", event.id);
 
-      // ✅ Update state
       setEvents((prev) =>
         prev.map((e) => (e.id === event.id ? updated : e))
       );
     } catch (error) {
-      console.error("Failed to move or resize booking:", error);
-      alert("Error updating booking");
+      console.error("Failed to move booking:", error);
     }
-  },
-  [stylistList]
-);
-
-
+  }, []);
 
   const handleCancelBookingFlow = () => {
     setIsModalOpen(false);

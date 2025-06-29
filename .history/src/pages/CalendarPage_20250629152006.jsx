@@ -33,6 +33,7 @@ import "react-big-calendar/lib/css/react-big-calendar.css";
 import "react-big-calendar/lib/addons/dragAndDrop/styles.css";
 import "../styles/CalendarStyles.css";
 
+// Setup calendar
 const DnDCalendar = withDragAndDrop(Calendar);
 
 const locales = { "en-GB": enGB };
@@ -54,9 +55,10 @@ export default function CalendarPage() {
   const [selectedSlot, setSelectedSlot] = useState(null);
   const [selectedClient, setSelectedClient] = useState("");
   const [clientObj, setClientObj] = useState(null);
+  const [step, setStep] = useState(1);
+
   const [basket, setBasket] = useState([]);
 
-  const [step, setStep] = useState(1);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedBooking, setSelectedBooking] = useState(null);
 
@@ -94,17 +96,14 @@ export default function CalendarPage() {
           weeklyHours: s.weekly_hours || {},
         }))
       );
-setEvents(
-  bookingsData.map((b) => ({
-    ...b,
-    start: new Date(b.start),
-    end: new Date(b.end),
-    resourceId: b.resource_id,
-    stylistName:
-      stylistList.find((s) => s.id === b.resource_id)?.title || "Unknown",
-  }))
-);
-
+      setEvents(
+        (bookingsData || []).map((b) => ({
+          ...b,
+          start: new Date(b.start),
+          end: new Date(b.end),
+          resourceId: b.resource_id,
+        }))
+      );
     };
     fetchData();
   }, []);
@@ -112,45 +111,21 @@ setEvents(
   const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
 
-const moveEvent = useCallback(
-  async ({ event, start, end, resourceId }) => {
-    const newDuration = (new Date(end).getTime() - new Date(start).getTime()) / 60000;
-
-    const updated = {
-      ...event,
-      start,
-      end,
-      resourceId,
-      duration: newDuration,
-      stylistName:
-        stylistList.find((s) => s.id === resourceId)?.title || "Unknown",
-    };
-
+  const moveEvent = useCallback(async ({ event, start, end, resourceId }) => {
+    const updated = { ...event, start, end, resourceId };
     try {
-      // ✅ Update DB with new start, end and duration
       await supabase
         .from("bookings")
-        .update({
-          start,
-          end,
-          resource_id: resourceId,
-          duration: newDuration,
-        })
+        .update({ start, end, resource_id: resourceId })
         .eq("id", event.id);
 
-      // ✅ Update state
       setEvents((prev) =>
         prev.map((e) => (e.id === event.id ? updated : e))
       );
     } catch (error) {
-      console.error("Failed to move or resize booking:", error);
-      alert("Error updating booking");
+      console.error("Failed to move booking:", error);
     }
-  },
-  [stylistList]
-);
-
-
+  }, []);
 
   const handleCancelBookingFlow = () => {
     setIsModalOpen(false);
@@ -165,6 +140,7 @@ const moveEvent = useCallback(
 
   return (
     <div className="p-4">
+      {/* 🔥 Toolbar */}
       <div>
         <h1 className="text-5xl font-bold metallic-text p-5">
           The Edge HD Salon
@@ -226,6 +202,7 @@ const moveEvent = useCallback(
         </div>
       </div>
 
+      {/* 🔥 Main Calendar */}
       <DnDCalendar
         localizer={localizer}
         events={[...events, ...unavailableBlocks, ...salonClosedBlocks]}
@@ -293,6 +270,7 @@ const moveEvent = useCallback(
         }}
       />
 
+      {/* 🔥 Modals */}
       <BookingPopUp
         isOpen={!!selectedBooking}
         booking={selectedBooking}
@@ -347,7 +325,10 @@ const moveEvent = useCallback(
           setBasket={setBasket}
           onBack={() => setStep(1)}
           onCancel={handleCancelBookingFlow}
-          onNext={() => setStep(3)} // ✅ Next goes to Review
+          onConfirm={(newEvents) => {
+            setEvents((prev) => [...prev, ...newEvents]);
+            setStep(3); // ✅ Open ReviewModal after selecting services
+          }}
         />
       </RightDrawer>
 
@@ -355,10 +336,7 @@ const moveEvent = useCallback(
         isOpen={step === 3}
         onClose={handleCancelBookingFlow}
         onBack={() => setStep(2)}
-        onConfirm={(newEvents) => {
-          setEvents((prev) => [...prev, ...newEvents]);
-          handleCancelBookingFlow(); // ✅ Close flow after booking
-        }}
+        onConfirm={() => setStep(2)} // ✅ Go back to NewBooking to confirm booking
         clients={clients}
         stylistList={stylistList}
         selectedClient={selectedClient}

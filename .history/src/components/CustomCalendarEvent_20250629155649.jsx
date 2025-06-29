@@ -36,7 +36,7 @@ export default function CustomCalendarEvent({ event }) {
       }}
     >
       {/* 🔝 Duration */}
-      <div className="absolute top-[2px] right-[4px] text-[10px] font-semibold">
+      <div className="flex justify-between">
         <div></div>
         <div className="text-right">{durationLabel}</div>
       </div>
