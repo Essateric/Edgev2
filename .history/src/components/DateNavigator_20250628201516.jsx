@@ -1,0 +1,31 @@
+import DatePicker from "react-datepicker";
+import "react-datepicker/dist/react-datepicker.css";
+
+function DateNavigator({ visibleDate, setVisibleDate }) {
+  return (
+    <div className="p-2 rounded shadow">
+      <label className="block text-white mb-1">
+        Select Date
+      </label>
+      <DatePicker
+        selected={visibleDate}
+        onChange={(date) => setVisibleDate(date)}
+        dateFormat="dd/MM/yyyy"
+        className="border px-2 py-1 rounded w- text-bronze bg-white"
+        showMonthYearPicker
+        popperPlacement="bottom-start"
+        popperModifiers={[
+          {
+            name: "offset",
+            options: {
+              offset: [0, 10],
+            },
+          },
+        ]}
+        portalId="root" 
+      />
+    </div>
+  );
+}
+
+export default DateNavigator;
