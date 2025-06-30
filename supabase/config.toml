@@ -27,3 +27,25 @@ site_url = "http://localhost:5173"
 additional_redirect_urls = ["http://localhost:5173", "https://theedge.essateric.com"]
 jwt_secret = "gFpexldf/UkH5XEfbelyjyrzTT1q1tnxxi9URC1XfVUMph+e3r76pi4BBKgNdO/Nv7ULzUYELUhg1gM84SNQGg=="
 
+
+[functions.addnewstaff]
+enabled = true
+verify_jwt = true
+import_map = "./functions/addnewstaff/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/addnewstaff/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/addnewstaff/*.html" ]
+
+[functions.delete-staff]
+enabled = true
+verify_jwt = true
+import_map = "./functions/delete-staff/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/delete-staff/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/delete-staff/*.html" ]
