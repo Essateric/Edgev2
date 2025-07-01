@@ -109,38 +109,34 @@ export default function ManageStaff() {
     setShowHoursModal(true);
   };
 
-const saveModalHours = async () => {
-  console.log("✅ Attempting to save hours for ID:", modalStaff.id);
-  console.log("✅ Hours payload:", modalHours);
+  const saveModalHours = async () => {
+    console.log("✅ Attempting to save hours for ID:", modalStaff.id);
+    console.log("Hours payload:", modalHours);
 
-  // Debug: Check if the modalStaff.id matches any current row
-  const match = staff.find((s) => s.id === modalStaff.id);
-  console.log("🔍 Match Found in Staff Array:", match);
+    const { data, error } = await supabase
+      .from("staff")
+      .update({ weekly_hours: modalHours })
+      .eq("id", modalStaff.id)
+      .select();
 
-  const { data, error } = await supabase
-    .from("staff")
-    .update({ weekly_hours: modalHours })
-    .eq("id", modalStaff.id)
-    .select();
+    console.log("Supabase response data:", data);
+    console.log("Supabase response error:", error);
 
-  console.log("📦 Supabase response data:", data);
-  console.log("❌ Supabase response error:", error);
+    if (error) {
+      alert("❌ Error saving hours: " + error.message);
+      return;
+    }
 
-  if (error) {
-    alert("❌ Error saving hours: " + error.message);
-    return;
-  }
+    if (!data || data.length === 0) {
+      alert("❌ No matching staff found to update.");
+      return;
+    }
 
-  if (!data || data.length === 0) {
-    alert("❌ No matching staff found to update.");
-    return;
-  }
+    alert("✅ Hours updated successfully.");
 
-  alert("✅ Hours updated successfully.");
-  await fetchData();
-  setShowHoursModal(false);
-};
-
+    await fetchData();
+    setShowHoursModal(false);
+  };
 
   const openEditServicesModal = (staffMember) => {
     setEditServicesStaff(staffMember);

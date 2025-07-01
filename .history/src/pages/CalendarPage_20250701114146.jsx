@@ -104,19 +104,18 @@ useEffect(() => {
       }))
     );
 
- setEvents(
-      (bookingsData || []).map((b) => {
-        const stylist = staff.find((s) => s.id === b.resource_id);
-        return {
-          ...b,
-          start: new Date(b.start),
-          end: new Date(b.end),
-          resourceId: b.resource_id,
-          stylistName: stylist?.name || "Unknown Stylist",
-          title: b.title || "No Service Name", // 🔥 This fixes the service name display
-        };
-      })
-    );
+setEvents(
+  (bookingsData || []).map((b) => ({
+    ...b,
+    start: new Date(b.start),
+    end: new Date(b.end),
+    resourceId: b.resource_id,
+    stylistName: staff.find((s) => s.id === b.resource_id)?.name || "Unknown",
+    title:
+      staff.find((s) => s.id === b.resource_id)?.name ||
+      "Unknown Stylist", // 🔥 This sets what appears in the calendar slot
+  }))
+);
   };
 
   fetchData();

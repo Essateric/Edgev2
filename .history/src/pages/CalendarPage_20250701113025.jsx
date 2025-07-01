@@ -83,7 +83,7 @@ export default function CalendarPage() {
 useEffect(() => {
   const fetchData = async () => {
     const { data: clientsData } = await supabase.from("clients").select("*");
-    const { data: staffData, error: staffError } = await supabase.from("staff").select("*").order("created_at", { ascending: true }); ;
+    const { data: staffData, error: staffError } = await supabase.from("staff").select("*");
     const { data: bookingsData } = await supabase.from("bookings").select("*");
 
     if (staffError) {
@@ -104,7 +104,7 @@ useEffect(() => {
       }))
     );
 
- setEvents(
+    setEvents(
       (bookingsData || []).map((b) => {
         const stylist = staff.find((s) => s.id === b.resource_id);
         return {
@@ -112,8 +112,7 @@ useEffect(() => {
           start: new Date(b.start),
           end: new Date(b.end),
           resourceId: b.resource_id,
-          stylistName: stylist?.name || "Unknown Stylist",
-          title: b.title || "No Service Name", // 🔥 This fixes the service name display
+          stylistName: stylist ? stylist.name : "Unknown",
         };
       })
     );

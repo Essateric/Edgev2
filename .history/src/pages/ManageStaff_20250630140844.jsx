@@ -5,22 +5,15 @@ import EditServicesModal from "../components/EditServicesModal";
 import AddNewStaffModal from "../components/AddNewStaffModal";
 import { useAuth } from "../contexts/AuthContext";
 
-const daysOrder = [
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-  "Sunday",
-];
-
-const defaultWeeklyHours = Object.fromEntries(
-  daysOrder.map((day) => [
-    day,
-    { start: "", end: "", off: false }
-  ])
-);
+const defaultWeeklyHours = {
+  Monday: { start: "", end: "", off: false },
+  Tuesday: { start: "", end: "", off: false },
+  Wednesday: { start: "", end: "", off: false },
+  Thursday: { start: "", end: "", off: false },
+  Friday: { start: "", end: "", off: false },
+  Saturday: { start: "", end: "", off: false },
+  Sunday: { start: "", end: "", off: false },
+};
 
 export default function ManageStaff() {
   const [staff, setStaff] = useState([]);
@@ -35,6 +28,7 @@ export default function ManageStaff() {
 
   const [showAddModal, setShowAddModal] = useState(false);
   const { currentUser } = useAuth();
+
 
   useEffect(() => {
     fetchData();
@@ -57,51 +51,55 @@ export default function ManageStaff() {
 
   const normalizeWeeklyHours = (input) => {
     return Object.fromEntries(
-      daysOrder.map((day) => [
-        day,
-        {
-          start: input?.[day]?.start || "",
-          end: input?.[day]?.end || "",
-          off: typeof input?.[day]?.off === "boolean" ? input[day].off : false,
-        },
-      ])
-    );
-  };
-
-  const handleDelete = async (id) => {
-    const confirm = window.confirm(
-      "Are you sure you want to delete this staff member?"
-    );
-    if (!confirm) return;
-
-    try {
-      const res = await fetch(
-        "https://vmtcofezozrblfxudauk.supabase.co/functions/v1/delete-staff",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${currentUser.token}`,
+      Object.entries(defaultWeeklyHours).map(([day]) => {
+        const dayData = input?.[day] || {};
+        return [
+          day,
+          {
+            start: typeof dayData.start === "string" ? dayData.start : "",
+            end: typeof dayData.end === "string" ? dayData.end : "",
+            off: !!dayData.off,
           },
-          body: JSON.stringify({ id }),
-        }
-      );
-
-      const result = await res.json();
-
-      if (!res.ok) {
-        console.error(result);
-        alert(result.error || "Failed to delete staff.");
-        return;
-      }
-
-      fetchData();
-      alert("✅ Staff deleted successfully.");
-    } catch (err) {
-      console.error(err);
-      alert("❌ Error deleting staff.");
-    }
+        ];
+      })
+    );
   };
+
+const handleDelete = async (id) => {
+  const confirm = window.confirm(
+    "Are you sure you want to delete this staff member?"
+  );
+  if (!confirm) return;
+
+  try {
+    const res = await fetch(
+      "https://vmtcofezozrblfxudauk.supabase.co/functions/v1/delete-staff",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${currentUser.token}`, // or session token if needed
+        },
+        body: JSON.stringify({ id }),
+      }
+    );
+
+    const result = await res.json();
+
+    if (!res.ok) {
+      console.error(result);
+      alert(result.error || "Failed to delete staff.");
+      return;
+    }
+
+    fetchData();
+    alert("✅ Staff deleted successfully.");
+  } catch (err) {
+    console.error(err);
+    alert("❌ Error deleting staff.");
+  }
+};
+
 
   const openHoursModal = (member) => {
     setModalStaff(member);
@@ -109,38 +107,14 @@ export default function ManageStaff() {
     setShowHoursModal(true);
   };
 
-const saveModalHours = async () => {
-  console.log("✅ Attempting to save hours for ID:", modalStaff.id);
-  console.log("✅ Hours payload:", modalHours);
-
-  // Debug: Check if the modalStaff.id matches any current row
-  const match = staff.find((s) => s.id === modalStaff.id);
-  console.log("🔍 Match Found in Staff Array:", match);
-
-  const { data, error } = await supabase
-    .from("staff")
-    .update({ weekly_hours: modalHours })
-    .eq("id", modalStaff.id)
-    .select();
-
-  console.log("📦 Supabase response data:", data);
-  console.log("❌ Supabase response error:", error);
-
-  if (error) {
-    alert("❌ Error saving hours: " + error.message);
-    return;
-  }
-
-  if (!data || data.length === 0) {
-    alert("❌ No matching staff found to update.");
-    return;
-  }
-
-  alert("✅ Hours updated successfully.");
-  await fetchData();
-  setShowHoursModal(false);
-};
-
+  const saveModalHours = async () => {
+    await supabase
+      .from("staff")
+      .update({ weekly_hours: modalHours })
+      .eq("id", modalStaff.id);
+    setShowHoursModal(false);
+    fetchData();
+  };
 
   const openEditServicesModal = (staffMember) => {
     setEditServicesStaff(staffMember);

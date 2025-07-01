@@ -104,7 +104,7 @@ useEffect(() => {
       }))
     );
 
- setEvents(
+    setEvents(
       (bookingsData || []).map((b) => {
         const stylist = staff.find((s) => s.id === b.resource_id);
         return {
@@ -112,8 +112,7 @@ useEffect(() => {
           start: new Date(b.start),
           end: new Date(b.end),
           resourceId: b.resource_id,
-          stylistName: stylist?.name || "Unknown Stylist",
-          title: b.title || "No Service Name", // 🔥 This fixes the service name display
+          stylistName: stylist ? stylist.name : "Unknown",
         };
       })
     );
