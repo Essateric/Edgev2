@@ -3,7 +3,7 @@ import Modal from "./Modal";
 import Button from "./Button";
 import { format } from "date-fns";
 import { supabase } from "../supabaseClient.js";
-import SaveBookingsLog from "./bookings/SaveBookingsLog";
+import SaveBookingLog from "./bookings/SaveBookingsLog";
 
 export default function ReviewModal({
   isOpen,
@@ -42,77 +42,51 @@ export default function ReviewModal({
 
 const handleConfirm = async () => {
   try {
-    setLoading(true);
+    // 1. Insert booking
+    const { data: bookingData, error: bookingError } = await supabase
+      .from("bookings")
+      .insert([
+        {
+          client_id,
+          client_name,
+          stylist_id,
+          stylist_name,
+          start,
+          end,
+          title: service.name,
+          price: service.price,
+          duration: service.duration,
+        },
+      ])
+      .select()
+      .single(); // ✅ Get the inserted booking and its ID
 
-    const client_id = client?.id;
-    const client_name = `${client?.first_name ?? ""} ${client?.last_name ?? ""}`.trim();
-    const resource_id = stylist?.id;
-    const resource_name = stylist?.name ?? "Unknown";
-
-    const newBookings = [];
-
-    // ⏱ Start stacking from the slot's start time
-    let currentStart = new Date(selectedSlot.start);
-
-    for (const service of basket) {
-      const durationMins = service.displayDuration || 0;
-      const currentEnd = new Date(currentStart.getTime() + durationMins * 60000);
-
-      const { data: bookingData, error: bookingError } = await supabase
-        .from("bookings")
-        .insert([
-          {
-            client_id,
-            client_name,
-            resource_id,
-            start: currentStart.toISOString(),
-            end: currentEnd.toISOString(),
-            title: service.name,
-            price: service.displayPrice,
-            duration: service.displayDuration,
-          },
-        ])
-        .select()
-        .single();
-
-      if (bookingError) {
-        console.error("❌ Booking failed:", bookingError.message);
-        return;
-      }
-
-      newBookings.push({
-        ...bookingData,
-        start: new Date(bookingData.start),
-        end: new Date(bookingData.end),
-        resourceId: bookingData.resource_id,
-      });
-
-      await SaveBookingsLog({
-        action: "created",
-        booking_id: bookingData.id,
-        client_id,
-        client_name,
-        stylist_id: resource_id,
-        stylist_name: resource_name,
-        service,
-        start: currentStart.toISOString(),
-        end: currentEnd.toISOString(),
-      });
-
-      // ⏭ Move to next start time
-      currentStart = new Date(currentEnd);
+    if (bookingError) {
+      console.error("❌ Booking failed:", bookingError.message);
+      return;
     }
 
-    console.log("✅ All bookings and logs saved");
-    onConfirm(newBookings); // ⬅ pass new stacked events to calendar
+    const booking_id = bookingData.id; // ✅ Now you have this
+
+    // 2. Call SaveBookingsLog AFTER booking is saved
+    await SaveBookingsLog({
+      action: "created",
+      booking_id,
+      client_id,
+      client_name,
+      stylist_id,
+      stylist_name,
+      service,
+      start,
+      end,
+    });
+
+    console.log("✅ Booking and log saved successfully");
+
   } catch (err) {
     console.error("🔥 Something went wrong:", err.message);
-  } finally {
-    setLoading(false);
   }
 };
-
-
 
 
   return (

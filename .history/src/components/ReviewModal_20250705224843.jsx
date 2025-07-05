@@ -3,7 +3,7 @@ import Modal from "./Modal";
 import Button from "./Button";
 import { format } from "date-fns";
 import { supabase } from "../supabaseClient.js";
-import SaveBookingsLog from "./bookings/SaveBookingsLog";
+import SaveBookingLog from "./bookings/SaveBookingsLog";
 
 export default function ReviewModal({
   isOpen,
@@ -49,15 +49,7 @@ const handleConfirm = async () => {
     const resource_id = stylist?.id;
     const resource_name = stylist?.name ?? "Unknown";
 
-    const newBookings = [];
-
-    // ⏱ Start stacking from the slot's start time
-    let currentStart = new Date(selectedSlot.start);
-
     for (const service of basket) {
-      const durationMins = service.displayDuration || 0;
-      const currentEnd = new Date(currentStart.getTime() + durationMins * 60000);
-
       const { data: bookingData, error: bookingError } = await supabase
         .from("bookings")
         .insert([
@@ -65,8 +57,9 @@ const handleConfirm = async () => {
             client_id,
             client_name,
             resource_id,
-            start: currentStart.toISOString(),
-            end: currentEnd.toISOString(),
+            resource_name,
+            start: selectedSlot.start.toISOString(),
+            end: selectedSlot.end.toISOString(),
             title: service.name,
             price: service.displayPrice,
             duration: service.displayDuration,
@@ -80,38 +73,30 @@ const handleConfirm = async () => {
         return;
       }
 
-      newBookings.push({
-        ...bookingData,
-        start: new Date(bookingData.start),
-        end: new Date(bookingData.end),
-        resourceId: bookingData.resource_id,
-      });
+      const booking_id = bookingData.id;
 
+      // Save to booking_logs
       await SaveBookingsLog({
         action: "created",
-        booking_id: bookingData.id,
+        booking_id,
         client_id,
         client_name,
         stylist_id: resource_id,
         stylist_name: resource_name,
         service,
-        start: currentStart.toISOString(),
-        end: currentEnd.toISOString(),
+        start: selectedSlot.start.toISOString(),
+        end: selectedSlot.end.toISOString(),
       });
-
-      // ⏭ Move to next start time
-      currentStart = new Date(currentEnd);
     }
 
     console.log("✅ All bookings and logs saved");
-    onConfirm(newBookings); // ⬅ pass new stacked events to calendar
+    onConfirm(); // Proceed to next step
   } catch (err) {
     console.error("🔥 Something went wrong:", err.message);
   } finally {
     setLoading(false);
   }
 };
-
 
 
 

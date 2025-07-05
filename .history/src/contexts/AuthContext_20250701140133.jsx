@@ -1,45 +1,30 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "../supabaseClient";
 import bcrypt from "bcryptjs";
 import { getStaffPins, cacheStaffPins } from "../utils/pinCache";
 
 const AuthContext = createContext();
 export const useAuth = () => useContext(AuthContext);
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-// Create a supabase client without token initially
-let supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
 export const AuthProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(null);
-  const [authLoading, setAuthLoading] = useState(true);
-  const [pageLoading, setPageLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true); // Auth loading state
+  const [pageLoading, setPageLoading] = useState(false); // Global page loader
 
   const EDGE_FUNCTION_URL =
     "https://vmtcofezozrblfxudauk.functions.supabase.co/login-with-pin";
 
-  // Update supabase client with auth token
-  const createSupabaseWithToken = (token) => {
-    supabaseClient = createClient(SUPABASE_URL, token);
-  };
-
+  // Load session from localStorage on mount
   useEffect(() => {
-    // Load session from localStorage on mount
     const storedUser = localStorage.getItem("currentUser");
     const offlineUser = localStorage.getItem("offlineUser");
 
     if (offlineUser) {
       setCurrentUser(JSON.parse(offlineUser));
-      createSupabaseWithToken(JSON.parse(offlineUser).token);
     } else if (storedUser) {
       setCurrentUser(JSON.parse(storedUser));
-      createSupabaseWithToken(JSON.parse(storedUser).token);
     } else {
       setCurrentUser(null);
-      // No token, use anon key
-      createSupabaseWithToken(SUPABASE_ANON_KEY);
     }
 
     if (navigator.onLine) {
@@ -49,8 +34,9 @@ export const AuthProvider = ({ children }) => {
     setAuthLoading(false);
   }, []);
 
+  // Cache staff pins for offline login
   const cacheStaffPinsFromSupabase = async () => {
-    const { data: staffList } = await supabaseClient
+    const { data: staffList } = await supabase
       .from("staff")
       .select("id, name, email, permission, pin_hash");
 
@@ -64,7 +50,6 @@ export const AuthProvider = ({ children }) => {
     setAuthLoading(true);
     try {
       if (!navigator.onLine) {
-        // Offline login
         const staffPins = await getStaffPins();
         const user = staffPins.find(
           (staff) => staff.pin_hash && bcrypt.compareSync(pin, staff.pin_hash)
@@ -74,8 +59,6 @@ export const AuthProvider = ({ children }) => {
           const offlineUser = { ...user, offline: true };
           setCurrentUser(offlineUser);
           localStorage.setItem("offlineUser", JSON.stringify(offlineUser));
-          // Offline users use anon key (no token)
-          createSupabaseWithToken(SUPABASE_ANON_KEY);
           setAuthLoading(false);
           return;
         } else {
@@ -83,7 +66,6 @@ export const AuthProvider = ({ children }) => {
         }
       }
 
-      // Online login: call your edge function
       const res = await fetch(EDGE_FUNCTION_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -98,6 +80,9 @@ export const AuthProvider = ({ children }) => {
 
       const { token, user } = result;
 
+      // THIS IS THE CRITICAL FIX: Set the session on supabase client here
+      await supabase.auth.setSession({ access_token: token });
+
       const userData = {
         ...user,
         token,
@@ -108,9 +93,6 @@ export const AuthProvider = ({ children }) => {
       localStorage.setItem("currentUser", JSON.stringify(userData));
       localStorage.removeItem("offlineUser");
 
-      // Update supabase client with new token for authenticated requests
-      createSupabaseWithToken(token);
-
       cacheStaffPinsFromSupabase();
     } catch (err) {
       console.error("❌ Login with PIN failed:", err.message);
@@ -120,33 +102,29 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Email/password login backup
+  // Email/Password login (optional backup)
   const login = async (email, password) => {
     setAuthLoading(true);
-    const { data, error } = await supabaseClient.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
     setAuthLoading(false);
     if (error) throw new Error(error.message);
+
+    // Supabase-js handles session automatically here
     const user = { ...data.user, offline: false };
     setCurrentUser(user);
     localStorage.setItem("currentUser", JSON.stringify(user));
     localStorage.removeItem("offlineUser");
-
-    // Update supabase client with user's access token
-    createSupabaseWithToken(data.session.access_token);
   };
 
-  // Logout
+  // Logout clears JWT session
   const logout = async () => {
     setCurrentUser(null);
     localStorage.removeItem("offlineUser");
     localStorage.removeItem("currentUser");
-    await supabaseClient.auth.signOut();
-
-    // Reset supabase client to anon key
-    createSupabaseWithToken(SUPABASE_ANON_KEY);
+    await supabase.auth.signOut();
   };
 
   return (
@@ -160,7 +138,6 @@ export const AuthProvider = ({ children }) => {
         isAuthenticated: !!currentUser,
         pageLoading,
         setPageLoading,
-        supabaseClient, // expose client for components that want direct access
       }}
     >
       {children}

@@ -19,7 +19,7 @@ import RightDrawer from "../components/RightDrawer";
 import CustomCalendarEvent from "../components/CustomCalendarEvent";
 import SelectClientModal from "../components/SelectClientModal";
 import ReviewModal from "../components/ReviewModal";
-import NewBooking from "../components/bookings/NewBooking";
+import NewBooking from "../components/NewBooking";
 
 import useUnavailableTimeBlocks from "../components/UnavailableTimeBlocks";
 import UseSalonClosedBlocks from "../components/UseSalonClosedBlocks";
@@ -32,7 +32,7 @@ import { useAuth } from "../contexts/AuthContext";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "react-big-calendar/lib/addons/dragAndDrop/styles.css";
 import "../styles/CalendarStyles.css";
-import PageLoader from "../components/PageLoader.jsx";
+import PageLoader from "./components/PageLoader";
 
 const DnDCalendar = withDragAndDrop(Calendar);
 
@@ -46,7 +46,7 @@ const localizer = dateFnsLocalizer({
 });
 
 export default function CalendarPage() {
-  const { currentUser, pageLoading, authLoading } = useAuth();
+   const { currentUser, pageLoading, authLoading } = useAuth();
 
   const [clients, setClients] = useState([]);
   const [stylistList, setStylistList] = useState([]);
@@ -63,77 +63,66 @@ export default function CalendarPage() {
 
   const [visibleDate, setVisibleDate] = useState(new Date());
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-
-  // Local loading state for fetchData
-  const [loading, setLoading] = useState(true);
-
+  
   const stylist = stylistList.find((s) => s.id === selectedSlot?.resourceId);
 
   const bookingTitle = selectedSlot
     ? `Booking for ${
-        clientObj
-          ? clientObj.first_name + " " + clientObj.last_name
-          : "Unknown Client"
-      } • ${format(selectedSlot.start, "eeee dd MMM yyyy")} ${format(
+        clientObj ? clientObj.first_name + " " + clientObj.last_name : "Unknown Client"
+      } • ${format(
         selectedSlot.start,
+        "eeee dd MMM yyyy"
+      )} ${format(selectedSlot.start, "HH:mm")} - ${format(
+        selectedSlot.end,
         "HH:mm"
-      )} - ${format(selectedSlot.end, "HH:mm")} • Stylist: ${stylist?.title ?? ""}`
+      )} • Stylist: ${stylist?.title ?? ""}`
     : "Booking";
 
   UseTimeSlotLabel(9, 20, 15);
   AddGridTimeLabels(9, 20, 15);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      try {
-        const { data: clientsData } = await supabase.from("clients").select("*");
-        const { data: staffData, error: staffError } = await supabase
-          .from("staff")
-          .select("*")
-          .order("created_at", { ascending: true });
-        const { data: bookingsData } = await supabase.from("bookings").select("*");
+useEffect(() => {
+  const fetchData = async () => {
+    const { data: clientsData } = await supabase.from("clients").select("*");
+    const { data: staffData, error: staffError } = await supabase.from("staff").select("*").order("created_at", { ascending: true }); ;
+    const { data: bookingsData } = await supabase.from("bookings").select("*");
 
-        if (staffError) {
-          console.error("❌ Error fetching staff:", staffError);
-          return;
-        }
+    if (staffError) {
+      console.error("❌ Error fetching staff:", staffError);
+      return;
+    }
 
-        const staff = staffData || [];
+    const staff = staffData || [];
 
-        console.log("✅ Staff fetched:", staff);
+    console.log("✅ Staff fetched:", staff);
 
-        setClients(clientsData || []);
-        setStylistList(
-          staff.map((s) => ({
-            id: s.id, // ✅ Make sure this matches resourceId in bookings
-            title: s.name,
-            weeklyHours: s.weekly_hours || {},
-          }))
-        );
+    setClients(clientsData || []);
+    setStylistList(
+      staff.map((s) => ({
+        id: s.id, // ✅ Make sure this matches resourceId in bookings
+        title: s.name,
+        weeklyHours: s.weekly_hours || {},
+      }))
+    );
 
-        setEvents(
-          (bookingsData || []).map((b) => {
-            const stylist = staff.find((s) => s.id === b.resource_id);
-            return {
-              ...b,
-              start: new Date(b.start),
-              end: new Date(b.end),
-              resourceId: b.resource_id,
-              stylistName: stylist?.name || "Unknown Stylist",
-              title: b.title || "No Service Name", // 🔥 Fix service name display
-            };
-          })
-        );
-      } catch (error) {
-        console.error("❌ Error fetching calendar data:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
+ setEvents(
+      (bookingsData || []).map((b) => {
+        const stylist = staff.find((s) => s.id === b.resource_id);
+        return {
+          ...b,
+          start: new Date(b.start),
+          end: new Date(b.end),
+          resourceId: b.resource_id,
+          stylistName: stylist?.name || "Unknown Stylist",
+          title: b.title || "No Service Name", // 🔥 This fixes the service name display
+        };
+      })
+    );
+  };
 
-    fetchData();
-  }, []);
+  fetchData();
+}, []);
+
 
   const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
@@ -162,7 +151,9 @@ export default function CalendarPage() {
           })
           .eq("id", event.id);
 
-        setEvents((prev) => prev.map((e) => (e.id === event.id ? updated : e)));
+        setEvents((prev) =>
+          prev.map((e) => (e.id === event.id ? updated : e))
+        );
       } catch (error) {
         console.error("Failed to move or resize booking:", error);
         alert("Error updating booking");
@@ -181,12 +172,13 @@ export default function CalendarPage() {
   };
 
   if (!currentUser) return <div>Loading...</div>;
-  if (pageLoading || authLoading || loading) return <PageLoader />;
 
   return (
     <div className="p-4">
       <div>
-        <h1 className="text-5xl font-bold metallic-text p-5">The Edge HD Salon</h1>
+        <h1 className="text-5xl font-bold metallic-text p-5">
+          The Edge HD Salon
+        </h1>
       </div>
 
       <div className="flex justify-between items-center mb-4">

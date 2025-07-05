@@ -19,7 +19,7 @@ import RightDrawer from "../components/RightDrawer";
 import CustomCalendarEvent from "../components/CustomCalendarEvent";
 import SelectClientModal from "../components/SelectClientModal";
 import ReviewModal from "../components/ReviewModal";
-import NewBooking from "../components/bookings/NewBooking";
+import NewBooking from "../components/NewBooking";
 
 import useUnavailableTimeBlocks from "../components/UnavailableTimeBlocks";
 import UseSalonClosedBlocks from "../components/UseSalonClosedBlocks";

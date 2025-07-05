@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { supabase as defaultSupabase } from "../supabaseClient";
-import { createClient } from "@supabase/supabase-js"; // Added import
+import { supabase } from "../supabaseClient";
 import EditHoursModal from "../components/EditHoursModal";
 import EditServicesModal from "../components/EditServicesModal";
 import AddNewStaffModal from "../components/AddNewStaffModal";
@@ -35,9 +34,6 @@ export default function ManageStaff() {
 
   const [loading, setLoading] = useState(true);
 
-  const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-  const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
   // Fetch staff and services data from DB
   useEffect(() => {
     fetchData();
@@ -46,8 +42,8 @@ export default function ManageStaff() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const { data: staffData, error: staffError } = await defaultSupabase.from("staff").select("*");
-      const { data: servicesData, error: servicesError } = await defaultSupabase.from("services").select("id, name, category");
+      const { data: staffData, error: staffError } = await supabase.from("staff").select("*");
+      const { data: servicesData, error: servicesError } = await supabase.from("services").select("id, name, category");
 
       if (staffError) {
         console.error("❌ Error fetching staff:", staffError);
@@ -96,16 +92,14 @@ export default function ManageStaff() {
     setShowHoursModal(true);
   };
 
-  // Called when saving edited hours in modal - UPDATED
+  // Called when saving edited hours in modal
   const saveModalHours = async () => {
-    if (!currentUser?.token) {
-      alert("❌ You must be logged in to update staff hours.");
-      return;
-    }
-
     console.log("✅ Attempting to save hours for modalStaff:", modalStaff);
     console.log("✅ modalStaff.id:", modalStaff?.id);
     console.log("✅ Hours payload to save:", modalHours);
+
+    const match = staff.find((s) => s.id === modalStaff.id);
+    console.log("🔍 Match found in staff state:", match);
 
     const payload = {};
     Object.entries(modalHours).forEach(([day, value]) => {
@@ -118,16 +112,7 @@ export default function ManageStaff() {
 
     console.log("🚀 Final payload for DB update:", payload);
 
-    // Create a Supabase client with user JWT token
-    const supabaseWithAuth = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: {
-        headers: {
-          Authorization: `Bearer ${currentUser.token}`,
-        },
-      },
-    });
-
-    const { data, error } = await supabaseWithAuth
+    const { data, error } = await supabase
       .from("staff")
       .update({ weekly_hours: payload })
       .eq("id", modalStaff.id)
@@ -160,14 +145,14 @@ export default function ManageStaff() {
 
     try {
       // Delete from Supabase Auth users
-      const { error: authError } = await defaultSupabase.auth.admin.deleteUser(id);
+      const { error: authError } = await supabase.auth.admin.deleteUser(id);
       if (authError) {
         alert("❌ Error deleting user from auth: " + authError.message);
         return;
       }
 
       // Delete from staff table
-      const { error: dbError } = await defaultSupabase
+      const { error: dbError } = await supabase
         .from("staff")
         .delete()
         .eq("id", id);

@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { supabase as defaultSupabase } from "../supabaseClient";
-import { createClient } from "@supabase/supabase-js"; // Added import
+import { supabase } from "../supabaseClient";
 import EditHoursModal from "../components/EditHoursModal";
 import EditServicesModal from "../components/EditServicesModal";
 import AddNewStaffModal from "../components/AddNewStaffModal";
@@ -8,7 +7,13 @@ import { useAuth } from "../contexts/AuthContext";
 import PageLoader from "../components/PageLoader.jsx";
 
 const daysOrder = [
-  "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
 ];
 
 const defaultWeeklyHours = Object.fromEntries(
@@ -33,44 +38,32 @@ export default function ManageStaff() {
 
   const { currentUser, pageLoading, authLoading } = useAuth();
 
+  // New loading state for data fetching inside this component
   const [loading, setLoading] = useState(true);
 
-  const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-  const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-  // Fetch staff and services data from DB
   useEffect(() => {
     fetchData();
   }, []);
 
   const fetchData = async () => {
-    setLoading(true);
+    setLoading(true); // start loading when fetching begins
     try {
-      const { data: staffData, error: staffError } = await defaultSupabase.from("staff").select("*");
-      const { data: servicesData, error: servicesError } = await defaultSupabase.from("services").select("id, name, category");
+      const { data: staffData } = await supabase.from("staff").select("*");
+      const { data: servicesData } = await supabase
+        .from("services")
+        .select("id, name, category");
 
-      if (staffError) {
-        console.error("❌ Error fetching staff:", staffError);
-      } else {
-        console.log("✅ Staff fetched from DB:", staffData);
-        setStaff(
-          (staffData || []).map((doc) => ({
-            ...doc,
-            weekly_hours: normalizeWeeklyHours(doc.weekly_hours),
-          }))
-        );
-      }
-
-      if (servicesError) {
-        console.error("❌ Error fetching services:", servicesError);
-      } else {
-        console.log("✅ Services fetched from DB:", servicesData);
-        setServicesList(servicesData || []);
-      }
+      setStaff(
+        (staffData || []).map((doc) => ({
+          ...doc,
+          weekly_hours: normalizeWeeklyHours(doc.weekly_hours),
+        }))
+      );
+      setServicesList(servicesData || []);
     } catch (err) {
       console.error("❌ Error fetching data:", err);
     } finally {
-      setLoading(false);
+      setLoading(false); // end loading after fetch attempt
     }
   };
 
@@ -87,25 +80,51 @@ export default function ManageStaff() {
     );
   };
 
-  // Called when user clicks 'Edit Hours' button for a staff member
+  const handleDelete = async (id) => {
+    const confirm = window.confirm(
+      "Are you sure you want to delete this staff member?"
+    );
+    if (!confirm) return;
+
+    try {
+      const res = await fetch(
+        "https://vmtcofezozrblfxudauk.supabase.co/functions/v1/delete-staff",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${currentUser.token}`,
+          },
+          body: JSON.stringify({ id }),
+        }
+      );
+
+      const result = await res.json();
+
+      if (!res.ok) {
+        console.error(result);
+        alert(result.error || "Failed to delete staff.");
+        return;
+      }
+
+      await fetchData();
+      alert("✅ Staff deleted successfully.");
+    } catch (err) {
+      console.error(err);
+      alert("❌ Error deleting staff.");
+    }
+  };
+
   const openHoursModal = (member) => {
-    console.log("🟢 openHoursModal called with member:", member);
-    console.log("🟢 Member ID:", member?.id);
     setModalStaff(member);
     setModalHours(normalizeWeeklyHours(member.weekly_hours));
     setShowHoursModal(true);
   };
 
-  // Called when saving edited hours in modal - UPDATED
-  const saveModalHours = async () => {
-    if (!currentUser?.token) {
-      alert("❌ You must be logged in to update staff hours.");
-      return;
-    }
-
-    console.log("✅ Attempting to save hours for modalStaff:", modalStaff);
-    console.log("✅ modalStaff.id:", modalStaff?.id);
-    console.log("✅ Hours payload to save:", modalHours);
+const saveModalHours = async () => {
+  try {
+    console.log("✅ Attempting to save hours for ID:", modalStaff.id);
+    console.log("✅ Hours payload:", modalHours);
 
     const payload = {};
     Object.entries(modalHours).forEach(([day, value]) => {
@@ -116,74 +135,42 @@ export default function ManageStaff() {
       };
     });
 
-    console.log("🚀 Final payload for DB update:", payload);
+    console.log("🚀 Final Payload:", payload);
 
-    // Create a Supabase client with user JWT token
-    const supabaseWithAuth = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: {
-        headers: {
-          Authorization: `Bearer ${currentUser.token}`,
-        },
-      },
-    });
-
-    const { data, error } = await supabaseWithAuth
+    const { data, error } = await supabase
       .from("staff")
       .update({ weekly_hours: payload })
       .eq("id", modalStaff.id)
       .select();
 
-    console.log("📦 Supabase update response data:", data);
-    console.log("❌ Supabase update response error:", error);
-
     if (error) {
-      alert("❌ Error saving hours: " + error.message);
+      console.error("❌ Supabase error:", error);
+      alert("Error saving hours: " + error.message);
       return;
     }
 
     if (!data || data.length === 0) {
-      alert("❌ No matching staff found to update.");
+      alert("No matching staff found to update.");
       return;
     }
 
-    alert("✅ Hours updated successfully.");
-    await fetchData();
-    setShowHoursModal(false);
-  };
-
-  // Delete staff by id
-  const handleDelete = async (id) => {
-    const confirm = window.confirm(
-      "Are you sure you want to delete this staff member?"
+    // Update local staff immediately for smoother UI
+    setStaff((prev) =>
+      prev.map((s) =>
+        s.id === modalStaff.id
+          ? { ...s, weekly_hours: normalizeWeeklyHours(payload) }
+          : s
+      )
     );
-    if (!confirm) return;
 
-    try {
-      // Delete from Supabase Auth users
-      const { error: authError } = await defaultSupabase.auth.admin.deleteUser(id);
-      if (authError) {
-        alert("❌ Error deleting user from auth: " + authError.message);
-        return;
-      }
+    alert("✅ Hours updated successfully.");
+    setShowHoursModal(false);
+  } catch (err) {
+    console.error("❌ Unexpected error:", err);
+    alert("Unexpected error saving hours.");
+  }
+};
 
-      // Delete from staff table
-      const { error: dbError } = await defaultSupabase
-        .from("staff")
-        .delete()
-        .eq("id", id);
-
-      if (dbError) {
-        alert("❌ Error deleting staff from database: " + dbError.message);
-        return;
-      }
-
-      alert("✅ Staff deleted successfully.");
-      await fetchData();
-    } catch (err) {
-      console.error("❌ Error deleting staff:", err);
-      alert("❌ Error deleting staff.");
-    }
-  };
 
   const openEditServicesModal = (staffMember) => {
     setEditServicesStaff(staffMember);
@@ -195,6 +182,7 @@ export default function ManageStaff() {
     setEditServicesStaff(null);
   };
 
+  // Show PageLoader if auth or page is loading OR this component's data is loading
   if (pageLoading || authLoading || loading) {
     return <PageLoader />;
   }
@@ -221,9 +209,15 @@ export default function ManageStaff() {
             >
               <div className="flex justify-between items-start">
                 <div>
-                  <h4 className="text-lg font-bold text-gray-800">{member.name}</h4>
-                  <p className="text-sm text-gray-500">Email: {member.email || "N/A"}</p>
-                  <p className="text-sm text-gray-500">Role: {member.permission}</p>
+                  <h4 className="text-lg font-bold text-gray-800">
+                    {member.name}
+                  </h4>
+                  <p className="text-sm text-gray-500">
+                    Email: {member.email || "N/A"}
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    Role: {member.permission}
+                  </p>
 
                   <div className="mt-2">
                     <h5 className="text-md font-semibold mb-1">Hours:</h5>

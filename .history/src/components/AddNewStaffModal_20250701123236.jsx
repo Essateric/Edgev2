@@ -169,7 +169,7 @@ export default function AddNewStaffModal({ open, onClose, onSaved }) {
           >
             <option value="Senior Stylist">Senior Stylist</option>
             <option value="Stylist">Stylist</option>
-            <option value="Junior Stylist">Junior Stylist</option>
+            <option value="Junior Junior">Junior Stylist</option>
           </select>
 
           <div className="border-t border-bronze pt-4">

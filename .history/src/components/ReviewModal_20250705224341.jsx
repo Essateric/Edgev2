@@ -3,7 +3,7 @@ import Modal from "./Modal";
 import Button from "./Button";
 import { format } from "date-fns";
 import { supabase } from "../supabaseClient.js";
-import SaveBookingsLog from "./bookings/SaveBookingsLog";
+import SaveBookingLog from "./bookings/SaveBookingsLog";
 
 export default function ReviewModal({
   isOpen,
@@ -47,17 +47,9 @@ const handleConfirm = async () => {
     const client_id = client?.id;
     const client_name = `${client?.first_name ?? ""} ${client?.last_name ?? ""}`.trim();
     const resource_id = stylist?.id;
-    const resource_name = stylist?.name ?? "Unknown";
-
-    const newBookings = [];
-
-    // ⏱ Start stacking from the slot's start time
-    let currentStart = new Date(selectedSlot.start);
+    const stylist_name = stylist?.title ?? "Unknown";
 
     for (const service of basket) {
-      const durationMins = service.displayDuration || 0;
-      const currentEnd = new Date(currentStart.getTime() + durationMins * 60000);
-
       const { data: bookingData, error: bookingError } = await supabase
         .from("bookings")
         .insert([
@@ -65,8 +57,9 @@ const handleConfirm = async () => {
             client_id,
             client_name,
             resource_id,
-            start: currentStart.toISOString(),
-            end: currentEnd.toISOString(),
+            stylist_name,
+            start: selectedSlot.start.toISOString(),
+            end: selectedSlot.end.toISOString(),
             title: service.name,
             price: service.displayPrice,
             duration: service.displayDuration,
@@ -80,39 +73,30 @@ const handleConfirm = async () => {
         return;
       }
 
-      newBookings.push({
-        ...bookingData,
-        start: new Date(bookingData.start),
-        end: new Date(bookingData.end),
-        resourceId: bookingData.resource_id,
-      });
+      const booking_id = bookingData.id;
 
-      await SaveBookingsLog({
+      await SaveBookingLog({
         action: "created",
-        booking_id: bookingData.id,
+        booking_id,
         client_id,
         client_name,
-        stylist_id: resource_id,
-        stylist_name: resource_name,
+        stylist_id,
+        stylist_name,
         service,
-        start: currentStart.toISOString(),
-        end: currentEnd.toISOString(),
+        start: selectedSlot.start.toISOString(),
+        end: selectedSlot.end.toISOString(),
       });
-
-      // ⏭ Move to next start time
-      currentStart = new Date(currentEnd);
     }
 
-    console.log("✅ All bookings and logs saved");
-    onConfirm(newBookings); // ⬅ pass new stacked events to calendar
+    console.log("✅ Booking and logs saved");
+    onConfirm(); // Or trigger a success UI
+
   } catch (err) {
     console.error("🔥 Something went wrong:", err.message);
   } finally {
     setLoading(false);
   }
 };
-
-
 
 
   return (

@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { supabase as defaultSupabase } from "../supabaseClient";
-import { createClient } from "@supabase/supabase-js"; // Added import
+import { supabase } from "../supabaseClient";
 import EditHoursModal from "../components/EditHoursModal";
 import EditServicesModal from "../components/EditServicesModal";
 import AddNewStaffModal from "../components/AddNewStaffModal";
@@ -35,44 +34,30 @@ export default function ManageStaff() {
 
   const [loading, setLoading] = useState(true);
 
-  const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-  const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
   // Fetch staff and services data from DB
   useEffect(() => {
     fetchData();
   }, []);
 
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const { data: staffData, error: staffError } = await defaultSupabase.from("staff").select("*");
-      const { data: servicesData, error: servicesError } = await defaultSupabase.from("services").select("id, name, category");
+const fetchData = async () => {
+  setLoading(true);
+  try {
+    const { data: staffData, error: staffError } = await supabase.from("staff").select("*");
+    if (staffError) throw staffError;
+    console.log("Staff data refreshed:", staffData);
+    setStaff(
+      (staffData || []).map((doc) => ({
+        ...doc,
+        weekly_hours: normalizeWeeklyHours(doc.weekly_hours),
+      }))
+    );
+  } catch (err) {
+    console.error("Error fetching staff:", err);
+  } finally {
+    setLoading(false);
+  }
+};
 
-      if (staffError) {
-        console.error("❌ Error fetching staff:", staffError);
-      } else {
-        console.log("✅ Staff fetched from DB:", staffData);
-        setStaff(
-          (staffData || []).map((doc) => ({
-            ...doc,
-            weekly_hours: normalizeWeeklyHours(doc.weekly_hours),
-          }))
-        );
-      }
-
-      if (servicesError) {
-        console.error("❌ Error fetching services:", servicesError);
-      } else {
-        console.log("✅ Services fetched from DB:", servicesData);
-        setServicesList(servicesData || []);
-      }
-    } catch (err) {
-      console.error("❌ Error fetching data:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const normalizeWeeklyHours = (input) => {
     return Object.fromEntries(
@@ -87,7 +72,6 @@ export default function ManageStaff() {
     );
   };
 
-  // Called when user clicks 'Edit Hours' button for a staff member
   const openHoursModal = (member) => {
     console.log("🟢 openHoursModal called with member:", member);
     console.log("🟢 Member ID:", member?.id);
@@ -96,16 +80,13 @@ export default function ManageStaff() {
     setShowHoursModal(true);
   };
 
-  // Called when saving edited hours in modal - UPDATED
   const saveModalHours = async () => {
-    if (!currentUser?.token) {
-      alert("❌ You must be logged in to update staff hours.");
-      return;
-    }
-
     console.log("✅ Attempting to save hours for modalStaff:", modalStaff);
     console.log("✅ modalStaff.id:", modalStaff?.id);
     console.log("✅ Hours payload to save:", modalHours);
+
+    const match = staff.find((s) => s.id === modalStaff.id);
+    console.log("🔍 Match found in staff state:", match);
 
     const payload = {};
     Object.entries(modalHours).forEach(([day, value]) => {
@@ -118,20 +99,12 @@ export default function ManageStaff() {
 
     console.log("🚀 Final payload for DB update:", payload);
 
-    // Create a Supabase client with user JWT token
-    const supabaseWithAuth = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: {
-        headers: {
-          Authorization: `Bearer ${currentUser.token}`,
-        },
-      },
-    });
-
-    const { data, error } = await supabaseWithAuth
+    const { data, error } = await supabase
       .from("staff")
       .update({ weekly_hours: payload })
       .eq("id", modalStaff.id)
-      .select();
+      .select()
+        .single();
 
     console.log("📦 Supabase update response data:", data);
     console.log("❌ Supabase update response error:", error);
@@ -151,37 +124,39 @@ export default function ManageStaff() {
     setShowHoursModal(false);
   };
 
-  // Delete staff by id
+  // Full handleDelete function with confirmation and fetch call to delete API
   const handleDelete = async (id) => {
-    const confirm = window.confirm(
+    const confirmDelete = window.confirm(
       "Are you sure you want to delete this staff member?"
     );
-    if (!confirm) return;
+    if (!confirmDelete) return;
 
     try {
-      // Delete from Supabase Auth users
-      const { error: authError } = await defaultSupabase.auth.admin.deleteUser(id);
-      if (authError) {
-        alert("❌ Error deleting user from auth: " + authError.message);
-        return;
-      }
+      const response = await fetch(
+        "https://vmtcofezozrblfxudauk.supabase.co/functions/v1/delete-staff",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${currentUser.token}`, // send user token
+          },
+          body: JSON.stringify({ id }),
+        }
+      );
 
-      // Delete from staff table
-      const { error: dbError } = await defaultSupabase
-        .from("staff")
-        .delete()
-        .eq("id", id);
+      const data = await response.json();
 
-      if (dbError) {
-        alert("❌ Error deleting staff from database: " + dbError.message);
+      if (!response.ok) {
+        console.error("Delete failed:", data.error);
+        alert("Failed to delete staff: " + (data.error || "Unknown error"));
         return;
       }
 
       alert("✅ Staff deleted successfully.");
       await fetchData();
     } catch (err) {
-      console.error("❌ Error deleting staff:", err);
-      alert("❌ Error deleting staff.");
+      console.error("Error calling delete function:", err);
+      alert("An unexpected error occurred while deleting staff.");
     }
   };
 
@@ -278,6 +253,7 @@ export default function ManageStaff() {
 
       {showHoursModal && (
         <EditHoursModal
+        key={modalStaff?.id} 
           staff={modalStaff}
           hours={modalHours}
           setHours={setModalHours}
