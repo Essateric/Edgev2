@@ -1,4 +1,4 @@
-export default function CustomCalendarEvent({ event, title, continuesEarlier, continuesLater, isAllDay, ...props }) {
+export default function CustomCalendarEvent({ event }) {
   const isBlocked = event.isUnavailable || event.isSalonClosed;
 
   if (isBlocked) {
@@ -14,7 +14,9 @@ export default function CustomCalendarEvent({ event, title, continuesEarlier, co
   const durationMinutes =
     (new Date(event.end).getTime() - new Date(event.start).getTime()) / 60000;
 
-  const fontSize = Math.min(18, Math.max(10, durationMinutes * 0.4));
+  const baseFontSize = 10;
+  const fontSize = Math.min(18, Math.max(baseFontSize, durationMinutes * 0.4));
+
   const durationLabel =
     durationMinutes >= 60
       ? `${Math.floor(durationMinutes / 60)}h ${
@@ -24,31 +26,30 @@ export default function CustomCalendarEvent({ event, title, continuesEarlier, co
 
   return (
     <div
-      className="rbc-event-content text-white px-[2px] py-[1px] flex flex-col justify-between h-full leading-tight relative"
+      className="rbc-event-content text-white px-[2px] py-[1px] flex flex-col justify-between h-full leading-tight"
       style={{
         fontSize: `${fontSize}px`,
         lineHeight: "1.1",
         overflow: "hidden",
         whiteSpace: "normal",
         textOverflow: "ellipsis",
-        position: "relative",
       }}
-      {...props} // 🔁 THIS RESTORES RESIZE + DRAG BEHAVIOR
     >
-      {/* Duration top-right */}
+      {/* 🔝 Duration */}
       <div className="absolute top-[2px] right-[4px] text-[10px] font-semibold">
-        {durationLabel}
+        <div></div>
+        <div className="text-right">{durationLabel}</div>
       </div>
 
-      {/* Main content */}
+      {/* 🔥 Service and Client */}
       <div className="flex-1 flex flex-col items-center justify-center text-center">
-        <span className="font-semibold break-words">{title}</span>
+        <span className="font-semibold break-words">{event.title}</span>
         {event.client_name && (
           <span className="italic break-words">{event.client_name}</span>
         )}
       </div>
 
-      {/* Stylist name */}
+      {/* 🔻 Stylist */}
       <div className="text-center text-[10px]">
         {event.stylistName || "Stylist"}
       </div>

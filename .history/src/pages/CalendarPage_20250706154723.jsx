@@ -378,6 +378,7 @@ const moveEvent = useCallback(
         isOpen={step === 3}
         onClose={handleCancelBookingFlow}
         onBack={() => setStep(2)}
+         staff={staff}
         onConfirm={(newEvents) => {
           setEvents((prev) => [...prev, ...newEvents]);
           handleCancelBookingFlow();

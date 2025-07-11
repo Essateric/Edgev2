@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import Modal from "./Modal";
 import Button from "./Button";
 import { format } from "date-fns";
@@ -40,15 +40,6 @@ export default function ReviewModal({
     (sum, s) => sum + (Number(s.displayPrice) || 0),
     0
   );
-
-  useEffect(() => {
-  const checkSession = async () => {
-    const { data } = await supabase.auth.getSession();
-    console.log("🔥 Current session:", data?.session);
-  };
-
-  checkSession();
-}, []);
 
   const handleConfirm = async () => {
     try {

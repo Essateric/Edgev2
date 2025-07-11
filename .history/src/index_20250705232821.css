@@ -248,16 +248,16 @@ border-radius: 5px;
   border-radius: 0 !important;
   transition: top 0.2s ease, height 0.2s ease;
   will-change: top, height;
-    overflow: visible;
+    /* overflow: visible; */
 }
-
+/* 
 .rbc-addons-dnd .rbc-event {
   cursor: default !important;
 }
 
 .rbc-addons-dnd .rbc-event-resizable {
   cursor: ns-resize !important;
-}
+} */
 
 
 .rbc-event-content {

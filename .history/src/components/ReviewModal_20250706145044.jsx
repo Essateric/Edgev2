@@ -1,10 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import Modal from "./Modal";
 import Button from "./Button";
 import { format } from "date-fns";
-import { supabase } from "../supabaseClient.js";
-import SaveBookingsLog from "./bookings/SaveBookingsLog";
-import { v4 as uuidv4 } from "uuid";
+import { supabase } from "../supabaseClient";
+import SaveBookingLog from "../utils/SaveBookingLog";
 
 export default function ReviewModal({
   isOpen,
@@ -20,7 +19,7 @@ export default function ReviewModal({
   const [loading, setLoading] = useState(false);
 
   const client = clients.find((c) => c.id === selectedClient);
-  const stylist = stylistList.find((s) => s.id === selectedSlot?.resourceId); // ✅ FIXED: use stylistList
+  const stylist = stylistList.find((s) => s.id === selectedSlot?.resourceId);
 
   const clientName = client
     ? `${client.first_name} ${client.last_name}`
@@ -41,92 +40,72 @@ export default function ReviewModal({
     0
   );
 
-  useEffect(() => {
-  const checkSession = async () => {
-    const { data } = await supabase.auth.getSession();
-    console.log("🔥 Current session:", data?.session);
-  };
-
-  checkSession();
-}, []);
-
   const handleConfirm = async () => {
+    if (!selectedSlot || basket.length === 0 || !selectedClient) return;
+    setLoading(true);
+
     try {
-      setLoading(true);
+      const bookingId = crypto.randomUUID();
+      let currentTime = new Date(selectedSlot.start);
 
-      const client_id = client?.id;
-      const client_name = `${client?.first_name ?? ""} ${client?.last_name ?? ""}`.trim();
-      const resource_id = stylist?.id;
-      const resource_name = stylist?.title ?? "Unknown"; // ✅ stylist title = name
-      const booking_id = uuidv4();
+      const newEvents = [];
 
-      const {
-        data: user,
-        error: userError,
-      } = await supabase.auth.getUser();
+      for (const item of basket) {
+        const endTime = new Date(
+          currentTime.getTime() + (item.displayDuration || 0) * 60000
+        );
 
-      const logged_by = user?.user?.user_metadata?.full_name || user?.user?.email || "Unknown";
-
-      const newBookings = [];
-      let currentStart = new Date(selectedSlot.start);
-
-      for (const service of basket) {
-        const durationMins = service.displayDuration || 0;
-        const currentEnd = new Date(currentStart.getTime() + durationMins * 60000);
-
-        const newBooking = {
-          booking_id,
-          client_id,
-          client_name,
-          resource_id,
-          start: currentStart.toISOString(),
-          end: currentEnd.toISOString(),
-          title: service.name,
-          price: service.displayPrice,
-          duration: service.displayDuration,
-          category: service.category || "Uncategorised",
+        const bookingData = {
+          booking_id: bookingId,
+          client_id: selectedClient,
+          client_name: clientName,
+          title: item.name,
+          category: item.category,
+          start: currentTime.toISOString(),
+          end: endTime.toISOString(),
+          resource_id: selectedSlot.resourceId,
+          price: item.displayPrice,
+          duration: item.displayDuration,
+          created_at: new Date().toISOString(),
         };
 
-        const { data: bookingData, error: bookingError } = await supabase
+        // ✅ Insert into bookings
+        const { error: bookingError } = await supabase
           .from("bookings")
-          .insert([newBooking])
-          .select()
-          .single();
+          .insert([bookingData]);
 
         if (bookingError) {
-          console.error("❌ Booking failed:", bookingError.message);
-          return;
+          console.error("Booking insert error:", bookingError);
+          throw bookingError;
         }
 
-        newBookings.push({
+        // ✅ Insert into booking_logs
+        await SaveBookingLog({
+          action: "created",
+          client_id: selectedClient,
+          client_name: clientName,
+          stylist_id: selectedSlot.resourceId,
+          stylist_name: stylist?.title,
+          service: item,
+          start: bookingData.start,
+          end: bookingData.end,
+        });
+
+        const event = {
           ...bookingData,
           start: new Date(bookingData.start),
           end: new Date(bookingData.end),
           resourceId: bookingData.resource_id,
-        });
+        };
 
-        await SaveBookingsLog({
-          action: "created",
-          booking_id,
-          client_id,
-          client_name,
-          stylist_id: resource_id,
-          stylist_name: resource_name,
-          service,
-          start: currentStart.toISOString(),
-          end: currentEnd.toISOString(),
-          logged_by,
-          before_snapshot: null,
-          after_snapshot: newBooking,
-        });
-
-        currentStart = new Date(currentEnd);
+        newEvents.push(event);
+        currentTime = endTime;
       }
 
-      console.log("✅ All bookings and logs saved");
-      onConfirm(newBookings);
-    } catch (err) {
-      console.error("🔥 Something went wrong:", err.message);
+      onConfirm(newEvents); // ✅ Pass back new bookings to update calendar
+    } catch (error) {
+      console.error("Booking failed:", error);
+      alert("Failed to create booking. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -141,7 +120,7 @@ export default function ReviewModal({
           <p className="font-semibold text-gray-700">{clientName}</p>
           <p className="text-sm text-gray-600">{timeLabel}</p>
           <p className="text-sm text-gray-600">
-            Stylist: {stylist?.title || "Unknown"} {/* ✅ FIXED display */}
+            Stylist: {stylist?.title || "Unknown"}
           </p>
         </div>
 

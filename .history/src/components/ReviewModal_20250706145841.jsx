@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import Modal from "./Modal";
 import Button from "./Button";
 import { format } from "date-fns";
@@ -20,7 +20,13 @@ export default function ReviewModal({
   const [loading, setLoading] = useState(false);
 
   const client = clients.find((c) => c.id === selectedClient);
-  const stylist = stylistList.find((s) => s.id === selectedSlot?.resourceId); // ✅ FIXED: use stylistList
+  const stylist = stylistList.find(
+    (s) => String(s.id) === String(selectedSlot?.resourceId)
+  );
+
+  if (!stylist) {
+    console.warn("⚠️ Stylist not found for resourceId:", selectedSlot?.resourceId);
+  }
 
   const clientName = client
     ? `${client.first_name} ${client.last_name}`
@@ -41,15 +47,6 @@ export default function ReviewModal({
     0
   );
 
-  useEffect(() => {
-  const checkSession = async () => {
-    const { data } = await supabase.auth.getSession();
-    console.log("🔥 Current session:", data?.session);
-  };
-
-  checkSession();
-}, []);
-
   const handleConfirm = async () => {
     try {
       setLoading(true);
@@ -57,7 +54,7 @@ export default function ReviewModal({
       const client_id = client?.id;
       const client_name = `${client?.first_name ?? ""} ${client?.last_name ?? ""}`.trim();
       const resource_id = stylist?.id;
-      const resource_name = stylist?.title ?? "Unknown"; // ✅ stylist title = name
+      const resource_name = stylist?.name ?? "Unknown";
       const booking_id = uuidv4();
 
       const {
@@ -141,7 +138,7 @@ export default function ReviewModal({
           <p className="font-semibold text-gray-700">{clientName}</p>
           <p className="text-sm text-gray-600">{timeLabel}</p>
           <p className="text-sm text-gray-600">
-            Stylist: {stylist?.title || "Unknown"} {/* ✅ FIXED display */}
+            Stylist: {stylist?.title || "Unknown"}
           </p>
         </div>
 

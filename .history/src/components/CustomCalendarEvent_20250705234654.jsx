@@ -1,4 +1,4 @@
-export default function CustomCalendarEvent({ event, title, continuesEarlier, continuesLater, isAllDay, ...props }) {
+export default function CustomCalendarEvent({ event, title, ...props }) {
   const isBlocked = event.isUnavailable || event.isSalonClosed;
 
   if (isBlocked) {
@@ -24,7 +24,7 @@ export default function CustomCalendarEvent({ event, title, continuesEarlier, co
 
   return (
     <div
-      className="rbc-event-content text-white px-[2px] py-[1px] flex flex-col justify-between h-full leading-tight relative"
+      className="rbc-event-content relative text-white px-[2px] py-[1px] flex flex-col justify-between h-full leading-tight"
       style={{
         fontSize: `${fontSize}px`,
         lineHeight: "1.1",
@@ -33,7 +33,7 @@ export default function CustomCalendarEvent({ event, title, continuesEarlier, co
         textOverflow: "ellipsis",
         position: "relative",
       }}
-      {...props} // 🔁 THIS RESTORES RESIZE + DRAG BEHAVIOR
+      {...props} // Required for drag + resize functionality
     >
       {/* Duration top-right */}
       <div className="absolute top-[2px] right-[4px] text-[10px] font-semibold">
@@ -52,6 +52,15 @@ export default function CustomCalendarEvent({ event, title, continuesEarlier, co
       <div className="text-center text-[10px]">
         {event.stylistName || "Stylist"}
       </div>
+
+      {/* Custom resize handle bottom-right */}
+      <div
+        className="absolute bottom-[2px] right-[2px] w-[12px] h-[12px] cursor-ns-resize z-10"
+        style={{
+          backgroundColor: "rgba(255, 255, 255, 0.7)",
+          borderRadius: "2px",
+        }}
+      />
     </div>
   );
 }

@@ -6,6 +6,8 @@ import {
 } from "react-big-calendar";
 import withDragAndDrop from "react-big-calendar/lib/addons/dragAndDrop";
 import { format, parse, startOfWeek, getDay } from "date-fns";
+import withDragAndDrop from 'react-big-calendar/lib/addons/dragAndDrop';
+
 import enGB from "date-fns/locale/en-GB";
 import {
   ChevronLeft,
@@ -14,7 +16,7 @@ import {
 } from "lucide-react";
 
 import CalendarModal from "../components/CalendarModal";
-import BookingPopUp from "../components/bookings/BookingPopUp";
+import BookingPopUp from "../components/BookingPopUp";
 import RightDrawer from "../components/RightDrawer";
 import CustomCalendarEvent from "../components/CustomCalendarEvent";
 import SelectClientModal from "../components/SelectClientModal";
