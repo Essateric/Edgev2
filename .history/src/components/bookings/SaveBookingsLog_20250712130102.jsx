@@ -34,15 +34,15 @@ export default async function SaveBookingsLog({
       stylist_name,
     };
 
-    // Only use a real UUID for logged_by. Never "Unknown" string!
-    let staffLogger = logged_by && logged_by !== "Unknown" ? logged_by : null;
+    // Use logged_by if passed, else try Supabase Auth
+    let staffLogger = logged_by || null;
 
-    // If not provided, try from Supabase Auth
     if (!staffLogger) {
-      const { data: { user } = {} } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
       if (user && user.id) {
-        // Try to get the staff.id (UUID) using the auth_id mapping
         const { data: staffMatch } = await supabase
           .from("staff")
           .select("id")
@@ -52,15 +52,13 @@ export default async function SaveBookingsLog({
         if (staffMatch && staffMatch.id) {
           staffLogger = staffMatch.id;
         } else {
-          // Fallback to Supabase auth user.id (still a UUID)
           staffLogger = user.id;
         }
       }
     }
 
-    // If still no UUID, set as null (never "Unknown")
     if (!staffLogger) {
-      staffLogger = null;
+      staffLogger = "Unknown";
     }
 
     const logPayload = {
@@ -68,7 +66,7 @@ export default async function SaveBookingsLog({
       booking_id,
       snapshot,
       reason,
-      logged_by: staffLogger, // UUID or null (never "Unknown" string!)
+      logged_by: staffLogger,
       created_at: new Date().toISOString(),
     };
 

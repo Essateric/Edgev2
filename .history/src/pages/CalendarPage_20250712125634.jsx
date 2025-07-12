@@ -27,7 +27,7 @@ import UseTimeSlotLabel from "../utils/UseTimeSlotLabel";
 import AddGridTimeLabels from "../utils/AddGridTimeLabels";
 
 import { supabase } from "../supabaseClient";
-import { useAuth } from "../contexts/AuthContext"; // <-- Add this import!
+const { currentUser, login, logout, authLoading } = useAuth();
 
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "react-big-calendar/lib/addons/dragAndDrop/styles.css";
@@ -138,42 +138,43 @@ export default function CalendarPage() {
   const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
 
-  const moveEvent = useCallback(
-    async ({ event, start, end, resourceId }) => {
-      const newDuration = (new Date(end).getTime() - new Date(start).getTime()) / 60000;
+const moveEvent = useCallback(
+  async ({ event, start, end, resourceId }) => {
+    const newDuration = (new Date(end).getTime() - new Date(start).getTime()) / 60000;
 
-      const updated = {
-        ...event,
-        start,
-        end,
-        resourceId,
-        duration: newDuration,
-        stylistName:
-          stylistList.find((s) => s.id === resourceId)?.title || "Unknown",
-      };
+    const updated = {
+      ...event,
+      start,
+      end,
+      resourceId,
+      duration: newDuration,
+      stylistName:
+        stylistList.find((s) => s.id === resourceId)?.title || "Unknown",
+    };
 
-      // 🟢 Update local state immediately
-      setEvents((prev) =>
-        prev.map((e) => (e.id === event.id ? updated : e))
-      );
+    // 🟢 Update local state immediately
+    setEvents((prev) =>
+      prev.map((e) => (e.id === event.id ? updated : e))
+    );
 
-      // 🟡 Then update Supabase (asynchronously)
-      try {
-        await supabase
-          .from("bookings")
-          .update({
-            start,
-            end,
-            resource_id: resourceId,
-            duration: newDuration,
-          })
-          .eq("id", event.id);
-      } catch (error) {
-        console.error("❌ Failed to move booking:", error);
-      }
-    },
-    [stylistList]
-  );
+    // 🟡 Then update Supabase (asynchronously)
+    try {
+      await supabase
+        .from("bookings")
+        .update({
+          start,
+          end,
+          resource_id: resourceId,
+          duration: newDuration,
+        })
+        .eq("id", event.id);
+    } catch (error) {
+      console.error("❌ Failed to move booking:", error);
+    }
+  },
+  [stylistList]
+);
+
 
   const handleCancelBookingFlow = () => {
     setIsModalOpen(false);
@@ -386,7 +387,6 @@ export default function CalendarPage() {
         selectedClient={selectedClient}
         selectedSlot={selectedSlot}
         basket={basket}
-        // Pass currentUser here if needed by child component!
       />
 
       <CalendarModal
