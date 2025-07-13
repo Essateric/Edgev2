@@ -197,7 +197,7 @@ export default function ManageStaff() {
     try {
       // Call your Edge Function instead of Supabase admin API directly!
       const res = await fetch(
-        "https://vmtcofezozrblfxudauk.supabase.co/functions/v1/delete-staff", // <-- change to your Edge Function URL
+        "https://<your-project-ref>.functions.supabase.co/delete-staff", // <-- change to your Edge Function URL
         {
           method: "POST",
           headers: {

@@ -182,40 +182,34 @@ export default function ManageStaff() {
     setShowHoursModal(false);
   };
 
-  // Delete staff by id (uses Edge Function)
+  // Delete staff by id
   const handleDelete = async (id) => {
-    if (!currentUser?.token) {
-      alert("❌ You must be logged in to delete staff.");
-      return;
-    }
-
     const confirm = window.confirm(
-      "Are you sure you want to delete this staff member? This cannot be undone."
+      "Are you sure you want to delete this staff member?"
     );
     if (!confirm) return;
 
     try {
-      // Call your Edge Function instead of Supabase admin API directly!
-      const res = await fetch(
-        "https://vmtcofezozrblfxudauk.supabase.co/functions/v1/delete-staff", // <-- change to your Edge Function URL
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: "Bearer " + currentUser.token,
-          },
-          body: JSON.stringify({ id }),
-        }
-      );
-      const result = await res.json();
-
-      if (result.success) {
-        alert("✅ Staff deleted successfully.");
-        await fetchData();
-      } else {
-        alert("❌ Error deleting staff: " + (result.error || "Unknown error"));
-        if (result.logs) console.error(result.logs);
+      // Delete from Supabase Auth users
+      const { error: authError } = await defaultSupabase.auth.admin.deleteUser(id);
+      if (authError) {
+        alert("❌ Error deleting user from auth: " + authError.message);
+        return;
       }
+
+      // Delete from staff table
+      const { error: dbError } = await defaultSupabase
+        .from("staff")
+        .delete()
+        .eq("id", id);
+
+      if (dbError) {
+        alert("❌ Error deleting staff from database: " + dbError.message);
+        return;
+      }
+
+      alert("✅ Staff deleted successfully.");
+      await fetchData();
     } catch (err) {
       console.error("❌ Error deleting staff:", err);
       alert("❌ Error deleting staff.");
