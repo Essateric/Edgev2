@@ -1,10 +1,10 @@
-// Updated BookingPopUp.jsx
 import { useEffect, useState } from "react";
 import Modal from "../Modal";
 import Button from "../Button";
 import { format } from "date-fns";
-import { supabase } from "../../supabaseClient";
 import ClientNotesModal from "../clients/ClientNotesModal";
+import { formatDayMonth } from "../../utils/formatDate";
+import { useAuth } from "../../contexts/AuthContext"; // or adjust the path
 
 export default function BookingPopUp({
   isOpen,
@@ -18,11 +18,25 @@ export default function BookingPopUp({
   const [showActions, setShowActions] = useState(false);
   const [relatedBookings, setRelatedBookings] = useState([]);
   const [showNotesModal, setShowNotesModal] = useState(false);
+  const [dobInput, setDobInput] = useState("");
+  const [isEditingDob, setIsEditingDob] = useState(false);
+  const { supabaseClient } = useAuth();
 
+  const client = clients.find((c) => c.id === booking?.client_id);
+
+    useEffect(() => {
+    const checkUser = async () => {
+      const { data: user, error } = await supabaseClient.auth.getUser();
+      console.log("🧠 Supabase user:", user);
+      if (error) console.error("❌ Supabase auth error:", error);
+    };
+
+    checkUser();
+  }, [supabaseClient]);
   useEffect(() => {
     const fetchRelatedBookings = async () => {
       if (!booking?.booking_id) return;
-      const { data, error } = await supabase
+      const { data, error } = await supabaseClient
         .from("bookings")
         .select("*")
         .eq("booking_id", booking.booking_id);
@@ -37,21 +51,21 @@ export default function BookingPopUp({
     fetchRelatedBookings();
   }, [booking?.booking_id]);
 
-  if (!booking) return null;
+  useEffect(() => {
+    if (client?.dob) {
+      setDobInput(client.dob.split("T")[0]); // format yyyy-MM-dd
+    }
+  }, [client?.dob]);
+
+  if (!booking || !client) return null;
 
   const stylistName =
-    stylistList.find((s) => s.id === booking?.resource_id)?.title ||
-    "Unknown";
+    stylistList.find((s) => s.id === booking?.resource_id)?.title || "Unknown";
 
-  const client = clients.find((c) => c.id === booking?.client_id);
-  const clientName = client
-    ? `${client.first_name} ${client.last_name}`
-    : "Unknown";
-  const clientPhone = client?.mobile || "N/A";
-  const clientEmail = client?.email || "N/A";
-  const clientDOB = client?.dob
-    ? format(new Date(client.dob), "dd MMM")
-    : "N/A";
+  const clientName = `${client.first_name} ${client.last_name}`;
+  const clientPhone = client.mobile || "N/A";
+  // const clientEmail = client.email || "N/A";
+  // const formattedDOB = formatDayMonth(client?.dob);
 
   const handleCancelBooking = async () => {
     const confirmDelete = window.confirm(
@@ -60,7 +74,7 @@ export default function BookingPopUp({
     if (!confirmDelete) return;
 
     try {
-      const { error } = await supabase
+      const { error } = await supabaseClient
         .from("bookings")
         .delete()
         .eq("id", booking.id);
@@ -78,18 +92,85 @@ export default function BookingPopUp({
     }
   };
 
+const handleSaveDOB = async () => {
+  alert("Save button clicked");
+  console.log("Attempting to save DOB", { dobInput, clientId: client.id });
+
+  const { data, error } = await supabaseClient
+    .from("clients")
+    .update({ dob: dobInput })
+    .eq("id", client.id)
+    .select();
+
+    if (!dobInput) {
+  alert("Please pick a date before saving!");
+  return;
+}
+
+console.log("Attempting to save DOB", { dobInput, clientId });
+handleSaveDOB({ clientId, dobInput });
+
+
+    useEffect(() => {
+  console.log("DOB Input changed:", dobInput);
+}, [dobInput]);
+
+
+  console.log("Supabase update response:", { data, error });
+
+  if (error) {
+    alert("Supabase error: " + error.message);
+  } else {
+    alert("DOB updated! Check Supabase to confirm.");
+    setIsEditingDob(false);
+  }
+};
+
+
+
   return (
-    <Modal isOpen={isOpen} onClose={onClose}>
+    <Modal isOpen={isOpen} onClose={onClose} hideCloseIcon>
       <div className="bg-white rounded-md shadow p-4 max-w-md w-full">
-        <div className="flex justify-between items-center mb-2">
+        <div className="flex justify-between items-start mb-2">
           <div>
             <h2 className="text-lg font-bold text-rose-600">{clientName}</h2>
             <p className="text-sm text-gray-700">📞 {clientPhone}</p>
-            <p className="text-sm text-gray-700">📧 {clientEmail}</p>
-            <p className="text-sm text-gray-700">🎂 {clientDOB}</p>
+            {/* <p className="text-sm text-gray-700">📧 {clientEmail}</p> */}
+<div className="text-sm text-gray-700 flex items-center gap-2">
+  🎂{" "}
+  {isEditingDob ? (
+    <>
+<input
+  type="date"
+  value={dobInput}
+  onChange={e => {
+    setDobInput(e.target.value);
+    console.log("Picked date:", e.target.value);
+  }}
+  className="border p-1 text-sm"
+/>
+      <Button onClick={handleSaveDOB} className="text-xs" disabled={!dobInput}>
+  Save
+</Button>
+
+      <Button onClick={() => setIsEditingDob(false)} className="text-xs">Cancel</Button>
+    </>
+  ) : (
+    <>
+      <span>{dobInput || "DOB not set"}</span>
+      <button
+        onClick={() => setIsEditingDob(true)}
+        className="text-xs text-blue-600 underline"
+      >
+        Edit
+      </button>
+    </>
+  )}
+</div>
+
           </div>
           <Button onClick={() => setShowNotesModal(true)} className="text-sm">
-            View/Add Notes
+            View Details
           </Button>
         </div>
 
@@ -116,7 +197,8 @@ export default function BookingPopUp({
                       <div className="flex justify-between">
                         <span className="w-1/4">{formattedTime}</span>
                         <span className="w-2/4 font-medium">
-                          {service.category || "Uncategorised"}: {service.title}
+                          {service.category || "Uncategorised"}:{" "}
+                          {service.title || ""}
                         </span>
                         <span className="w-1/4 text-right">
                           {
@@ -137,23 +219,28 @@ export default function BookingPopUp({
           )}
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-2 items-center">
-          <span className="text-sm text-green-700 font-semibold">
-            Confirmed
-          </span>
-          <button className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded">
-            Arrived
-          </button>
-          <button className="bg-gray-500 text-white px-3 py-1 rounded">
-            Checkout
-          </button>
-          <button
-            onClick={() => setShowActions(true)}
-            className="bg-gray-200 text-gray-800 px-3 py-1 rounded"
-          >
-            &#x2022;&#x2022;&#x2022;
-          </button>
-        </div>
+<div className="mt-4 flex flex-wrap gap-2 items-center">
+  <span className="text-sm text-green-700 font-semibold">Confirmed</span>
+  <button className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded">
+    Arrived
+  </button>
+  <button className="bg-gray-500 text-white px-3 py-1 rounded">
+    Checkout
+  </button>
+  <button
+    onClick={() => setShowActions(true)}
+    className="bg-gray-200 text-gray-800 px-3 py-1 rounded"
+  >
+    &#x2022;&#x2022;&#x2022;
+  </button>
+  <button
+    onClick={onClose}
+    className="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1 rounded"
+  >
+    Close
+  </button>
+</div>
+
 
         {showActions && (
           <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
@@ -191,7 +278,7 @@ export default function BookingPopUp({
 
         {showNotesModal && (
           <ClientNotesModal
-            clientId={client?.id}
+            clientId={client.id}
             isOpen={showNotesModal}
             onClose={() => setShowNotesModal(false)}
           />

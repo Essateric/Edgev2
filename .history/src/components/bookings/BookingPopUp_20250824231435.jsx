@@ -249,13 +249,12 @@ export default function BookingPopUp({
             })}
 
             {/* TOTAL ROW (always visible, no inner overflow) */}
-{/* TOTAL ROW */}
-<div className="flex justify-between items-center pt-2 border-t mt-2 text-sm text-gray-800">
-  <span className="w-3/4 text-right font-semibold">Total</span>
-  <span className="w-1/4 text-right font-semibold text-gray-900">
-    {formatGBP(serviceTotal)}
-  </span>
-</div>
+            <div className="flex justify-between items-center pt-2 border-t mt-2 text-sm">
+              <span className="w-3/4 text-right font-semibold">Total</span>
+              <span className="w-1/4 text-right font-semibold">
+                {formatGBP(serviceTotal)}
+              </span>
+            </div>
           </div>
         )}
       </div>
