@@ -27,7 +27,6 @@ const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
   );
-const withLineBreaks = (s = "") => esc(s).replace(/\r?\n/g, "<br>");
 const extractEmail = (s = "") => (s.match(/<([^>]+)>/)?.[1] || s).trim();
 
 function makeTransporter() {
@@ -65,8 +64,7 @@ export async function handler(event) {
       return json(400, { ok: false, error: "Missing request body" });
     }
 
-    // Payload:
-    // { customerEmail, businessEmail, business:{name,address,timezone}, booking:{start,end}, service:{name}, provider:{name}, notes?:string }
+    // Payload: { customerEmail, businessEmail, business:{name,address,timezone}, booking:{start,end}, service:{name}, provider:{name} }
     let data;
     try {
       data = JSON.parse(event.body);
@@ -75,13 +73,12 @@ export async function handler(event) {
     }
 
     const {
-      customerEmail,          // optional
-      businessEmail,          // may be missing; we will fallback
-      business = {},          // { name, address, timezone }
-      booking = {},           // { start, end }
-      service = {},           // { name }
-      provider = {},          // { name }
-      notes = "",             // ✅ NEW: free-text notes from customer
+      customerEmail,            // optional
+      businessEmail,            // may be missing; we will fallback
+      business = {},            // { name, address, timezone }
+      booking = {},             // { start, end }
+      service = {},             // { name }
+      provider = {},            // { name }
     } = data;
 
     // Resolve business email: payload → env BUSINESS_EMAIL → address inside FROM_EMAIL
@@ -116,8 +113,6 @@ export async function handler(event) {
     const bizAddr = esc(business.address || "—");
     const serviceName = esc(service.name || "a service");
     const providerName = esc(provider.name || "our team");
-    const notesClean = (notes || "").trim();
-    const notesHTML = notesClean ? withLineBreaks(notesClean) : "";
 
     const transporter = makeTransporter();
     await transporter.verify();
@@ -131,17 +126,15 @@ export async function handler(event) {
         <p style="margin:0 0 8px 0">Thanks for your booking request for <b>${serviceName}</b> with <b>${providerName}</b>.</p>
         <p style="margin:0 0 4px 0"><b>When:</b> ${esc(when)} (${esc(tz)})</p>
         <p style="margin:0 0 12px 0"><b>Where:</b> ${bizAddr}</p>
-        ${notesClean ? `<p style="margin:0 0 12px 0"><b>Your notes:</b><br>${notesHTML}</p>` : ``}
-        <p style="margin:0;color:#666">Our staff will contact you to confirm this booking.</p>
+             <p style="margin:0;color:#666">Our staff will contact you to confirm this booking.</p>
         <p style="margin:0;color:#666">If you need to change anything, just reply to this email.</p>
       </div>`;
     const customerText =
-      `Booking Request sent – ${business.name || "The Edge HD Salon"}\n` +
+      `Booking Request sent  – ${business.name || "The Edge HD Salon"}\n` +
       `Service: ${service.name || "a service"}\n` +
       `Provider: ${provider.name || "our team"}\n` +
       `When: ${when} (${tz})\n` +
-      `Where: ${business.address || "—"}\n` +
-      (notesClean ? `Notes: ${notesClean}\n` : ``);
+      `Where: ${business.address || "—"}\n`;
 
     // Salon email
     const businessSubject = `New booking request – ${service.name || "Service"}`;
@@ -152,15 +145,13 @@ export async function handler(event) {
         <p style="margin:0 0 4px 0"><b>Provider:</b> ${providerName}</p>
         <p style="margin:0 0 4px 0"><b>When:</b> ${esc(when)} (${esc(tz)})</p>
         <p style="margin:0 0 4px 0"><b>Customer email:</b> ${esc(customerEmail || "—")}</p>
-        ${notesClean ? `<p style="margin:8px 0 0 0"><b>Customer notes:</b><br>${notesHTML}</p>` : ``}
       </div>`;
     const businessText =
       `New booking request\n` +
       `Service: ${service.name || "—"}\n` +
       `Provider: ${provider.name || "—"}\n` +
       `When: ${when} (${tz})\n` +
-      `Customer email: ${customerEmail || "—"}\n` +
-      (notesClean ? `Customer notes: ${notesClean}\n` : ``);
+      `Customer email: ${customerEmail || "—"}\n`;
 
     // Send emails
     const tasks = [];

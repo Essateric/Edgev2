@@ -95,7 +95,7 @@ export async function handler(event) {
         transporter.sendMail({
           from: FROM_EMAIL,
           to: payload.customerEmail,
-          subject: "Your booking request has been sent",
+          subject: "Your booking is confirmed",
           html: customerHtml,
           replyTo: REPLY_TO,
         })
