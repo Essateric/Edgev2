@@ -8,6 +8,37 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+  (function () {
+    function patchFetch(root) {
+      if (!root || !root.fetch) return;
+      const _fetch = root.fetch.bind(root);
+      root.fetch = function (input, init) {
+        const url = typeof input === 'string' ? input : input && input.url;
+        if (url && url.includes('/rest/v1/staff') && url.includes('auth_id=')) {
+          console.warn('[TRACE] staff.auth_id query:', url);
+          console.warn(new Error('who-called-auth_id').stack);
+        }
+        return _fetch(input, init);
+      };
+    }
+    patchFetch(window);
+    try { patchFetch(globalThis); } catch(_) {}
+    try { patchFetch(self); } catch(_) {}
+
+    // also trace XHR just in case something bypasses fetch
+    if (window.XMLHttpRequest) {
+      const open = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+        if (typeof url === 'string' && url.includes('/rest/v1/staff') && url.includes('auth_id=')) {
+          console.warn('[TRACE][XHR] staff.auth_id query:', url);
+          console.warn(new Error('who-called-auth_id-xhr').stack);
+        }
+        return open.call(this, method, url, ...rest);
+      };
+    }
+  })();
+</script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

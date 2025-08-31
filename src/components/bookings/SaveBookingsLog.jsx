@@ -1,5 +1,7 @@
 import { supabase } from "../../supabaseClient.js";
 
+// ...imports unchanged...
+
 export default async function SaveBookingsLog({
   action,
   booking_id,
@@ -10,16 +12,12 @@ export default async function SaveBookingsLog({
   service,
   start,
   end,
-  logged_by, // pass staff UUID if available (prefer currentUser.staff_id), else currentUser.id
-  reason = "Created from calendar",
+  logged_by,          // pass staff UUID if available
+  reason,
+  skipStaffLookup = false, // <-- NEW: let callers disable staff table lookups
 }) {
   try {
-    const {
-      name: service_name,
-      category,
-      price,
-      duration,
-    } = service || {};
+    const { name: service_name, category, price, duration } = service || {};
 
     const snapshot = {
       service_name,
@@ -34,20 +32,46 @@ export default async function SaveBookingsLog({
       stylist_name,
     };
 
-    // Prefer caller-provided UUID; never "Unknown"
+    // Only use a real UUID for logged_by. Never "Unknown" string.
     let staffLogger = logged_by && logged_by !== "Unknown" ? logged_by : null;
 
-    // Fallback to Supabase Auth user id (no staff table lookup)
-    if (!staffLogger) {
-      const { data: { user } = {} } = await supabase.auth.getUser();
-      if (user?.id) {
-        staffLogger = user.id;
-      }
-    }
+       // Public site logs shouldn't try to resolve staff; keep null
+   if (!staffLogger && String(reason || "").toLowerCase().includes("online booking")) {
+     staffLogger = null;
+   }
 
-    // If still none, set null
-    if (!staffLogger) {
-      staffLogger = null;
+    // ⛔ Skip staff lookups when requested (public site)
+    if (!skipStaffLookup && !staffLogger) {
+      const { data: { user } = {} } = await supabase.auth.getUser();
+
+      if (user?.id) {
+        // 1) Prefer staff.uid === auth user.id
+        const byUid = await supabase
+          .from("staff")
+          .select("id")
+          .eq('"UID"', user.id)
+          .maybeSingle();
+
+        if (!byUid.error && byUid.data?.id) {
+          staffLogger = byUid.data.id;
+        } else if (user.email) {
+          // 2) Fallback by email
+          const byEmail = await supabase
+            .from("staff")
+            .select("id")
+            .eq("email", user.email)
+            .maybeSingle();
+
+          if (!byEmail.error && byEmail.data?.id) {
+            staffLogger = byEmail.data.id;
+          } else {
+            // 3) Last resort: auth UID itself
+            staffLogger = user.id;
+          }
+        } else {
+          staffLogger = user.id;
+        }
+      }
     }
 
     const logPayload = {
@@ -55,7 +79,7 @@ export default async function SaveBookingsLog({
       booking_id,
       snapshot,
       reason,
-      logged_by: staffLogger, // UUID or null
+      logged_by: staffLogger ?? null, // UUID or null
       created_at: new Date().toISOString(),
     };
 
@@ -69,7 +93,6 @@ export default async function SaveBookingsLog({
   } catch (err) {
     console.error("❌ SaveBookingsLog failed:", err?.message || err);
     console.log("🔍 booking_id was:", booking_id);
-    // keep existing behavior: bubble up so caller can decide
     throw err;
   }
 }

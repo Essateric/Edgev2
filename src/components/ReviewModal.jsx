@@ -10,22 +10,23 @@ import { v4 as uuidv4 } from "uuid";
 const CHEMICAL_GAP_MIN = 30;
 // Extend this list any time
 const isChemical = (service) => {
-  const text = [
-    service?.name,
-    service?.title,
-    service?.category,
-  ]
+  const text = [service?.name, service?.title, service?.category]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
 
   const keywords = [
     "tint",
-    "colour", "color",
+    "colour",
+    "color",
     "bleach",
-    "toner", "gloss",
-    "highlights", "balayage", "foils",
-    "perm", "relaxer",
+    "toner",
+    "gloss",
+    "highlights",
+    "balayage",
+    "foils",
+    "perm",
+    "relaxer",
     "keratin",
     "chemical",
     "straightening",
@@ -87,27 +88,55 @@ export default function ReviewModal({
       const resource_name = stylist?.title ?? "Unknown";
       const booking_id = uuidv4();
 
-      // Correctly get the current user/staff UUID
+      // --------- IMPORTANT: avoid staff lookup on public booking routes ----------
+      // If the page path looks like a public booking page, don't try to map a staff.id.
+      // This prevents /rest/v1/staff?uid=... calls (which cause your 400s).
+      const pathname = (typeof window !== "undefined" && window.location?.pathname) || "";
+      const isPublicBooking =
+        /\/(book|booking|online)/i.test(pathname) ||
+        pathname === "/" /* if your public form is at root */;
+
       let logged_by = null;
-      const { data: userData } = await supabase.auth.getUser();
-      const user = userData?.user;
 
-      if (user?.id) {
-        // Try to map to staff table, fallback to user.id
-        const { data: staffMatch } = await supabase
-          .from("staff")
-          .select("id")
-          .eq("auth_id", user.id)
-          .single();
+      if (!isPublicBooking) {
+        // Staff/admin context: resolve staff.id (preferred), fallback to auth user.id only in staff context
+        const { data: userData } = await supabase.auth.getUser();
+        const user = userData?.user;
 
-        if (staffMatch && staffMatch.id) {
-          logged_by = staffMatch.id;
+        if (user?.id) {
+          // 1) Prefer staff.uid === auth user.id
+          const { data: byUid, error: byUidErr } = await supabase
+            .from("staff")
+            .select("id")
+            .eq('"UID"', user.id) 
+            .maybeSingle();
+
+          if (!byUidErr && byUid?.id) {
+            logged_by = byUid.id;
+          } else if (user.email) {
+            // 2) Fallback by email
+            const { data: byEmail, error: byEmailErr } = await supabase
+              .from("staff")
+              .select("id")
+              .eq("email", user.email)
+              .maybeSingle();
+            if (!byEmailErr && byEmail?.id) {
+              logged_by = byEmail.id;
+            } else {
+              // 3) Last resort: ONLY in staff context, use auth UID
+              logged_by = user.id;
+            }
+          } else {
+            logged_by = user.id;
+          }
         } else {
-          logged_by = user.id; // fallback to auth UUID
+          logged_by = null;
         }
       } else {
-        logged_by = null; // fallback to null
+        // Public flow: never query staff table; keep null
+        logged_by = null;
       }
+      // ---------------------------------------------------------------------------
 
       const newBookings = [];
       let currentStart = new Date(selectedSlot.start);
@@ -198,10 +227,7 @@ export default function ReviewModal({
         <div className="border rounded p-2 mb-3">
           <h4 className="font-semibold text-bronze mb-1">Services</h4>
           {basket.map((b, i) => (
-            <div
-              key={i}
-              className="flex justify-between text-sm text-gray-700"
-            >
+            <div key={i} className="flex justify-between text-sm text-gray-700">
               <span>{b.name}</span>
               <span>£{b.displayPrice}</span>
               <span>

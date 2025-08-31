@@ -4,6 +4,7 @@ import { supabase } from "../../supabaseClient";
 import Modal from "../Modal";
 import Button from "../Button";
 import ClientHistoryFullScreen from "../../pages/ClientHistory";
+import { useAuth } from "../../contexts/AuthContext";
 
 /**
  * Props:
@@ -25,7 +26,7 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
   const [noteContent, setNoteContent] = useState("");
 
   // History (bookings)
-  const [history, setHistory] = useState([]);
+  theconst [history, setHistory] = useState([]);
   const [providerMap, setProviderMap] = useState({}); // { staffId: "Name" }
   const [bookingMeta, setBookingMeta] = useState({});  // { bookingId: { when, title } }
 
@@ -34,13 +35,17 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
   // Current stylist display name (author of notes)
   const [staffName, setStaffName] = useState("Stylist");
 
+  // 🔹 use the current signed-in user from AuthContext (no DB lookup)
+  const { currentUser } = useAuth();
+
   // -------- helpers --------
   const isValidEmail = (s) =>
     !s || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s).trim());
 
   /**
-   * Resolve current staff identity:
-   * returns { staffId, authId, name, email, permission }
+   * Resolve current staff identity WITHOUT querying staff by auth_id.
+   * Returns { staffId, authId, name, email, permission }.
+   * Kept async to preserve existing call sites.
    */
   const getCurrentStaffIdentity = async () => {
     try {
@@ -49,15 +54,15 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
         return { staffId: null, authId: null, name: staffName || "Stylist", email: null, permission: null };
       }
 
-      // 1) Try by auth_id → typical schema
-      const byAuth = await supabase
+      // 1) Try by uid === auth user.id
+      const byUid = await supabase
         .from("staff")
         .select("id, name, email, permission")
-        .eq("auth_id", user.id)
+        .eq("uid", user.id)
         .maybeSingle();
 
-      if (byAuth.data) {
-        const r = byAuth.data;
+      if (byUid?.data) {
+        const r = byUid.data;
         return {
           staffId: r.id || null,
           authId: user.id,
@@ -67,7 +72,7 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
         };
       }
 
-      // 2) Fallback by email (if your staff table is keyed that way)
+      // 2) Fallback by email
       if (user.email) {
         const byEmail = await supabase
           .from("staff")
@@ -75,7 +80,7 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
           .eq("email", user.email)
           .maybeSingle();
 
-        if (byEmail.data) {
+        if (byEmail?.data) {
           const r = byEmail.data;
           return {
             staffId: r.id || null,
@@ -87,7 +92,7 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
         }
       }
 
-      // 3) Last resorts from auth profile
+      // 3) Last resort: auth profile only
       return {
         staffId: null,
         authId: user.id,
@@ -222,14 +227,14 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
     })();
 
     return () => { active = false; };
-  }, [isOpen, clientId, supabase]);
+  }, [isOpen, clientId]);
 
   // -------- actions --------
   const handleAddNote = async () => {
     const text = noteContent.trim();
     if (!text) return;
 
-    // Resolve author with both staffId + name
+    // Resolve author with both staffId + name (no DB lookup)
     const who = await getCurrentStaffIdentity();
     const authorName = who.name || "Stylist";
     const staffId = who.staffId || null;   // staff.id if available

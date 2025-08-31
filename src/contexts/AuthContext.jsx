@@ -1,6 +1,7 @@
+// src/contexts/AuthContext.jsx
 import React, { createContext, useContext, useState, useEffect } from "react";
 import bcrypt from "bcryptjs";
-import { supabase } from "../supabaseClient"; // ✅ shared instance
+import { supabase } from "../supabaseClient";
 import { getStaffPins, cacheStaffPins } from "../utils/PinCache.jsx";
 
 const AuthContext = createContext();
@@ -20,13 +21,10 @@ export const AuthProvider = ({ children }) => {
         const offlineUserRaw = localStorage.getItem("offlineUser");
         const storedUserRaw = localStorage.getItem("currentUser");
 
-        // Prefer offline user if present
         if (offlineUserRaw) {
           const parsed = JSON.parse(offlineUserRaw);
-          // parsed.id is staff.id (from staff table)
           setCurrentUser({ ...parsed, staff_id: parsed.staff_id ?? parsed.id ?? null });
         } else {
-          // Ask Supabase for an existing session
           const { data } = await supabase.auth.getSession();
           const session = data.session;
 
@@ -45,10 +43,7 @@ export const AuthProvider = ({ children }) => {
             };
 
             setCurrentUser(userData);
-            // keep local storage aligned if we already had it
-            if (storedUserRaw) {
-              localStorage.setItem("currentUser", JSON.stringify(userData));
-            }
+            if (storedUserRaw) localStorage.setItem("currentUser", JSON.stringify(userData));
           } else {
             setCurrentUser(null);
           }
@@ -64,10 +59,10 @@ export const AuthProvider = ({ children }) => {
 
     restoreSession();
 
-    // Keep UI in sync with auth changes
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    // 🔧 Avoid duplicate resolve on INITIAL_SESSION
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "INITIAL_SESSION") return; // <-- important
       if (!session) {
-        // logged out
         setCurrentUser(null);
         return;
       }
@@ -98,58 +93,49 @@ export const AuthProvider = ({ children }) => {
   const loginWithPin = async (pin) => {
     setAuthLoading(true);
     try {
-      // ----- Offline login
+      // Offline
       if (!navigator.onLine) {
         const staffPins = await getStaffPins();
         const user = staffPins.find(
-          (staff) => staff.pin_hash && bcrypt.compareSync(pin, staff.pin_hash)
+          (s) => s.pin_hash && bcrypt.compareSync(pin, s.pin_hash)
         );
-        if (user) {
-          // user.id here is staff.id
-          const offlineUser = { ...user, offline: true, staff_id: user.id ?? null };
-          setCurrentUser(offlineUser);
-          localStorage.setItem("offlineUser", JSON.stringify(offlineUser));
-          return;
-        } else {
-          throw new Error("Invalid PIN (offline)");
-        }
+        if (!user) throw new Error("Invalid PIN (offline)");
+        const offlineUser = { ...user, offline: true, staff_id: user.id ?? null };
+        setCurrentUser(offlineUser);
+        localStorage.setItem("offlineUser", JSON.stringify(offlineUser));
+        return;
       }
 
-      // ----- Online login via Edge Function
+      // Online via Edge Function
       const res = await fetch(EDGE_FUNCTION_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pin }),
       });
-
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "PIN login failed");
 
-      // Expect: { email, name, permission, token_hash?, email_otp? }
       const { email, token_hash, email_otp, name, permission } = result;
 
-      // ----- Verify with Supabase — magiclink first, OTP fallback
       let data, error;
       if (token_hash) {
         ({ data, error } = await supabase.auth.verifyOtp({
           type: "magiclink",
-          token_hash, // ⚠️ do NOT pass email here
+          token_hash,
         }));
       } else if (email_otp) {
         ({ data, error } = await supabase.auth.verifyOtp({
           type: "email",
-          email,              // OTP flow needs email
-          token: email_otp,   // and token
+          email,
+          token: email_otp,
         }));
       } else {
         throw new Error("Server returned neither token_hash nor email_otp");
       }
       if (error) throw error;
 
-      // Resolve staff_id (auth_id → email)
       const staffId = await findStaffIdForUser(data.user);
 
-      // ----- Store user/session
       const userData = {
         id: data.user.id,
         email: data.user.email,
@@ -163,11 +149,7 @@ export const AuthProvider = ({ children }) => {
       setCurrentUser(userData);
       localStorage.setItem("currentUser", JSON.stringify(userData));
       localStorage.removeItem("offlineUser");
-
       await cacheStaffPinsFromSupabase();
-    } catch (err) {
-      console.error("❌ Login with PIN failed:", err.message);
-      throw err;
     } finally {
       setAuthLoading(false);
     }
@@ -176,13 +158,9 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     setAuthLoading(true);
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw new Error(error.message);
 
-      // Resolve staff_id (auth_id → email)
       const staffId = await findStaffIdForUser(data.user);
 
       const user = {
@@ -198,7 +176,6 @@ export const AuthProvider = ({ children }) => {
       setCurrentUser(user);
       localStorage.setItem("currentUser", JSON.stringify(user));
       localStorage.removeItem("offlineUser");
-      // signInWithPassword already sets the session
     } finally {
       setAuthLoading(false);
     }
@@ -232,36 +209,41 @@ export const AuthProvider = ({ children }) => {
 
 /* ----------------------- helpers ----------------------- */
 /**
- * Try to find staff.id for a given authenticated user.
- * 1) Try staff.auth_id == authUser.id (if column exists)
- * 2) Fallback to staff.email == authUser.email
- * Returns staff.id or null. Swallows schema errors safely.
+ * Find staff.id for an authenticated user WITHOUT causing 400s.
+ * 1) Try staff.email == authUser.email (safe)
+ * 2) Optionally try staff.uid == authUser.id *only* if VITE_STAFF_UID_COLUMN is truthy
  */
 async function findStaffIdForUser(authUser) {
   try {
     if (!authUser) return null;
-    // 1) by auth_id (if present)
-    try {
-      const { data, error } = await supabase
-        .from("staff")
-        .select("id")
-        .eq("auth_id", authUser.id)
-        .maybeSingle();
-      if (!error && data?.id) return data.id;
-    } catch {
-      // ignore (column may not exist)
-    }
-    // 2) by email
+
+    // 1) by email (safe; column exists)
     if (authUser.email) {
-      const { data, error } = await supabase
+      const byEmail = await supabase
         .from("staff")
         .select("id")
         .eq("email", authUser.email)
         .maybeSingle();
-      if (!error && data?.id) return data.id;
+      if (!byEmail.error && byEmail.data?.id) return byEmail.data.id;
+    }
+
+    // 2) by uid (guarded by env flag to avoid 400s when column doesn't exist)
+    const tryUid = String(import.meta.env.VITE_STAFF_UID_COLUMN || "").toLowerCase();
+    const uidEnabled = tryUid === "1" || tryUid === "true" || tryUid === "yes";
+    if (uidEnabled) {
+      try {
+        const byUid = await supabase
+          .from("staff")
+          .select("id")
+          .eq("uid", authUser.id)
+          .maybeSingle();
+        if (!byUid.error && byUid.data?.id) return byUid.data.id;
+      } catch {
+        // swallow quietly
+      }
     }
   } catch {
-    // swallow and return null
+    // swallow quietly
   }
   return null;
 }

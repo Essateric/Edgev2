@@ -38,38 +38,26 @@ useEffect(() => {
   let cancelled = false;
 
   async function loadOverrides() {
-    // First try: stylistId is already staff.id
-    let localStaffId = stylistId;
-
-    let { data: overrides, error } = await supabase
+    // stylistId here is already a staff.id (your calendar uses staff.id as resourceId)
+    const { data: overrides, error } = await supabase
       .from("staff_services")
       .select("*")
-      .eq("staff_id", localStaffId);
+      .eq("staff_id", stylistId);
 
-    if (!overrides?.length) {
-      // Fallback: stylistId might actually be auth_id → map to staff.id
-      const { data: staffRow } = await supabase
-        .from("staff")
-        .select("id")
-        .eq("auth_id", stylistId)
-        .maybeSingle();
-
-      if (staffRow?.id) {
-        localStaffId = staffRow.id;
-        const res2 = await supabase
-          .from("staff_services")
-          .select("*")
-          .eq("staff_id", localStaffId);
-        overrides = res2.data || [];
-      }
+    if (!cancelled) {
+      setStaffServiceOverrides(overrides || []);
     }
-
-    if (!cancelled) setStaffServiceOverrides(overrides || []);
+    if (error) {
+      console.error("staff_services fetch error:", error.message);
+    }
   }
 
   loadOverrides();
-  return () => { cancelled = true; };
-}, [stylistId, supabase]);
+  return () => {
+    cancelled = true;
+  };
+}, [stylistId]);
+
 
 
   const filteredServices = useMemo(() => {

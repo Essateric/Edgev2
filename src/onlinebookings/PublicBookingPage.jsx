@@ -91,119 +91,166 @@ export default function PublicBookingPage() {
     return () => { active = false; };
   }, [selectedService, selectedProvider, selectedDate]);
 
-  async function saveBooking() {
-    if (!selectedService || !selectedProvider || !selectedDate || !selectedTime) return;
-    if (!client.first_name || !client.last_name || (!client.email && !client.mobile)) {
-      alert("Please enter your first & last name, and at least email or mobile.");
-      return;
-    }
-    setSaving(true);
-    try {
-      const dur = selectedService.base_duration || 30;
-      const start = new Date(selectedDate);
-      start.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
-      const end = addMinutes(start, dur);
-
-      // match calendar flow: one group id per appointment
-   const bookingId = uuidv4();
-
-      // upsert client
-      let clientId = null;
-      if (client.email || client.mobile) {
-        let q = supabase.from("clients").select("id,first_name,last_name,email,mobile").limit(1);
-        if (client.email && client.mobile) q = q.or(`email.eq.${client.email},mobile.eq.${client.mobile}`);
-        else if (client.email) q = q.eq("email", client.email);
-        else q = q.eq("mobile", client.mobile);
-        const { data: found } = await q;
-        if (found?.length) {
-          clientId = found[0].id;
-          if (!found[0].first_name || !found[0].last_name) {
-            await supabase.from("clients").update({
-              first_name: found[0].first_name || client.first_name,
-              last_name:  found[0].last_name  || client.last_name,
-            }).eq("id", clientId);
-          }
-        } else {
-          const { data: created } = await supabase
-            .from("clients")
-            .insert([{ first_name: client.first_name, last_name: client.last_name, email: client.email || null, mobile: client.mobile || null }])
-            .select("id").single();
-          clientId = created.id;
-        }
-      }
-
-      // race-safe overlap check
-      const { data: overlaps } = await supabase
-        .from("bookings")
-        .select("id")
-        .eq("resource_id", selectedProvider.id)
-        .lt("start", end.toISOString())
-        .gt("end", start.toISOString());
-      if (overlaps?.length) { alert("Sorry, that time was just taken. Please pick another slot."); return; }
-
-      // create booking
-      const payload = {
-        booking_id: bookingId, 
-        title: selectedService.name,
-        category: selectedService.category || null,
-        client_id: clientId,
-        client_name: `${client.first_name} ${client.last_name}`.trim(),
-        resource_id: selectedProvider.id,
-        start: start.toISOString(),
-        end: end.toISOString(),
-        duration: dur,
-        price: selectedService.base_price ?? null,
-        status: "confirmed",
-      };
-      const { data: ins } = await supabase.from("bookings").insert([payload]).select("*").single();
-// Write to booking_logs (same as calendar flow)
-  try {
-    await SaveBookingsLog({
-      action: "created",
-      booking_id: bookingId,
-     client_id: clientId,
-      client_name: `${client.first_name} ${client.last_name}`.trim(),
-      stylist_id: selectedProvider.id,
-      stylist_name: selectedProvider.name,
-      service: {
-        name: selectedService.name,
-        category: selectedService.category,
-        price: selectedService.base_price,
-        duration: dur,
-     },
-      start: start.toISOString(),
-      end: end.toISOString(),
-      logged_by: null, // public site
-      before_snapshot: null,
-      after_snapshot: payload,
-    });
-  } catch (e) {
-    console.warn("Booking saved, but log write failed:", e?.message);
+async function saveBooking() {
+  if (!selectedService || !selectedProvider || !selectedDate || !selectedTime) return;
+  if (!client.first_name || !client.last_name || (!client.email && !client.mobile)) {
+    alert("Please enter your first & last name, and at least email or mobile.");
+    return;
   }
 
-      // save locally
-      const savedPack = { booking: ins, client: { id: clientId, ...client }, provider: selectedProvider, service: selectedService };
-      setSaved(savedPack);
+  setSaving(true);
+  try {
+    const dur = selectedService.base_duration || 30;
 
-      // 🔔 send emails via Netlify Function (no Supabase Edge call)
-      if (client.email) {
+    const start = new Date(selectedDate);
+    start.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
+    const end = addMinutes(start, dur);
+
+    // match calendar flow: one group id per appointment
+    const bookingId = uuidv4();
+
+    // upsert client
+    let clientId = null;
+    if (client.email || client.mobile) {
+      let q = supabase.from("clients")
+        .select("id,first_name,last_name,email,mobile")
+        .limit(1);
+
+      if (client.email && client.mobile) {
+        q = q.or(`email.eq.${client.email},mobile.eq.${client.mobile}`);
+      } else if (client.email) {
+        q = q.eq("email", client.email);
+      } else {
+        q = q.eq("mobile", client.mobile);
+      }
+
+      const { data: found } = await q;
+
+      if (found?.length) {
+        clientId = found[0].id;
+
+        // fill in missing names if needed
+        if (!found[0].first_name || !found[0].last_name) {
+          await supabase
+            .from("clients")
+            .update({
+              first_name: found[0].first_name || client.first_name,
+              last_name:  found[0].last_name  || client.last_name,
+            })
+            .eq("id", clientId);
+        }
+      } else {
+        const { data: created } = await supabase
+          .from("clients")
+          .insert([{
+            first_name: client.first_name,
+            last_name:  client.last_name,
+            email:  client.email  || null,
+            mobile: client.mobile || null,
+          }])
+          .select("id")
+          .single();
+
+        clientId = created.id;
+      }
+    }
+
+    // race-safe overlap check
+    const { data: overlaps } = await supabase
+      .from("bookings")
+      .select("id")
+      .eq("resource_id", selectedProvider.id)
+      .lt("start", end.toISOString())
+      .gt("end",   start.toISOString());
+
+    if (overlaps?.length) {
+      alert("Sorry, that time was just taken. Please pick another slot.");
+      return;
+    }
+
+    // create booking
+    const payload = {
+      booking_id: bookingId,
+      title: selectedService.name,
+      category: selectedService.category || null,
+      client_id: clientId,
+      client_name: `${client.first_name} ${client.last_name}`.trim(),
+      resource_id: selectedProvider.id,
+      start: start.toISOString(),
+      end:   end.toISOString(),
+      duration: dur,
+      price: selectedService.base_price ?? null,
+      status: "confirmed",
+    };
+
+    const { data: ins } = await supabase
+      .from("bookings")
+      .insert([payload])
+      .select("*")
+      .single();
+
+    // Write to booking_logs (same as calendar flow), but mark as Online Booking
+    try {
+      await SaveBookingsLog({
+        action: "created",
+        booking_id: bookingId,
+        client_id: clientId,
+        client_name: `${client.first_name} ${client.last_name}`.trim(),
+        stylist_id: selectedProvider.id,
+        stylist_name: selectedProvider.name,
+        service: {
+          name: selectedService.name,
+          category: selectedService.category,
+          price: selectedService.base_price,
+          duration: dur,
+        },
+        start: start.toISOString(),
+        end:   end.toISOString(),
+        logged_by: null,            // public site
+        reason: "Online Booking",   // correct label
+        before_snapshot: null,
+        after_snapshot: payload,
+        skipStaffLookup: true,      // prevent /staff?UID=… queries
+      });
+    } catch (e) {
+      console.warn("Booking saved, but log write failed:", e?.message);
+    }
+
+    // save locally
+    const savedPack = {
+      booking: ins,
+      client:   { id: clientId, ...client },
+      provider: selectedProvider,
+      service:  selectedService,
+    };
+    setSaved(savedPack);
+
+    // 🔔 send emails via Netlify Function (non-blocking for UI)
+    if (client.email) {
+      try {
         await sendBookingEmails({
           customerEmail: client.email,
-          businessEmail: BUSINESS.notifyEmail, // explicit to avoid fallback issues
+          businessEmail: BUSINESS.notifyEmail,
           business: BUSINESS,
           booking: ins,
           service: selectedService,
           provider: selectedProvider,
           notes: (client.notes || "").trim(),
         });
+      } catch (e) {
+        console.error("[email] failed:", e);
       }
+    }
 
-      setStep(4);
-    } catch (e) {
-      console.error("saveBooking failed", e);
-      alert("Couldn't save booking. Please try again.");
-    } finally { setSaving(false); }
+    setStep(4);
+  } catch (e) {
+    console.error("saveBooking failed", e);
+    alert("Couldn't save booking. Please try again.");
+  } finally {
+    setSaving(false);
   }
+}
+
 
   const header = (
     <div className="sticky top-0 z-10 bg-black/90 backdrop-blur border-b border-neutral-800">
