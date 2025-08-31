@@ -13,13 +13,12 @@ import {
 import { sendBookingEmails } from "./lib/email.js"; // uses Netlify Function via fetch
  import { v4 as uuidv4 } from "uuid";
  import SaveBookingsLog from "../components/bookings/SaveBookingsLog"; // if path differs, adjust
- import edgeLogo from "../assets/EdgeLogo.png";
 
 const BUSINESS = {
   name: "The Edge HD Salon",
   address: "9 Claremont Road, Sale, M33 7DZ",
   timezone: "Europe/London",
-  logoSrc: "edgeLogo",
+  logoSrc: "/edge-logo.png",
   notifyEmail: "edgehd.salon@gmail.com",
 };
 

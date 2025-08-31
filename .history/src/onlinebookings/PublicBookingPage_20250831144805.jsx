@@ -12,14 +12,12 @@ import {
 } from "./lib/bookingUtils.js";
 import { sendBookingEmails } from "./lib/email.js"; // uses Netlify Function via fetch
  import { v4 as uuidv4 } from "uuid";
- import SaveBookingsLog from "../components/bookings/SaveBookingsLog"; // if path differs, adjust
- import edgeLogo from "../assets/EdgeLogo.png";
 
 const BUSINESS = {
   name: "The Edge HD Salon",
   address: "9 Claremont Road, Sale, M33 7DZ",
   timezone: "Europe/London",
-  logoSrc: "edgeLogo",
+  logoSrc: "/edge-logo.png",
   notifyEmail: "edgehd.salon@gmail.com",
 };
 
@@ -104,9 +102,6 @@ export default function PublicBookingPage() {
       start.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
       const end = addMinutes(start, dur);
 
-      // match calendar flow: one group id per appointment
-   const bookingId = uuidv4();
-
       // upsert client
       let clientId = null;
       if (client.email || client.mobile) {
@@ -143,7 +138,7 @@ export default function PublicBookingPage() {
 
       // create booking
       const payload = {
-        booking_id: bookingId, 
+        booking_id: null,
         title: selectedService.name,
         category: selectedService.category || null,
         client_id: clientId,
@@ -156,30 +151,6 @@ export default function PublicBookingPage() {
         status: "confirmed",
       };
       const { data: ins } = await supabase.from("bookings").insert([payload]).select("*").single();
-// Write to booking_logs (same as calendar flow)
-  try {
-    await SaveBookingsLog({
-      action: "created",
-      booking_id: bookingId,
-     client_id: clientId,
-      client_name: `${client.first_name} ${client.last_name}`.trim(),
-      stylist_id: selectedProvider.id,
-      stylist_name: selectedProvider.name,
-      service: {
-        name: selectedService.name,
-        category: selectedService.category,
-        price: selectedService.base_price,
-        duration: dur,
-     },
-      start: start.toISOString(),
-      end: end.toISOString(),
-      logged_by: null, // public site
-      before_snapshot: null,
-      after_snapshot: payload,
-    });
-  } catch (e) {
-    console.warn("Booking saved, but log write failed:", e?.message);
-  }
 
       // save locally
       const savedPack = { booking: ins, client: { id: clientId, ...client }, provider: selectedProvider, service: selectedService };
