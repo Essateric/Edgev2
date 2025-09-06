@@ -117,22 +117,25 @@ export const AuthProvider = ({ children }) => {
 
       const { email, token_hash, email_otp, name, permission } = result;
 
-      let data, error;
-      if (token_hash) {
-        ({ data, error } = await supabase.auth.verifyOtp({
-          type: "magiclink",
-          token_hash,
-        }));
-      } else if (email_otp) {
-        ({ data, error } = await supabase.auth.verifyOtp({
-          type: "email",
-          email,
-          token: email_otp,
-        }));
-      } else {
-        throw new Error("Server returned neither token_hash nor email_otp");
-      }
-      if (error) throw error;
+ let data, error;
+if (token_hash) {
+  // ✅ token_hash must be verified with type: "email"
+  ({ data, error } = await supabase.auth.verifyOtp({
+    type: "email",
+    token_hash,
+  }));
+} else if (email_otp) {
+  // still "email" when verifying the code + email
+  ({ data, error } = await supabase.auth.verifyOtp({
+    type: "email",
+    email,
+    token: email_otp,
+  }));
+} else {
+  throw new Error("Server returned neither token_hash nor email_otp");
+}
+if (error) throw error;
+
 
       const staffId = await findStaffIdForUser(data.user);
 

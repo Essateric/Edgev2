@@ -98,89 +98,74 @@ export default function ManageStaff() {
 
   // PATCH-style save: Only changed days are updated, the rest remain.
   // Accept latestHours as parameter (comes from the modal!)
-  const saveModalHours = async (latestHours) => {
-    if (!currentUser?.token) {
-      alert("❌ You must be logged in to update staff hours.");
-      return;
+const saveModalHours = async (latestHours) => {
+  if (!currentUser?.token) {
+    alert("❌ You must be logged in to update staff hours.");
+    return;
+  }
+
+  console.log("✅ Attempting to save hours for modalStaff:", modalStaff);
+  console.log("✅ modalStaff.id:", modalStaff?.id);
+  console.log("✅ Hours payload to save:", latestHours);
+
+  // 1) Fetch current weekly_hours (for patch/merge)
+  const { data: oldData, error: fetchError } = await defaultSupabase
+    .from("staff")
+    .select("weekly_hours")
+    .eq("id", modalStaff.id)
+    .single();
+
+  if (fetchError) {
+    alert("❌ Error fetching current hours: " + fetchError.message);
+    return;
+  }
+
+  // 2) Compute only changed days
+  const oldHours = oldData?.weekly_hours || {};
+  const changes = {};
+  for (const day of daysOrder) {
+    const modalDay = latestHours[day] || {};
+    const oldDay = oldHours[day] || {};
+    if (
+      String(modalDay.start) !== String(oldDay.start) ||
+      String(modalDay.end) !== String(oldDay.end) ||
+      Boolean(modalDay.off) !== Boolean(oldDay.off)
+    ) {
+      changes[day] = {
+        start: modalDay.start || "",
+        end: modalDay.end || "",
+        off: !!modalDay.off,
+      };
     }
+  }
 
-    console.log("✅ Attempting to save hours for modalStaff:", modalStaff);
-    console.log("✅ modalStaff.id:", modalStaff?.id);
-    console.log("✅ Hours payload to save:", latestHours);
+  if (Object.keys(changes).length === 0) {
+    alert("No changes to save.");
+    return;
+  }
 
-    // 1. Fetch current weekly_hours from DB (for patch/merge)
-    const { data: oldData, error: fetchError } = await defaultSupabase
-      .from("staff")
-      .select("weekly_hours")
-      .eq("id", modalStaff.id)
-      .single();
+  // 3) Merge and log
+  const updatedWeeklyHours = { ...oldHours, ...changes };
+  console.log("🚀 PATCH: Only these days changed:", changes);
+  console.log("🚀 Final merged weekly_hours object:", updatedWeeklyHours);
 
-    if (fetchError) {
-      alert("❌ Error fetching current hours: " + fetchError.message);
-      return;
-    }
+  // 4) Update — reuse defaultSupabase; DO NOT call .select() here
+  const { error: updateError } = await defaultSupabase
+    .from("staff")
+    .update({ weekly_hours: updatedWeeklyHours })
+    .eq("id", modalStaff.id);
 
-    // 2. Prepare only changed days
-    const oldHours = oldData?.weekly_hours || {};
-    const changes = {};
-    for (const day of daysOrder) {
-      const modalDay = latestHours[day] || {};
-      const oldDay = oldHours[day] || {};
-      if (
-        String(modalDay.start) !== String(oldDay.start) ||
-        String(modalDay.end) !== String(oldDay.end) ||
-        Boolean(modalDay.off) !== Boolean(oldDay.off)
-      ) {
-        changes[day] = {
-          start: modalDay.start || "",
-          end: modalDay.end || "",
-          off: !!modalDay.off,
-        };
-      }
-    }
+  if (updateError) {
+    alert("❌ Error saving hours: " + updateError.message);
+    return;
+  }
 
-    if (Object.keys(changes).length === 0) {
-      alert("No changes to save.");
-      return;
-    }
+  // ✅ Success
+  alert("✅ Hours updated successfully.");
+  await fetchData();
+  setShowHoursModal(false);
+};
 
-    // 3. Merge changes into previous weekly_hours
-    const updatedWeeklyHours = { ...oldHours, ...changes };
-    console.log("🚀 PATCH: Only these days changed:", changes);
-    console.log("🚀 Final merged weekly_hours object:", updatedWeeklyHours);
-
-    // 4. Patch to DB
-    const supabaseWithAuth = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: {
-        headers: {
-          Authorization: `Bearer ${currentUser.token}`,
-        },
-      },
-    });
-
-    const { data, error } = await supabaseWithAuth
-      .from("staff")
-      .update({ weekly_hours: updatedWeeklyHours })
-      .eq("id", modalStaff.id)
-      .select();
-
-    console.log("📦 Supabase update response data:", data);
-    console.log("❌ Supabase update response error:", error);
-
-    if (error) {
-      alert("❌ Error saving hours: " + error.message);
-      return;
-    }
-
-    if (!data || data.length === 0) {
-      alert("❌ No matching staff found to update.");
-      return;
-    }
-
-    alert("✅ Hours updated successfully.");
-    await fetchData();
-    setShowHoursModal(false);
-  };
 
   // Delete staff by id (uses Edge Function)
   const handleDelete = async (id) => {

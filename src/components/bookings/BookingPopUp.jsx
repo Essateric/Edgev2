@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Modal from "../Modal";
 import Button from "../Button";
 import { format } from "date-fns";
 import ClientNotesModal from "../clients/ClientNotesModal";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSaveClientDOB } from "../hooks/useSaveClientDOB";
+import { v4 as uuidv4 } from "uuid";
+import SaveBookingsLog from "./SaveBookingsLog"; // path already used in your project
 
 // ---- Money helpers ----
 const toNumber = (v) => {
@@ -15,6 +17,39 @@ const toNumber = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 const formatGBP = (v) => `£${toNumber(v).toFixed(2)}`;
+
+// ---- Date helpers ----
+const addDays = (d, n) => {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+};
+const daysInMonth = (year, monthIndex) => new Date(year, monthIndex + 1, 0).getDate();
+const setHMS = (d, h, m, s = 0, ms = 0) => {
+  const x = new Date(d);
+  x.setHours(h, m, s, ms);
+  return x;
+};
+const clampDayInMonth = (y, m, day) => Math.min(day, daysInMonth(y, m));
+const addMonthsPreserveDay = (base, add, dayOverride = null) => {
+  const y = base.getFullYear();
+  const m = base.getMonth();
+  const d = dayOverride ?? base.getDate();
+  const targetY = y + Math.floor((m + add) / 12);
+  const targetM = (m + add) % 12;
+  const dd = clampDayInMonth(targetY, targetM, d);
+  const res = new Date(base);
+  res.setFullYear(targetY, targetM, dd);
+  return res;
+};
+const addYearsPreserveDay = (base, years) => {
+  const y = base.getFullYear() + years;
+  const m = base.getMonth();
+  const d = clampDayInMonth(y, m, base.getDate());
+  const res = new Date(base);
+  res.setFullYear(y, m, d);
+  return res;
+};
 
 export default function BookingPopUp({
   isOpen,
@@ -29,6 +64,14 @@ export default function BookingPopUp({
   const [relatedBookings, setRelatedBookings] = useState([]);
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [isEditingDob, setIsEditingDob] = useState(false);
+
+  // NEW: repeat modal state
+  const [repeatOpen, setRepeatOpen] = useState(false);
+  const [repeatPattern, setRepeatPattern] = useState("weekly"); // weekly | fortnightly | monthly | yearly | monthly_nth_day
+  const [repeatCount, setRepeatCount] = useState(6);
+  const [repeatDayOfMonth, setRepeatDayOfMonth] = useState(
+    booking?.start ? new Date(booking.start).getDate() : 1
+  );
 
   const { supabaseClient } = useAuth();
 
@@ -89,26 +132,55 @@ export default function BookingPopUp({
     }
   }, [client, setDobInput]);
 
+  // -----------------------------
+  // HOOK-ORDER FIX: Always call hooks.
+  // These memos must run on every render; they just return safe fallbacks when data is missing.
+  // -----------------------------
+  const sortedServices = useMemo(() => {
+    if (!Array.isArray(relatedBookings) || relatedBookings.length === 0) return [];
+    return [...relatedBookings].sort(
+      (a, b) => new Date(a.start) - new Date(b.start)
+    );
+  }, [relatedBookings]);
+
+  // Build a compact blueprint of services (offset + duration relative to the first start)
+  const blueprint = useMemo(() => {
+    if (!sortedServices.length) return null;
+    const baseStart = new Date(sortedServices[0].start);
+    const baseHour = baseStart.getHours();
+    const baseMin = baseStart.getMinutes();
+
+    const items = sortedServices.map((s) => {
+      const sStart = new Date(s.start);
+      const sEnd = new Date(s.end);
+      const offsetMin = Math.round((sStart - baseStart) / 60000);
+      const duration = Math.round((sEnd - sStart) / 60000);
+      return {
+        title: s.title,
+        category: s.category || null,
+        price: s.price ?? null,
+        duration,
+        offsetMin,
+      };
+    });
+
+    return { baseStart, baseHour, baseMin, items };
+  }, [sortedServices]);
+
+  // After all hooks are declared, you can safely gate the render.
   if (!booking || !client) return null;
 
   const clientName = `${client.first_name} ${client.last_name}`;
   const clientPhone = client.mobile || "N/A";
 
-  // display as "22nd Aug"
   const displayDob = dobInput
     ? format(new Date(`${dobInput}T00:00:00`), "do MMM")
     : "DOB not set";
 
-  // Sort once, reuse
-  const sortedServices = [...relatedBookings].sort(
-    (a, b) => new Date(a.start) - new Date(b.start)
-  );
+  // compute total
+  const serviceTotal = sortedServices.reduce((sum, s) => sum + toNumber(s.price), 0);
 
-  // compute total safely
-  const serviceTotal = sortedServices.reduce(
-    (sum, s) => sum + toNumber(s.price),
-    0
-  );
+  const stylist = stylistList.find((s) => s.id === booking.resource_id);
 
   const handleCancelBooking = async () => {
     const confirmDelete = window.confirm(
@@ -150,8 +222,161 @@ export default function BookingPopUp({
     }
   };
 
+  // ===== REPEAT LOGIC =====
+
+  const patternLabel = (p) => {
+    switch (p) {
+      case "weekly": return "Weekly";
+      case "fortnightly": return "Fortnightly";
+      case "monthly": return "Monthly";
+      case "yearly": return "Yearly";
+      case "monthly_nth_day": return `Monthly (day ${repeatDayOfMonth})`;
+      default: return p;
+    }
+  };
+
+  const generateOccurrenceBase = (index /* 0..count-1 */) => {
+    // first occurrence is "next" one (i = 0)
+    const base = blueprint?.baseStart ?? new Date(booking.start);
+    const h = blueprint?.baseHour ?? new Date(booking.start).getHours();
+    const m = blueprint?.baseMin ?? new Date(booking.start).getMinutes();
+
+    switch (repeatPattern) {
+      case "weekly":
+        return setHMS(addDays(base, 7 * (index + 1)), h, m);
+      case "fortnightly":
+        return setHMS(addDays(base, 14 * (index + 1)), h, m);
+      case "monthly":
+        return setHMS(addMonthsPreserveDay(base, index + 1), h, m);
+      case "yearly":
+        return setHMS(addYearsPreserveDay(base, index + 1), h, m);
+      case "monthly_nth_day": {
+        const nextMonth = addMonthsPreserveDay(base, index + 1, repeatDayOfMonth);
+        return setHMS(nextMonth, h, m);
+      }
+      default:
+        return setHMS(addDays(base, 7 * (index + 1)), h, m);
+    }
+  };
+
+  const createRepeatSet = async () => {
+    if (!blueprint || !stylist) {
+      alert("Missing service blueprint or stylist.");
+      return;
+    }
+
+    const created = [];
+    const skipped = [];
+
+    for (let i = 0; i < Math.max(1, Number(repeatCount) || 0); i++) {
+      const occBase = generateOccurrenceBase(i);
+
+      // overlap check for the *whole occurrence* by testing each service timeslot
+      let conflict = false;
+      for (const item of blueprint.items) {
+        const sStart = new Date(occBase.getTime() + item.offsetMin * 60000);
+        const sEnd = new Date(sStart.getTime() + item.duration * 60000);
+
+        const { data: overlaps, error: overlapErr } = await supabaseClient
+          .from("bookings")
+          .select("id")
+          .eq("resource_id", booking.resource_id)
+          .lt("start", sEnd.toISOString())
+          .gt("end", sStart.toISOString());
+
+        if (overlapErr) {
+          console.error("Overlap check failed:", overlapErr.message);
+          conflict = true;
+          break;
+        }
+        if (overlaps?.length) {
+          conflict = true;
+          break;
+        }
+      }
+
+      if (conflict) {
+        skipped.push(occBase);
+        continue;
+      }
+
+      // create all services under a new booking_id
+      const newBookingId = uuidv4();
+      const rows = blueprint.items.map((item) => {
+        const sStart = new Date(occBase.getTime() + item.offsetMin * 60000);
+        const sEnd = new Date(sStart.getTime() + item.duration * 60000);
+        return {
+          booking_id: newBookingId,
+          client_id: booking.client_id,
+          client_name: booking.client_name,
+          resource_id: booking.resource_id,
+          start: sStart.toISOString(),
+          end: sEnd.toISOString(),
+          title: item.title,
+          price: item.price,
+          duration: item.duration,
+          category: item.category,
+          status: "confirmed",
+        };
+      });
+
+      const { data: inserted, error: insErr } = await supabaseClient
+        .from("bookings")
+        .insert(rows)
+        .select("*");
+
+      if (insErr) {
+        console.error("Insert repeat occurrence failed:", insErr.message);
+        skipped.push(occBase);
+        continue;
+      }
+
+      created.push({ when: occBase, rows: inserted });
+
+      // log once per occurrence (use first item as "service" for snapshot)
+      try {
+        const firstItem = blueprint.items[0];
+        await SaveBookingsLog({
+          action: "created",
+          booking_id: newBookingId,
+          client_id: booking.client_id,
+          client_name: booking.client_name,
+          stylist_id: booking.resource_id,
+          stylist_name: stylist?.title || stylist?.name || "Unknown",
+          service: {
+            name: firstItem.title,
+            category: firstItem.category,
+            price: firstItem.price,
+            duration: firstItem.duration,
+          },
+          start: rows[0].start,
+          end: rows[0].end,
+          logged_by: null,               // will resolve to current staff inside SaveBookingsLog
+          reason: `Repeat Booking: ${patternLabel(repeatPattern)}`,
+          before_snapshot: null,
+          after_snapshot: rows[0],
+        });
+      } catch (e) {
+        console.warn("Repeat booking saved, but log write failed:", e?.message);
+      }
+    }
+
+    setRepeatOpen(false);
+
+    // Notify + nudge refresh. (If your calendar listens to changes, this may be enough.)
+    const msg = [
+      `${created.length} repeat ${created.length === 1 ? "booking" : "bookings"} created.`,
+      skipped.length ? `${skipped.length} skipped due to conflicts.` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    alert(msg || "Done.");
+
+    // optional: ask parent to refresh if you have a handler
+    window.dispatchEvent(new CustomEvent("bookings:changed", { detail: { type: "repeat-created" } }));
+  };
+
   return (
-    // Let Modal be the ONLY card; pass width here. No inner wrapper with bg/overflow.
     <Modal isOpen={isOpen} onClose={onClose} hideCloseIcon className="w-full max-w-[440px]">
       {/* HEADER / CLIENT INFO */}
       <div className="flex justify-between items-start mb-2">
@@ -179,10 +404,7 @@ export default function BookingPopUp({
                 >
                   {savingDOB ? "Saving..." : "Save"}
                 </Button>
-                <Button
-                  onClick={() => setIsEditingDob(false)}
-                  className="text-xs"
-                >
+                <Button onClick={() => setIsEditingDob(false)} className="text-xs">
                   Cancel
                 </Button>
               </>
@@ -198,9 +420,7 @@ export default function BookingPopUp({
               </>
             )}
           </div>
-          {dobError && (
-            <p className="text-xs text-red-600 mt-1">{dobError}</p>
-          )}
+          {dobError && <p className="text-xs text-red-600 mt-1">{dobError}</p>}
         </div>
 
         <Button onClick={() => setShowNotesModal(true)} className="text-sm">
@@ -218,44 +438,30 @@ export default function BookingPopUp({
           <div className="space-y-1">
             {sortedServices.map((service, index) => {
               const startTime = new Date(service.start);
-              const formattedTime = !isNaN(startTime)
-                ? format(startTime, "HH:mm")
-                : "--:--";
-
+              const formattedTime = !isNaN(startTime) ? format(startTime, "HH:mm") : "--:--";
               return (
-                <div
-                  key={index}
-                  className="flex flex-col text-sm text-gray-700 border-b py-1"
-                >
+                <div key={index} className="flex flex-col text-sm text-gray-700 border-b py-1">
                   <div className="flex justify-between items-center">
                     <span className="w-1/4">{formattedTime}</span>
                     <span className="w-2/4 font-medium">
                       {service.category || "Uncategorised"}: {service.title || ""}
                     </span>
-
-                    {/* RIGHT COLUMN = PRICE */}
-                    <span className="w-1/4 text-right">
-                      {formatGBP(service.price)}
-                    </span>
+                    <span className="w-1/4 text-right">{formatGBP(service.price)}</span>
                   </div>
-
                   {service.notes && (
-                    <div className="text-xs text-gray-500 italic mt-1">
-                      Notes: {service.notes}
-                    </div>
+                    <div className="text-xs text-gray-500 italic mt-1">Notes: {service.notes}</div>
                   )}
                 </div>
               );
             })}
 
-            {/* TOTAL ROW (always visible, no inner overflow) */}
-{/* TOTAL ROW */}
-<div className="flex justify-between items-center pt-2 border-t mt-2 text-sm text-gray-800">
-  <span className="w-3/4 text-right font-semibold">Total</span>
-  <span className="w-1/4 text-right font-semibold text-gray-900">
-    {formatGBP(serviceTotal)}
-  </span>
-</div>
+            {/* TOTAL ROW */}
+            <div className="flex justify-between items-center pt-2 border-t mt-2 text-sm text-gray-800">
+              <span className="w-3/4 text-right font-semibold">Total</span>
+              <span className="w-1/4 text-right font-semibold text-gray-900">
+                {formatGBP(serviceTotal)}
+              </span>
+            </div>
           </div>
         )}
       </div>
@@ -263,12 +469,22 @@ export default function BookingPopUp({
       {/* BUTTON ROW */}
       <div className="mt-4 flex flex-wrap gap-2 items-center">
         <span className="text-sm text-green-700 font-semibold">Confirmed</span>
+
         <button className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded">
           Arrived
         </button>
         <button className="bg-gray-500 text-white px-3 py-1 rounded">
           Checkout
         </button>
+
+        {/* NEW: Repeat bookings */}
+        <button
+          onClick={() => setRepeatOpen(true)}
+          className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded"
+        >
+          Repeat bookings
+        </button>
+
         <button
           onClick={() => setShowActions(true)}
           className="bg-gray-200 text-gray-800 px-3 py-1 rounded"
@@ -296,10 +512,7 @@ export default function BookingPopUp({
             <button className="block w-full text-left hover:bg-gray-100 p-2 rounded">
               Rebook
             </button>
-            <button
-              onClick={onEdit}
-              className="block w-full text left hover:bg-gray-100 p-2 rounded"
-            >
+            <button onClick={onEdit} className="block w-full text left hover:bg-gray-100 p-2 rounded">
               Edit
             </button>
             <button
@@ -319,14 +532,87 @@ export default function BookingPopUp({
       )}
 
       {/* NOTES MODAL */}
-{showNotesModal && (
-  <ClientNotesModal
-    clientId={client.id}
-    bookingId={booking?.id}   // ✅ pass the booking row id
-    isOpen={showNotesModal}
-    onClose={() => setShowNotesModal(false)}
-  />
-)}
+      {showNotesModal && (
+        <ClientNotesModal
+          clientId={client.id}
+          bookingId={booking?.id}
+          isOpen={showNotesModal}
+          onClose={() => setShowNotesModal(false)}
+        />
+      )}
+
+      {/* REPEAT MODAL */}
+      {repeatOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-lg p-4 w-full max-w-md">
+            <h3 className="text-lg font-semibold text-gray-800 mb-3">Repeat bookings</h3>
+
+            <div className="grid grid-cols-1 gap-3">
+              <label className="text-sm text-gray-700">
+                Pattern
+                <select
+                  className="block w-full border rounded px-2 py-1 mt-1"
+                  value={repeatPattern}
+                  onChange={(e) => setRepeatPattern(e.target.value)}
+                >
+                  <option value="weekly">Weekly</option>
+                  <option value="fortnightly">Fortnightly</option>
+                  <option value="monthly">Monthly (same date)</option>
+                  <option value="monthly_nth_day">Monthly (choose day)</option>
+                  <option value="yearly">Yearly</option>
+                </select>
+              </label>
+
+              {repeatPattern === "monthly_nth_day" && (
+                <label className="text-sm text-gray-700">
+                  Day of month (1–31)
+                  <input
+                    type="number"
+                    min={1}
+                    max={31}
+                    className="block w-full border rounded px-2 py-1 mt-1"
+                    value={repeatDayOfMonth}
+                    onChange={(e) =>
+                      setRepeatDayOfMonth(Math.max(1, Math.min(31, Number(e.target.value) || 1)))
+                    }
+                  />
+                </label>
+              )}
+
+              <label className="text-sm text-gray-700">
+                Number of future occurrences
+                <input
+                  type="number"
+                  min={1}
+                  max={52}
+                  className="block w-full border rounded px-2 py-1 mt-1"
+                  value={repeatCount}
+                  onChange={(e) =>
+                    setRepeatCount(Math.max(1, Math.min(52, Number(e.target.value) || 1)))
+                  }
+                />
+              </label>
+
+              {/* Preview of first repeated date */}
+              {blueprint && (
+                <p className="text-xs text-gray-600">
+                  First new booking will be on{" "}
+                  <b>{format(generateOccurrenceBase(0), "eee dd MMM yyyy, HH:mm")}</b>
+                </p>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 mt-4">
+              <Button onClick={() => setRepeatOpen(false)} className="bg-gray-200 text-gray-800">
+                Cancel
+              </Button>
+              <Button onClick={createRepeatSet} className="bg-purple-600 text-white hover:bg-purple-700">
+                Create
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }

@@ -1,75 +1,259 @@
-// PublicBookingPage.jsx
-import React, { useEffect, useState } from "react";
+// src/onlinebookings/PublicBookingPage.jsx
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabaseClient.js";
 import Stepper from "./components/Stepper.jsx";
-import ServiceList from "./components/ServiceList.jsx";
+// ServiceList replaced by inline accordion below
 import ProviderList from "./components/ProviderList.jsx";
 import CalendarSlots from "./components/CalendarSlots.jsx";
 import ClientForm from "./components/ClientForm.jsx";
 import {
-  addMinutes, startOfDay, endOfDay, money,
-  getWindowsForWeekday, buildSlotsFromWindows, rangesOverlap
+  addMinutes,
+  startOfDay,
+  endOfDay,
+  money,
+  getWindowsForWeekday,
+  buildSlotsFromWindows,
+  rangesOverlap,
 } from "./lib/bookingUtils.js";
-import { sendBookingEmails } from "./lib/email.js"; // uses Netlify Function via fetch
- import { v4 as uuidv4 } from "uuid";
- import SaveBookingsLog from "../components/bookings/SaveBookingsLog"; // if path differs, adjust
- import edgeLogo from "../assets/EdgeLogo.png";
+import { sendBookingEmails } from "./lib/email.js";
+import { v4 as uuidv4 } from "uuid";
+import SaveBookingsLog from "../components/bookings/SaveBookingsLog";
+import { findOrCreateClient } from "./lib/findOrCreateClient"; // kept for future use
+import edgeLogo from "../assets/EdgeLogo.png";
+
+const LOGO_SRC = edgeLogo || "/edge-logo.png";
 
 const BUSINESS = {
   name: "The Edge HD Salon",
   address: "9 Claremont Road, Sale, M33 7DZ",
   timezone: "Europe/London",
-  logoSrc: "edgeLogo",
+  logoSrc: LOGO_SRC,
   notifyEmail: "edgehd.salon@gmail.com",
 };
 
+// ---------- helpers ----------
+const initialClient = {
+  first_name: "",
+  last_name: "",
+  email: "",
+  mobile: "",
+  notes: "",
+};
+
+const uniqById = (arr) => {
+  const seen = new Set();
+  return arr.filter((x) => {
+    if (!x?.id || seen.has(x.id)) return false;
+    seen.add(x.id);
+    return true;
+  });
+};
+
+// chemical if DB flag set OR category contains "treat" (Treatments)
+const isChemicalService = (svc) => {
+  const cat = String(svc?.category || "").toLowerCase();
+  return Boolean(svc?.is_chemical) || cat.includes("treat");
+};
+
+const minsToLabel = (total) => {
+  const d = Number(total) || 0;
+  if (!d) return "—";
+  const h = Math.floor(d / 60);
+  const m = d % 60;
+  return `${h ? `${h}h ` : ""}${m || (!h ? d : 0)}m`;
+};
+
+// insert that gracefully falls back if some columns don't exist yet
+async function safeInsertBookings(rows) {
+  let { data, error } = await supabase.from("bookings").insert(rows).select("*");
+  if (!error) return data;
+
+  const msg = (error.message || "").toLowerCase();
+  if (msg.includes("service_id") || msg.includes("sort_index")) {
+    const stripped = rows.map(({ service_id, sort_index, ...rest }) => rest);
+    const retry = await supabase.from("bookings").insert(stripped).select("*");
+    if (!retry.error) return retry.data;
+    throw retry.error;
+  }
+  throw error;
+}
+
 export default function PublicBookingPage() {
   const [step, setStep] = useState(1);
+
+  // All services/providers
   const [services, setServices] = useState([]);
   const [providers, setProviders] = useState([]);
-  const [selectedService, setSelectedService] = useState(null);
-  const [selectedProvider, setSelectedProvider] = useState(null);
 
+  // MULTI: selected “cart” of services
+  const [selectedServices, setSelectedServices] = useState([]);
+  const lastPickedService =
+    selectedServices[selectedServices.length - 1] || null;
+
+  // Provider & time picking
+  const [selectedProvider, setSelectedProvider] = useState(null);
   const [viewDate, setViewDate] = useState(() => startOfDay(new Date()));
   const [selectedDate, setSelectedDate] = useState(null);
   const [availableSlots, setAvailableSlots] = useState([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedTime, setSelectedTime] = useState(null);
 
-  const [client, setClient] = useState({ first_name:"", last_name:"", email:"", mobile:"", notes:"" });
+  // Client & save
+  const [client, setClient] = useState(initialClient);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(null);
 
+  // Stylist-specific overrides from staff_services
+  const [providerOverrides, setProviderOverrides] = useState([]);
+
+  const isTBA = (p) =>
+    p == null || p === "" || Number(p) === 0 || Number.isNaN(Number(p));
+
+  // helper to fully reset the flow after a successful booking
+  function resetBookingFlow() {
+    setSelectedServices([]);
+    setSelectedProvider(null);
+    setSelectedDate(null);
+    setSelectedTime(null);
+    setAvailableSlots([]);
+    setProviderOverrides([]);
+    setClient(initialClient);
+    setSaved(null);
+    setViewDate(startOfDay(new Date()));
+    setStep(1);
+  }
+
+  // fetch services/providers
   useEffect(() => {
     (async () => {
-      const { data: s } = await supabase.from("services").select("id,name,category,base_duration,base_price").order("name");
+      const { data: s } = await supabase
+        .from("services")
+        .select("id,name,category,is_chemical,base_duration,base_price")
+        .order("name");
       setServices(s || []);
-      const { data: staff } = await supabase.from("staff").select("id,name,weekly_hours,permission,email").order("name");
+
+      const { data: staff } = await supabase
+        .from("staff")
+        .select("id,name,weekly_hours,permission,email")
+        .order("name");
       setProviders(staff || []);
     })();
   }, []);
 
-  // Build free slots when the inputs change
+  // load overrides when provider changes
   useEffect(() => {
-    if (!selectedService || !selectedProvider || !selectedDate) return;
+    (async () => {
+      if (!selectedProvider) {
+        setProviderOverrides([]);
+        return;
+      }
+      const { data, error } = await supabase
+        .from("staff_services")
+        .select("service_id, staff_id, price, duration")
+        .eq("staff_id", selectedProvider.id);
+      if (!error) setProviderOverrides(data || []);
+    })();
+  }, [selectedProvider]);
+
+  // effective per-item values for display & booking
+  // IMPORTANT: Until a stylist is selected, both price and duration are "unknown"
+  const getEffectivePD = (svc) => {
+    if (!selectedProvider) {
+      return { duration: null, price: null };
+    }
+    const o = providerOverrides.find((x) => x.service_id === svc.id);
+    return {
+      // duration needs a safe fallback so slots can still work even if an override is missing
+      duration:
+        (o?.duration != null ? Number(o.duration) : (svc.base_duration || 0)) ||
+        0,
+      // price remains TBA if not overridden (stylist-specific)
+      price: o?.price != null ? Number(o.price) : null,
+    };
+  };
+
+  // cart totals (+30m once if any chemical) — only after stylist is chosen
+  const {
+    totalDuration,
+    totalPrice,
+    hasChemical,
+    serviceNameForEmail,
+    hasUnknownPrice,
+  } = useMemo(() => {
+    if (!selectedServices.length) {
+      return {
+        totalDuration: 0,
+        totalPrice: 0,
+        hasChemical: false,
+        serviceNameForEmail: "",
+        hasUnknownPrice: true,
+      };
+    }
+
+    let durationSum = 0;
+    let priceSum = 0;
+    let anyChemical = false;
+    let unknown = false;
+
+    for (const svc of selectedServices) {
+      const { duration: d, price: p } = getEffectivePD(svc);
+      if (!selectedProvider) {
+        unknown = true;
+      } else {
+        durationSum += Number(d || 0);
+        if (isTBA(p)) unknown = true;
+        else priceSum += Number(p);
+      }
+      if (isChemicalService(svc)) anyChemical = true;
+    }
+
+    if (selectedProvider && anyChemical) durationSum += 30;
+
+    const nameForEmail =
+      selectedServices.map((s) => s.name).join(", ") +
+      (anyChemical ? " (+processing)" : "");
+
+    return {
+      totalDuration: selectedProvider ? durationSum : 0,
+      totalPrice: selectedProvider ? priceSum : 0,
+      hasChemical: anyChemical,
+      serviceNameForEmail: nameForEmail,
+      hasUnknownPrice: !selectedProvider || unknown,
+    };
+  }, [selectedServices, providerOverrides, selectedProvider]);
+
+  // compute free slots for the total duration (only once a provider + date are selected)
+  useEffect(() => {
+    if (!selectedServices.length || !selectedProvider || !selectedDate) return;
+
     let active = true;
     (async () => {
       setSlotsLoading(true);
       try {
-        const dur = selectedService.base_duration || 30;
+        const dur = totalDuration || 30; // safety fallback
         const stepMins = 15;
         const dayStart = startOfDay(selectedDate);
         const dayEnd = endOfDay(selectedDate);
 
-        const windows = getWindowsForWeekday(selectedProvider.weekly_hours, dayStart.getDay());
-        if (!windows.length) { setAvailableSlots([]); return; }
+        const windows = getWindowsForWeekday(
+          selectedProvider.weekly_hours,
+          dayStart.getDay()
+        );
+        if (!windows.length) {
+          setAvailableSlots([]);
+          return;
+        }
 
         let candidates = buildSlotsFromWindows(dayStart, windows, stepMins, dur);
+
         const now = new Date();
         if (dayStart.getTime() === startOfDay(now).getTime()) {
           candidates = candidates.filter((t) => t > now);
         }
-        if (!candidates.length) { setAvailableSlots([]); return; }
+        if (!candidates.length) {
+          setAvailableSlots([]);
+          return;
+        }
 
         const { data: existing } = await supabase
           .from("bookings")
@@ -78,184 +262,280 @@ export default function PublicBookingPage() {
           .lte("start", dayEnd.toISOString())
           .gte("end", dayStart.toISOString());
 
-        const busy = (existing || []).map((b) => ({ start: new Date(b.start), end: new Date(b.end) }));
+        const busy = (existing || []).map((b) => ({
+          start: new Date(b.start),
+          end: new Date(b.end),
+        }));
+
         const free = candidates.filter((t) => {
-          const s = t, e = addMinutes(t, dur);
+          const s = t,
+            e = addMinutes(t, dur);
           return busy.every((b) => !rangesOverlap(s, e, b.start, b.end));
         });
+
         if (active) setAvailableSlots(free);
       } finally {
         if (active) setSlotsLoading(false);
       }
     })();
-    return () => { active = false; };
-  }, [selectedService, selectedProvider, selectedDate]);
 
-async function saveBooking() {
-  if (!selectedService || !selectedProvider || !selectedDate || !selectedTime) return;
-  if (!client.first_name || !client.last_name || (!client.email && !client.mobile)) {
-    alert("Please enter your first & last name, and at least email or mobile.");
-    return;
-  }
+    return () => {
+      active = false;
+    };
+  }, [selectedServices, selectedProvider, selectedDate, totalDuration]);
 
-  setSaving(true);
-  try {
-    const dur = selectedService.base_duration || 30;
+  // step 1 toggle (add/remove)
+  const toggleService = (svc) => {
+    setSelectedServices((prev) => {
+      const exists = prev.some((x) => x.id === svc.id);
+      const next = exists ? prev.filter((x) => x.id !== svc.id) : [...prev, svc];
+      return uniqById(next);
+    });
+  };
 
-    const start = new Date(selectedDate);
-    start.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
-    const end = addMinutes(start, dur);
+  // ---------- save as grouped rows ----------
+  async function saveBooking() {
+    if (!selectedServices.length || !selectedProvider || !selectedDate || !selectedTime) return;
 
-    // match calendar flow: one group id per appointment
-    const bookingId = uuidv4();
-
-    // upsert client
-    let clientId = null;
-    if (client.email || client.mobile) {
-      let q = supabase.from("clients")
-        .select("id,first_name,last_name,email,mobile")
-        .limit(1);
-
-      if (client.email && client.mobile) {
-        q = q.or(`email.eq.${client.email},mobile.eq.${client.mobile}`);
-      } else if (client.email) {
-        q = q.eq("email", client.email);
-      } else {
-        q = q.eq("mobile", client.mobile);
-      }
-
-      const { data: found } = await q;
-
-      if (found?.length) {
-        clientId = found[0].id;
-
-        // fill in missing names if needed
-        if (!found[0].first_name || !found[0].last_name) {
-          await supabase
-            .from("clients")
-            .update({
-              first_name: found[0].first_name || client.first_name,
-              last_name:  found[0].last_name  || client.last_name,
-            })
-            .eq("id", clientId);
-        }
-      } else {
-        const { data: created } = await supabase
-          .from("clients")
-          .insert([{
-            first_name: client.first_name,
-            last_name:  client.last_name,
-            email:  client.email  || null,
-            mobile: client.mobile || null,
-          }])
-          .select("id")
-          .single();
-
-        clientId = created.id;
-      }
-    }
-
-    // race-safe overlap check
-    const { data: overlaps } = await supabase
-      .from("bookings")
-      .select("id")
-      .eq("resource_id", selectedProvider.id)
-      .lt("start", end.toISOString())
-      .gt("end",   start.toISOString());
-
-    if (overlaps?.length) {
-      alert("Sorry, that time was just taken. Please pick another slot.");
+    if (!client.first_name || !client.last_name || (!client.email && !client.mobile)) {
+      alert("Please enter your first & last name, and at least email or mobile.");
       return;
     }
 
-    // create booking
-    const payload = {
-      booking_id: bookingId,
-      title: selectedService.name,
-      category: selectedService.category || null,
-      client_id: clientId,
-      client_name: `${client.first_name} ${client.last_name}`.trim(),
-      resource_id: selectedProvider.id,
-      start: start.toISOString(),
-      end:   end.toISOString(),
-      duration: dur,
-      price: selectedService.base_price ?? null,
-      status: "confirmed",
-    };
+    const normalizePhone = (s = "") => String(s).replace(/[^\d]/g, "");
 
-    const { data: ins } = await supabase
-      .from("bookings")
-      .insert([payload])
-      .select("*")
-      .single();
-
-    // Write to booking_logs (same as calendar flow), but mark as Online Booking
+    setSaving(true);
     try {
-      await SaveBookingsLog({
-        action: "created",
+      const first = String(client.first_name || "").trim();
+      const last = String(client.last_name || "").trim();
+      const email = String(client.email || "").trim().toLowerCase();
+      const mobileN = normalizePhone(client.mobile || "");
+
+      const start = new Date(selectedDate);
+      start.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
+
+      const rows = [];
+      let cursor = new Date(start);
+
+      for (const svc of selectedServices) {
+        const { duration: d, price: p } = getEffectivePD(svc);
+        const sStart = new Date(cursor);
+        const sEnd = addMinutes(sStart, Number(d || 0));
+
+        rows.push({
+          title: svc.name,
+          category: svc.category || null,
+          duration: Number(d || 0),
+          price: p,
+          start: sStart.toISOString(),
+          end: sEnd.toISOString(),
+          service_id: svc.id,
+        });
+
+        cursor = sEnd;
+      }
+
+      if (hasChemical) {
+        const sStart = new Date(cursor);
+        const sEnd = addMinutes(sStart, 30);
+        rows.push({
+          title: "Processing time",
+          category: "Processing",
+          duration: 30,
+          price: null,
+          start: sStart.toISOString(),
+          end: sEnd.toISOString(),
+          service_id: null,
+        });
+        cursor = sEnd;
+      }
+
+      const totalStartISO = rows[0].start;
+      const totalEndISO = rows[rows.length - 1].end;
+      const bookingId = uuidv4();
+
+      // ---------- find-or-create client ----------
+      let clientId = null;
+
+      if (email) {
+        const { data: byEmail, error: findEmailErr } = await supabase
+          .from("clients")
+          .select("id, first_name, last_name, email, mobile")
+          .ilike("email", email)
+          .limit(1);
+        if (findEmailErr) throw findEmailErr;
+
+        if (byEmail?.length) {
+          clientId = byEmail[0].id;
+
+          const patch = {};
+          if (!byEmail[0].first_name && first) patch.first_name = first;
+          if (!byEmail[0].last_name && last) patch.last_name = last;
+          if (!byEmail[0].mobile && mobileN) patch.mobile = mobileN;
+
+          if (Object.keys(patch).length) {
+            const { error: updErr } = await supabase
+              .from("clients")
+              .update(patch)
+              .eq("id", clientId);
+            if (updErr) throw updErr;
+          }
+        } else {
+          const { data: created, error: insErr } = await supabase
+            .from("clients")
+            .insert([
+              {
+                first_name: first,
+                last_name: last || null,
+                email: email,
+                mobile: mobileN || null,
+              },
+            ])
+            .select("id")
+            .single();
+          if (insErr) throw insErr;
+          clientId = created.id;
+        }
+      } else {
+        const { data: candidates, error: findMobErr } = await supabase
+          .from("clients")
+          .select("id, first_name, last_name, mobile")
+          .or(`mobile.eq.${mobileN},mobile.ilike.%${mobileN}%`)
+          .limit(20);
+        if (findMobErr) throw findMobErr;
+
+        const existing = (candidates || []).find(
+          (r) =>
+            normalizePhone(r.mobile || "") === mobileN &&
+            String(r.first_name || "").trim().toLowerCase() === first.toLowerCase() &&
+            String(r.last_name || "").trim().toLowerCase() === last.toLowerCase()
+        );
+
+        if (existing) {
+          clientId = existing.id;
+        } else {
+          const { data: created, error: insErr } = await supabase
+            .from("clients")
+            .insert([
+              {
+                first_name: first,
+                last_name: last || null,
+                email: null,
+                mobile: mobileN,
+              },
+            ])
+            .select("id")
+            .single();
+          if (insErr) throw insErr;
+          clientId = created.id;
+        }
+      }
+
+      // race-safe overlap check across full span
+      const { data: overlaps, error: overlapErr } = await supabase
+        .from("bookings")
+        .select("id")
+        .eq("resource_id", selectedProvider.id)
+        .lt("start", totalEndISO)
+        .gt("end", totalStartISO);
+      if (overlapErr) throw overlapErr;
+      if (overlaps?.length) {
+        alert("Sorry, that time was just taken. Please pick another slot.");
+        return;
+      }
+
+      // create grouped rows
+      const payloadRows = rows.map((r, idx) => ({
         booking_id: bookingId,
+        title: r.title,
+        category: r.category,
         client_id: clientId,
-        client_name: `${client.first_name} ${client.last_name}`.trim(),
-        stylist_id: selectedProvider.id,
-        stylist_name: selectedProvider.name,
-        service: {
-          name: selectedService.name,
-          category: selectedService.category,
-          price: selectedService.base_price,
-          duration: dur,
-        },
-        start: start.toISOString(),
-        end:   end.toISOString(),
-        logged_by: null,            // public site
-        reason: "Online Booking",   // correct label
-        before_snapshot: null,
-        after_snapshot: payload,
-        skipStaffLookup: true,      // prevent /staff?UID=… queries
-      });
-    } catch (e) {
-      console.warn("Booking saved, but log write failed:", e?.message);
-    }
+        client_name: `${first} ${last}`.trim(),
+        resource_id: selectedProvider.id,
+        start: r.start,
+        end: r.end,
+        duration: r.duration,
+        price: r.price,
+        status: "confirmed",
+        service_id: r.service_id,
+        sort_index: idx,
+      }));
 
-    // save locally
-    const savedPack = {
-      booking: ins,
-      client:   { id: clientId, ...client },
-      provider: selectedProvider,
-      service:  selectedService,
-    };
-    setSaved(savedPack);
+      const inserted = await safeInsertBookings(payloadRows);
 
-    // 🔔 send emails via Netlify Function (non-blocking for UI)
-    if (client.email) {
+      // log summary
       try {
-        await sendBookingEmails({
-          customerEmail: client.email,
-          businessEmail: BUSINESS.notifyEmail,
-          business: BUSINESS,
-          booking: ins,
-          service: selectedService,
-          provider: selectedProvider,
-          notes: (client.notes || "").trim(),
+        await SaveBookingsLog({
+          action: "created",
+          booking_id: bookingId,
+          client_id: clientId,
+          client_name: `${first} ${last}`.trim(),
+          stylist_id: selectedProvider.id,
+          stylist_name: selectedProvider.name || selectedProvider.title || "Unknown",
+          service: {
+            name:
+              serviceNameForEmail ||
+              selectedServices[0]?.name ||
+              "Multiple services",
+            category: "Multi",
+            price: totalPrice,
+            duration: totalDuration,
+          },
+          start: totalStartISO,
+          end: totalEndISO,
+          logged_by: null,
+          reason: "Online Booking (multi)",
+          before_snapshot: null,
+          after_snapshot: inserted?.[0] || null,
+          skipStaffLookup: true,
         });
       } catch (e) {
-        console.error("[email] failed:", e);
+        console.warn("Booking saved, but log write failed:", e?.message);
       }
+
+      // emails (combined)
+      if (email) {
+        try {
+          await sendBookingEmails({
+            customerEmail: email,
+            businessEmail: BUSINESS.notifyEmail,
+            business: BUSINESS,
+            booking: { start: totalStartISO, end: totalEndISO, client_name: `${first} ${last}`.trim() },
+            service: { name: serviceNameForEmail },
+            provider: selectedProvider,
+            notes: (client.notes || "").trim(),
+            customerName: `${first} ${last}`.trim(),
+            client: { first_name: first, last_name: last },
+            bookingClientName: `${first} ${last}`.trim(),
+            customerPhone: mobileN, // include phone for salon email
+          });
+        } catch (e) {
+          console.error("[email] failed:", e);
+        }
+      }
+
+      alert("Thanks! Your booking request has been sent.");
+      resetBookingFlow();
+    } catch (e) {
+      console.error("saveBooking failed", e);
+      alert("Couldn't save booking. Please try again.");
+    } finally {
+      setSaving(false);
     }
-
-    setStep(4);
-  } catch (e) {
-    console.error("saveBooking failed", e);
-    alert("Couldn't save booking. Please try again.");
-  } finally {
-    setSaving(false);
   }
-}
 
-
+  // HEADER (logo 4× larger)
   const header = (
     <div className="sticky top-0 z-10 bg-black/90 backdrop-blur border-b border-neutral-800">
-      <div className="max-w-6xl mx-auto px-4 py-4 flex items-center gap-3">
-        <img src={BUSINESS.logoSrc} alt={BUSINESS.name} className="w-10 h-10 rounded-full object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+      <div className="max-w-6xl mx-auto px-4 py-4 flex items-center gap-4">
+        <img
+          src={BUSINESS.logoSrc}
+          alt={BUSINESS.name}
+          className="w-40 h-40 rounded-full object-cover"
+          onError={(e) => {
+            e.currentTarget.src = "/edge-logo.png";
+          }}
+        />
         <div>
           <h1 className="text-2xl font-semibold text-white">{BUSINESS.name}</h1>
           <p className="text-sm text-gray-300">{BUSINESS.address}</p>
@@ -264,43 +544,289 @@ async function saveBooking() {
     </div>
   );
 
+  // ---------- Accordion Services (replaces ServiceList) ----------
+  const AccordionServices = () => {
+    // group by category
+    const grouped = useMemo(() => {
+      const map = new Map();
+      for (const s of services) {
+        const cat = s.category || "Other";
+        if (!map.has(cat)) map.set(cat, []);
+        map.get(cat).push(s);
+      }
+      return Array.from(map.entries()).sort(([a], [b]) =>
+        String(a).localeCompare(String(b))
+      );
+    }, [services]);
+
+    const [openCat, setOpenCat] = useState(() =>
+      grouped.length ? grouped[0][0] : null
+    );
+    const catRefs = useRef({});
+
+    const toggleCat = (cat) => {
+      setOpenCat((curr) => {
+        const next = curr === cat ? null : cat;
+        requestAnimationFrame(() => {
+          const el = catRefs.current[cat];
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        });
+        return next;
+      });
+    };
+
+    return (
+      <div className="space-y-3">
+        {grouped.map(([cat, list]) => (
+          <div
+            key={cat}
+            ref={(el) => (catRefs.current[cat] = el)}
+            className="rounded-xl border border-neutral-800"
+          >
+            <button
+              type="button"
+              onClick={() => toggleCat(cat)}
+              className="w-full flex items-center justify-between px-4 py-3 bg-neutral-900/70 hover:bg-neutral-900 text-left"
+            >
+              <span className="font-medium">
+                {cat}
+                {cat.toLowerCase().includes("treat") && (
+                  <span className="ml-2 text-[11px] px-2 py-0.5 rounded bg-amber-600/30 text-amber-300 align-middle">
+                    chemical
+                  </span>
+                )}
+              </span>
+              <span className="text-sm text-gray-400">
+                {openCat === cat ? "Hide" : "Show"}
+              </span>
+            </button>
+
+            {openCat === cat && (
+              <div className="relative z-10 px-3 pb-3 bg-neutral-950/40">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 w-full">
+                  {list.map((svc) => {
+                    const { duration, price } = getEffectivePD(svc);
+                    const selected = selectedServices.some((x) => x.id === svc.id);
+                    const dLabel = selectedProvider ? minsToLabel(duration) : "—";
+                    const pLabel =
+                      selectedProvider && !isTBA(price) ? money(price) : "TBA";
+                    return (
+                      <button
+                        key={svc.id}
+                        onClick={() => toggleService(svc)}
+                        className={`text-left rounded-xl border px-4 py-3 hover:bg-neutral-800/60 transition w-full
+                          ${
+                            selected
+                              ? "border-amber-500 bg-neutral-800/70"
+                              : "border-neutral-800 bg-neutral-900/40"
+                          }`}
+                      >
+                        <div className="min-w-0">
+                          <p className="font-medium break-words">
+                            {svc.name}
+                            {isChemicalService(svc) && (
+                              <span className="ml-2 text-[11px] px-2 py-0.5 rounded bg-amber-600/30 text-amber-300">
+                                chemical
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs text-gray-400">
+                            {dLabel} • {pLabel}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  // CART SECTION (right side, wider; Continue at top)
+  const CartSection = () => {
+    if (!selectedServices.length) return null;
+
+    return (
+      <section className="w-full min-w-0 bg-neutral-900/90 rounded-2xl shadow p-5 border-2 border-amber-600/40">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-semibold text-white">Your services</h3>
+          <button
+            className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-sm whitespace-nowrap"
+            disabled={!selectedServices.length}
+            onClick={() => setStep(2)}
+          >
+            Continue →
+          </button>
+        </div>
+
+        {!selectedProvider && (
+          <p className="mb-3 text-xs text-amber-300">
+            Select a stylist to see exact time and price.
+          </p>
+        )}
+
+        <ul className="space-y-3">
+          {selectedServices.map((svc) => {
+            const { duration, price } = getEffectivePD(svc);
+            const dLabel = selectedProvider ? minsToLabel(duration) : "—";
+            const pLabel =
+              selectedProvider && !isTBA(price) ? money(price) : "TBA";
+            return (
+              <li
+                key={svc.id}
+                className="flex items-start justify-between gap-3 bg-neutral-800/70 rounded-xl px-4 py-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-base font-medium text-white break-words">
+                    {svc.name}
+                    {isChemicalService(svc) && (
+                      <span className="ml-2 text-xs px-2 py-0.5 rounded bg-amber-600/30 text-amber-300">
+                        chemical
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-sm text-gray-300">
+                    {dLabel} {pLabel !== "TBA" ? "• " + pLabel : "• TBA"}
+                  </p>
+                </div>
+                <button
+                  aria-label={`Remove ${svc.name}`}
+                  className="text-white/80 hover:text-white text-lg leading-none shrink-0"
+                  onClick={() => toggleService(svc)}
+                  title="Remove"
+                >
+                  ×
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+
+        {hasChemical && selectedProvider && (
+          <div className="mt-3 text-sm text-amber-300">
+            + 30m processing time will be added
+          </div>
+        )}
+
+        <div className="mt-5 border-t border-neutral-700 pt-4">
+          <div className="flex items-center justify-between text-base">
+            <span className="text-gray-300 whitespace-nowrap">Total time</span>
+            <span className="text-white font-medium text-right">
+              {selectedProvider ? minsToLabel(totalDuration) : "—"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between text-lg mt-2">
+            <span className="text-gray-300 whitespace-nowrap">Total price</span>
+            <span className="text-white font-semibold text-right">
+              {hasUnknownPrice ? "TBA" : money(totalPrice)}
+            </span>
+          </div>
+        </div>
+
+        {hasUnknownPrice && (
+          <p className="mt-3 text-xs text-gray-400">
+            Prices for TBA services will be discussed during the appointment.
+          </p>
+        )}
+      </section>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-black text-white text-[15px]">
       {header}
-      <div className="max-w-6xl mx-auto px-4 py-6 grid grid-cols-1 md:grid-cols-4 gap-6">
-        <aside className="md:col-span-1">
+
+      {/* Mobile: pin the cart right under the header (top of page) */}
+      <div className="max-w-6xl mx-auto px-4 pt-6 lg:hidden">
+        <CartSection />
+      </div>
+
+      {/* Desktop grid: sidebar / main / wide cart */}
+      <div className="max-w-6xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-[220px_1fr_420px] gap-6">
+        {/* Left: Stepper */}
+        <aside>
           <Stepper
-            step={step} setStep={setStep}
-            selectedService={selectedService}
+            step={step}
+            setStep={setStep}
+            selectedService={lastPickedService}
             selectedProvider={selectedProvider}
             selectedDate={selectedDate}
             selectedTime={selectedTime}
           />
         </aside>
 
-        <main className="md:col-span-3 space-y-6">
+        {/* Center: Steps */}
+        <main className="space-y-6">
           {step === 1 && (
-            <ServiceList
-              services={services}
-              selectedService={selectedService}
-              onSelect={(svc) => { setSelectedService(svc); setStep(2); }}
-            />
+            <section className="bg-neutral-900/80 rounded-2xl shadow p-5 border border-neutral-800">
+              <h2 className="font-semibold mb-4 text-xl text-white">
+                Select services
+              </h2>
+
+              {/* Accordion categories */}
+              <AccordionServices />
+
+              <div className="mt-5 flex items-center justify-between">
+                <span className="text-sm text-gray-300">
+                  {selectedServices.length > 0
+                    ? selectedProvider
+                      ? `${minsToLabel(totalDuration)} • ${
+                          hasUnknownPrice ? "TBA" : money(totalPrice)
+                        }`
+                      : "Pick a stylist to see time & price"
+                    : "Choose one or more services"}
+                </span>
+                <button
+                  className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40"
+                  disabled={!selectedServices.length}
+                  onClick={() => setStep(2)}
+                >
+                  Continue →
+                </button>
+              </div>
+
+              {(hasUnknownPrice || !selectedProvider) && selectedServices.length > 0 && (
+                <p className="mt-2 text-xs text-gray-400">
+                  Prices for TBA services will be discussed during the appointment.
+                </p>
+              )}
+            </section>
           )}
 
           {step === 2 && (
-            <ProviderList
-              providers={providers}
-              selectedProvider={selectedProvider}
-              onSelect={setSelectedProvider}
-              onNext={() => setStep(3)}
-            />
+            <section>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-semibold text-xl">Select a stylist</h2>
+                <button
+                  className="text-sm text-white/80 hover:text-white underline"
+                  onClick={() => setStep(1)}
+                >
+                  + Add/remove services
+                </button>
+              </div>
+
+              <ProviderList
+                providers={providers}
+                selectedProvider={selectedProvider}
+                onSelect={(p) => {
+                  setSelectedProvider(p);
+                  setSelectedDate(null);
+                  setSelectedTime(null);
+                }}
+                onNext={() => setStep(3)}
+              />
+            </section>
           )}
 
           {step === 3 && (
             <CalendarSlots
               viewDate={viewDate}
               setViewDate={setViewDate}
-              selectedService={selectedService}
+              selectedService={lastPickedService}
               selectedProvider={selectedProvider}
               selectedDate={selectedDate}
               setSelectedDate={setSelectedDate}
@@ -320,13 +846,26 @@ async function saveBooking() {
               saving={saving}
               saved={saved}
               disabled={
-                saving || !selectedService || !selectedProvider || !selectedDate || !selectedTime ||
-                !client.first_name || !client.last_name || (!client.email && !client.mobile)
+                saving ||
+                !selectedServices.length ||
+                !selectedProvider ||
+                !selectedDate ||
+                !selectedTime ||
+                !client.first_name ||
+                !client.last_name ||
+                (!client.email && !client.mobile)
               }
               onSave={saveBooking}
             />
           )}
         </main>
+
+        {/* Right: Cart (sticky on desktop) */}
+        <aside className="hidden lg:block">
+          <div className="sticky top-24">
+            <CartSection />
+          </div>
+        </aside>
       </div>
 
       <footer className="max-w-6xl mx-auto px-4 py-10 text-center text-xs text-gray-400">

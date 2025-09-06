@@ -3,3 +3,8 @@ dist/
 .env
 # Local Netlify folder
 .netlify
+
+# VS Code / extensions local history
+.history/
+**/.history/
+

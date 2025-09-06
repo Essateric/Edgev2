@@ -1,96 +1,141 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { supabase } from "../supabaseClient";
 
-export default function EditServicesModal({
-  staff,
-  servicesList,
-  onClose,
-}) {
-  const [staffServices, setStaffServices] = useState([]);
-  const [categoryCollapse, setCategoryCollapse] = useState({});
+export default function EditServicesModal({ staff, servicesList, onClose }) {
+  const [rows, setRows] = useState({}); // { [service_id]: { checked, price, mins } }
+  const categories = useMemo(
+    () => Array.from(new Set(servicesList.map((s) => s.category || "Uncategorized"))),
+    [servicesList]
+  );
+  const [collapsed, setCollapsed] = useState({});
 
   useEffect(() => {
-    fetchStaffServices();
-  }, []);
+    let active = true;
+    (async () => {
+      const { data, error } = await supabase
+        .from("staff_services")
+        .select("service_id, price, duration")
+        .eq("staff_id", staff.id);
 
-  const fetchStaffServices = async () => {
-    const { data } = await supabase
+      if (!active) return;
+      if (error) {
+        console.error("Load staff_services failed:", error.message);
+        setRows({});
+        return;
+      }
+
+      // Seed map from DB rows
+      const map = {};
+      for (const r of data || []) {
+        const mins = Number(r.duration) || 0;
+        map[r.service_id] = {
+          checked: true,
+          price: r.price ?? 0,
+          mins,
+        };
+      }
+      setRows(map);
+    })();
+
+    return () => { active = false; };
+  }, [staff.id]);
+
+  const onCheck = (service_id, checked) =>
+    setRows(prev => ({ ...prev, [service_id]: { ...(prev[service_id] || {}), checked } }));
+
+  const onPrice = (service_id, value) =>
+    setRows(prev => ({ ...prev, [service_id]: { ...(prev[service_id] || { checked: true }), price: value } }));
+
+  const onHrs = (service_id, hours) =>
+    setRows(prev => {
+      const cur = prev[service_id] || { checked: true, mins: 0 };
+      const total = (Number(hours) || 0) * 60 + (Number(cur.mins) % 60 || 0);
+      return { ...prev, [service_id]: { ...cur, mins: total } };
+    });
+
+  const onMins = (service_id, minutes) =>
+    setRows(prev => {
+      const cur = prev[service_id] || { checked: true, mins: 0 };
+      const h = Math.floor((Number(cur.mins) || 0) / 60);
+      const total = h * 60 + (Number(minutes) || 0);
+      return { ...prev, [service_id]: { ...cur, mins: total } };
+    });
+
+  const save = async () => {
+    // 1) What exists now?
+    const { data: existing, error: loadErr } = await supabase
       .from("staff_services")
-      .select("*")
+      .select("service_id")
       .eq("staff_id", staff.id);
-    setStaffServices(data || []);
-  };
 
-  const getStaffService = (serviceId) =>
-    staffServices.find((s) => s.service_id === serviceId) || {};
-
-  const handleServiceChange = (serviceId, field, value) => {
-    setStaffServices((prev) =>
-      prev.some((ss) => ss.service_id === serviceId)
-        ? prev.map((ss) =>
-            ss.service_id === serviceId ? { ...ss, [field]: value } : ss
-          )
-        : [
-            ...prev,
-            { staff_id: staff.id, service_id: serviceId, [field]: value },
-          ]
-    );
-  };
-
-  const saveStaffServices = async () => {
-    const toUpsert = staffServices
-      .filter((s) => s.price && s.duration)
-      .map((s) => ({
-        ...s,
-        staff_id: staff.id,
-        price: Number(s.price),
-        duration: Number(s.duration),
-      }));
-
-    if (toUpsert.length === 0) {
-      alert("Nothing to save!");
+    if (loadErr) {
+      alert("Failed to load current assignments: " + loadErr.message);
       return;
     }
 
-    const { error } = await supabase
-      .from("staff_services")
-      .upsert(toUpsert, { onConflict: ["staff_id", "service_id"] });
+    const existingSet = new Set((existing || []).map(r => r.service_id));
+    const wantUpsert = Object.entries(rows)
+      .filter(([, v]) => v?.checked)
+      .map(([service_id, v]) => ({
+        staff_id: staff.id,
+        service_id,
+        price: Number(v.price) || 0,
+        duration: Number(v.mins) || 0,
+        active: true
+      }));
 
-    if (error) {
-      console.error("Supabase upsert error:", error.message);
-      alert("Failed to save: " + error.message);
-    } else {
-      onClose();
+    // 2) Upsert assigned
+    if (wantUpsert.length) {
+      const { error: upErr } = await supabase
+        .from("staff_services")
+        .upsert(wantUpsert, { onConflict: ["staff_id", "service_id"] });
+      if (upErr) {
+        alert("Save failed: " + upErr.message);
+        return;
+      }
     }
+
+    // 3) Delete unassigned
+    const uncheckedIds = Object.entries(rows)
+      .filter(([, v]) => !v?.checked)
+      .map(([service_id]) => service_id);
+    const toDelete = [...existingSet].filter(id => uncheckedIds.includes(id));
+
+    if (toDelete.length) {
+      const { error: delErr } = await supabase
+        .from("staff_services")
+        .delete()
+        .eq("staff_id", staff.id)
+        .in("service_id", toDelete);
+      if (delErr) {
+        alert("Delete failed: " + delErr.message);
+        return;
+      }
+    }
+
+    alert("✅ Services saved for " + (staff?.name || "stylist"));
+    onClose?.();
   };
 
-  const categories = Array.from(
-    new Set(servicesList.map((s) => s.category))
-  );
-
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto p-8">
-        <h3 className="text-xl font-bold mb-4">
-          Edit Services for {staff?.name}
-        </h3>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
+        <h3 className="text-xl font-bold mb-4">Edit Services for {staff?.name}</h3>
+
         {categories.map((cat) => (
           <div key={cat} className="mb-4">
             <button
-              onClick={() =>
-                setCategoryCollapse((prev) => ({
-                  ...prev,
-                  [cat]: !prev[cat],
-                }))
-              }
+              onClick={() => setCollapsed((p) => ({ ...p, [cat]: !p[cat] }))}
               className="w-full text-left text-lg font-semibold text-bronze mb-2"
             >
-              {categoryCollapse[cat] ? "▼" : "▶"} {cat}
+              {collapsed[cat] ? "▼" : "▶"} {cat}
             </button>
-            {!categoryCollapse[cat] && (
+
+            {!collapsed[cat] && (
               <table className="w-full text-sm border">
                 <thead>
                   <tr>
+                    <th className="text-left px-2 py-1">On</th>
                     <th className="text-left px-2 py-1">Service</th>
                     <th className="text-left px-2 py-1">Price (£)</th>
                     <th className="text-left px-2 py-1">Hrs</th>
@@ -98,93 +143,62 @@ export default function EditServicesModal({
                   </tr>
                 </thead>
                 <tbody>
-                  {servicesList
-                    .filter((s) => s.category === cat)
-                    .map((service) => {
-                      const sServ = getStaffService(service.id);
-                      const mins = sServ.duration
-                        ? Number(sServ.duration) % 60
-                        : "";
-                      const hrs = sServ.duration
-                        ? Math.floor(Number(sServ.duration) / 60)
-                        : "";
-                      return (
-                        <tr key={service.id}>
-                          <td className="px-2">{service.name}</td>
-                          <td>
-                            <input
-                              className="w-20 border px-2 py-1 rounded"
-                              type="number"
-                              value={sServ.price || ""}
-                              onChange={(e) =>
-                                handleServiceChange(
-                                  service.id,
-                                  "price",
-                                  e.target.value
-                                )
-                              }
-                              min="0"
-                              step="0.01"
-                            />
-                          </td>
-                          <td>
-                            <input
-                              className="w-14 border px-2 py-1 rounded"
-                              type="number"
-                              value={hrs}
-                              onChange={(e) => {
-                                const hours = Number(e.target.value) || 0;
-                                const minutes = mins ? Number(mins) : 0;
-                                const total = hours * 60 + minutes;
-                                handleServiceChange(
-                                  service.id,
-                                  "duration",
-                                  total
-                                );
-                              }}
-                              min="0"
-                            />
-                          </td>
-                          <td>
-                            <input
-                              className="w-14 border px-2 py-1 rounded"
-                              type="number"
-                              value={mins}
-                              onChange={(e) => {
-                                const minutes = Number(e.target.value) || 0;
-                                const hours = hrs ? Number(hrs) : 0;
-                                const total = hours * 60 + minutes;
-                                handleServiceChange(
-                                  service.id,
-                                  "duration",
-                                  total
-                                );
-                              }}
-                              min="0"
-                              max="59"
-                            />
-                          </td>
-                        </tr>
-                      );
-                    })}
+                  {servicesList.filter(s => (s.category || "Uncategorized") === cat).map((svc) => {
+                    const rec = rows[svc.id] || {};
+                    const total = Number(rec.mins) || 0;
+                    const hrs = Math.floor(total / 60);
+                    const mins = total % 60;
+                    return (
+                      <tr key={svc.id}>
+                        <td className="px-2">
+                          <input
+                            type="checkbox"
+                            checked={!!rec.checked}
+                            onChange={(e) => onCheck(svc.id, e.target.checked)}
+                          />
+                        </td>
+                        <td className="px-2">{svc.name}</td>
+                        <td className="px-2">
+                          <input
+                            type="number"
+                            className="w-24 border px-2 py-1 rounded"
+                            value={rec.price ?? ""}
+                            onChange={(e) => onPrice(svc.id, e.target.value)}
+                            min="0"
+                            step="0.01"
+                          />
+                        </td>
+                        <td className="px-2">
+                          <input
+                            type="number"
+                            className="w-16 border px-2 py-1 rounded"
+                            value={hrs || ""}
+                            onChange={(e) => onHrs(svc.id, e.target.value)}
+                            min="0"
+                          />
+                        </td>
+                        <td className="px-2">
+                          <input
+                            type="number"
+                            className="w-16 border px-2 py-1 rounded"
+                            value={mins || ""}
+                            onChange={(e) => onMins(svc.id, e.target.value)}
+                            min="0"
+                            max="59"
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
           </div>
         ))}
+
         <div className="flex justify-end gap-2 mt-6">
-          <button
-            onClick={onClose}
-            className="bg-gray-300 px-4 py-2 rounded"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={saveStaffServices}
-            className="bg-bronze text-white px-4 py-2 rounded"
-          >
-            Save Services
-          </button>
+          <button onClick={onClose} className="bg-gray-300 px-4 py-2 rounded">Cancel</button>
+          <button onClick={save} className="bg-bronze text-white px-4 py-2 rounded">Save Services</button>
         </div>
       </div>
     </div>

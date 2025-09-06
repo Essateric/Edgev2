@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import Card from "../components/Card.jsx";
 import Button from "../components/Button.jsx";
 import toast from "react-hot-toast";
@@ -6,7 +6,7 @@ import { supabase } from "../supabaseClient";
 
 export default function ManageServices({ staffId }) {
   const [services, setServices] = useState([]);
-  const [customData, setCustomData] = useState({});
+  const [customData, setCustomData] = useState({}); // kept (unused) to preserve existing logic surface
   const [saving, setSaving] = useState(false);
   const [newServiceName, setNewServiceName] = useState("");
   const [newCategory, setNewCategory] = useState("Uncategorized");
@@ -16,6 +16,10 @@ export default function ManageServices({ staffId }) {
   const [selectedService, setSelectedService] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [staffList, setStaffList] = useState([]);
+
+  // NEW: service ⇄ stylist assignments for the modal
+  // shape: { [staff_id]: { checked: boolean, price: number|string, mins: number } }
+  const [assignments, setAssignments] = useState({});
 
   const categories = [
     "Cut and Finish",
@@ -31,17 +35,20 @@ export default function ManageServices({ staffId }) {
       toast.error("Failed to fetch services");
       console.error(error);
     } else {
-      setServices(data);
+      setServices(data || []);
     }
   };
 
   const fetchStaff = async () => {
-    const { data, error } = await supabase.from("staff").select("*");
+    const { data, error } = await supabase
+      .from("staff")
+      .select("id,name,permission,email")
+      .order("name");
     if (error) {
       toast.error("Failed to fetch staff");
       console.error(error);
     } else {
-      setStaffList(data);
+      setStaffList(data || []);
     }
   };
 
@@ -62,6 +69,7 @@ export default function ManageServices({ staffId }) {
         category: newCategory,
         base_price: Number(newBasePrice),
         base_duration: Number(newBaseDuration),
+        // pricing JSON is no longer used; leaving it harmlessly empty
         pricing: {},
       },
     ]);
@@ -79,87 +87,135 @@ export default function ManageServices({ staffId }) {
     }
   };
 
-  const handleStylistChange = (stylistId, field, value) => {
-    setSelectedService((prev) => {
-      const existing = prev.pricing?.[stylistId] || {
-        basePrice: 0,
-        duration: { hours: 0, minutes: 0 },
-      };
+  // ===== NEW: Join-table helpers (for the modal) =====
+  const setAssigned = (staff_id, checked) =>
+    setAssignments((prev) => ({
+      ...prev,
+      [staff_id]: { ...(prev[staff_id] || {}), checked },
+    }));
 
-      const updated =
-        field === "duration"
-          ? {
-              ...existing,
-              duration: { ...existing.duration, ...value },
-            }
-          : {
-              ...existing,
-              [field]: Number(value),
-            };
+  const setPrice = (staff_id, value) =>
+    setAssignments((prev) => ({
+      ...prev,
+      [staff_id]: { ...(prev[staff_id] || { checked: true }), price: value },
+    }));
 
-      return {
-        ...prev,
-        pricing: {
-          ...prev.pricing,
-          [stylistId]: updated,
-        },
-      };
+  const setHrs = (staff_id, hours) =>
+    setAssignments((prev) => {
+      const cur = prev[staff_id] || { checked: true, mins: 0 };
+      const total = (Number(hours) || 0) * 60 + ((Number(cur.mins) || 0) % 60);
+      return { ...prev, [staff_id]: { ...cur, mins: total } };
     });
+
+  const setMins = (staff_id, minutes) =>
+    setAssignments((prev) => {
+      const cur = prev[staff_id] || { checked: true, mins: 0 };
+      const h = Math.floor((Number(cur.mins) || 0) / 60);
+      const total = h * 60 + (Number(minutes) || 0);
+      return { ...prev, [staff_id]: { ...cur, mins: total } };
+    });
+
+  // Open modal and load current assignments from staff_services
+  const handleServiceClick = async (service) => {
+    setSelectedService(service);
+    setShowModal(true);
+
+    const { data, error } = await supabase
+      .from("staff_services")
+      .select("staff_id, price, duration")
+      .eq("service_id", service.id);
+
+    if (error) {
+      console.error("Failed to load service assignments:", error);
+      setAssignments({});
+      return;
+    }
+
+    const map = {};
+    for (const row of data || []) {
+      map[row.staff_id] = {
+        checked: true,
+        price: row.price ?? 0,
+        mins: Number(row.duration) || 0,
+      };
+    }
+    setAssignments(map);
   };
 
+  // Save (upsert checked + delete unchecked)
   const handleSaveStylist = async () => {
     if (!selectedService?.id) return;
 
-    const cleanedPricing = {};
+    setSaving(true);
+    try {
+      // What exists now (for delete-diff)
+      const { data: existing, error: loadErr } = await supabase
+        .from("staff_services")
+        .select("staff_id")
+        .eq("service_id", selectedService.id);
 
-    for (const [staffId, pricing] of Object.entries(selectedService.pricing || {})) {
-      if (!pricing) continue;
+      if (loadErr) throw loadErr;
 
-      if (typeof pricing.duration === "number" && pricing.price != null) {
-        const hours = Math.floor(pricing.duration / 60);
-        const minutes = pricing.duration % 60;
+      const existingSet = new Set((existing || []).map((r) => r.staff_id));
 
-        cleanedPricing[staffId] = {
-          basePrice: pricing.price,
-          duration: { hours, minutes },
-        };
-      } else {
-        cleanedPricing[staffId] = {
-          basePrice: pricing.basePrice ?? 0,
-          duration: {
-            hours: pricing.duration?.hours ?? 0,
-            minutes: pricing.duration?.minutes ?? 0,
-          },
-        };
+      // Upserts
+      const upserts = Object.entries(assignments)
+        .filter(([, v]) => v?.checked)
+        .map(([staff_id, v]) => ({
+          staff_id,
+          service_id: selectedService.id,
+          price: Number(v.price) || 0,
+          duration: Number(v.mins) || 0,
+          active: true,
+        }));
+
+      if (upserts.length) {
+        const { error: upErr } = await supabase
+          .from("staff_services")
+          .upsert(upserts, { onConflict: ["staff_id", "service_id"] });
+        if (upErr) throw upErr;
       }
-    }
 
-    const { error } = await supabase
-      .from("services")
-      .update({ pricing: cleanedPricing })
-      .eq("id", selectedService.id);
+      // Deletes (those previously assigned but now unchecked)
+      const uncheckedStaff = Object.entries(assignments)
+        .filter(([, v]) => !v?.checked)
+        .map(([staff_id]) => staff_id);
 
-    if (error) {
-      console.error("Error saving stylist pricing:", error);
-      toast.error("Failed to save");
-    } else {
-      toast.success("Stylist pricing saved!");
+      const toDelete = [...existingSet].filter((id) =>
+        uncheckedStaff.includes(id)
+      );
+
+      if (toDelete.length) {
+        const { error: delErr } = await supabase
+          .from("staff_services")
+          .delete()
+          .eq("service_id", selectedService.id)
+          .in("staff_id", toDelete);
+        if (delErr) throw delErr;
+      }
+
+      toast.success("Saved!");
       setShowModal(false);
-      fetchServices();
+      fetchServices(); // optional refresh of list
+    } catch (e) {
+      console.error("Save failed:", e);
+      toast.error("Failed to save");
+    } finally {
+      setSaving(false);
     }
   };
 
-  const groupedServices = services.reduce((acc, service) => {
-    const cat = service.category || "Uncategorized";
-    if (!acc[cat]) acc[cat] = [];
-    acc[cat].push(service);
-    return acc;
-  }, {});
-
-  const handleServiceClick = (service) => {
-    setSelectedService(service);
-    setShowModal(true);
-  };
+  // Group services by category (unchanged)
+  const groupedServices = useMemo(
+    () =>
+      services.reduce((acc, service) => {
+        const cat = service.category || "Uncategorized";
+        if (!acc[cat]) acc[cat] = [];
+        acc[cat].push(service);
+        return acc;
+      }, {}),
+    [services]
+  );
 
   return (
     <div className="p-4">
@@ -222,117 +278,123 @@ export default function ManageServices({ staffId }) {
         </Button>
       </Card>
 
-      {/* Grouped Services */}
-      <Card className="mb-4">
-        <h2 className="text-lg font-semibold mb-4 text-bronze">Current Services</h2>
-        {Object.entries(groupedServices).map(([category, services]) => (
-          <div key={category} className="mb-4 border border-gray-200  placeholder:rounded-lg">
-            <button
-              onClick={() =>
-                setOpenCategories((prev) => ({
-                  ...prev,
-                  [category]: !prev[category],
-                }))
-              }
-              className="w-full text-left px-4 py-3 font-semibold text-chrome bg-bronze hover:text-white hover:bg-amber-600 rounded-t-md"
-            >
-              {category}
-              <span className="float-right text-gray-400">
-                {openCategories[category] ? "−" : "+"}
-              </span>
-            </button>
+{/* Grouped Services */}
+<Card className="mb-4">
+  <h2 className="text-lg font-semibold mb-4 text-bronze">Current Services</h2>
 
-            <div
-              className={`transition-all duration-300 overflow-hidden ${
-                openCategories[category] ? "max-h-[1000px] p-4" : "max-h-0 p-0"
-              }`}
-            >
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                {services.map((service) => (
-                  <button
-                    key={service.id}
-                    onClick={() => handleServiceClick(service)}
-                    className="bg-white text-left border border-gray-200 rounded-lg p-3 shadow-sm hover:shadow-md transition"
-                  >
-                    <p className="text-sm text-bronze font-medium">{service.name}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
+  {/* ⬇️ 3-column grid for categories (1 col on mobile, 2 on md, 3 on xl) */}
+  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+    {Object.entries(groupedServices).map(([category, services]) => (
+      <div
+        key={category}
+        className="border border-gray-200 rounded-lg bg-white overflow-hidden"
+      >
+        {/* Category header (click to expand/collapse) */}
+        <button
+          onClick={() =>
+            setOpenCategories((prev) => ({
+              ...prev,
+              [category]: !prev[category],
+            }))
+          }
+          className="w-full text-left px-4 py-3 font-semibold text-chrome bg-bronze hover:text-white hover:bg-amber-600 flex items-center justify-between"
+        >
+          <span>{category}</span>
+          <span className="text-gray-100/80">{openCategories[category] ? "−" : "+"}</span>
+        </button>
+
+        {/* Category body */}
+        <div className={openCategories[category] ? "p-4 block" : "hidden"}>
+          {/* Services inside each category still shown as a small grid */}
+          <div className="grid grid-cols-1 gap-3">
+            {services.map((service) => (
+              <button
+                key={service.id}
+                onClick={() => handleServiceClick(service)}
+                className="bg-white text-left border border-gray-200 rounded-lg p-3 shadow-sm hover:shadow-md transition"
+              >
+                <p className="text-sm text-bronze font-medium">{service.name}</p>
+              </button>
+            ))}
           </div>
-        ))}
-      </Card>
+        </div>
+      </div>
+    ))}
+  </div>
+</Card>
+
 
       {/* Modal */}
       {showModal && selectedService && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-2xl shadow-xl overflow-y-auto max-h-[90vh]">
             <h3 className="text-lg font-semibold text-chrome mb-4">
-              {selectedService.name} — Stylist Pricing
+              {selectedService.name} — Assign stylists
             </h3>
-            <div className="space-y-4">
-              {staffList
-                .filter((stylist) =>
-                  Array.isArray(stylist.services)
-                    ? stylist.services.some((s) => s.id === selectedService.id)
-                    : false
-                )
-                .map((stylist) => {
-                  const current = selectedService?.pricing?.[stylist.id] || {
-                    basePrice: 0,
-                    duration: { hours: 0, minutes: 0 },
-                  };
 
-                  return (
-                    <div
-                      key={stylist.id}
-                      className="text-gray-700 border p-4 rounded-lg bg-gray-50 grid grid-cols-4 gap-4 items-center"
-                    >
-                      <p className="text-sm font-semibold text-bronze">{stylist.name}</p>
-                      <div className="flex flex-col">
-                        <label className="text-xs text-gray-700 mb-1">Base Price (£)</label>
-                        <input
-                          type="number"
-                          value={current.basePrice}
-                          onChange={(e) =>
-                            handleStylistChange(stylist.id, "basePrice", e.target.value)
-                          }
-                          placeholder="Price"
-                          className="border rounded p-1 w-full"
-                        />
-                      </div>
-                      <div className="flex flex-col">
-                        <label className="text-xs text-gray-700 mb-1">Hours</label>
-                        <input
-                          type="number"
-                          value={current.duration?.hours ?? 0}
-                          onChange={(e) =>
-                            handleStylistChange(stylist.id, "duration", {
-                              hours: Number(e.target.value),
-                            })
-                          }
-                          placeholder="Hours"
-                          className="border rounded p-1 w-full"
-                        />
-                      </div>
-                      <div className="flex flex-col">
-                        <label className="text-xs text-gray-700 mb-1">Minutes</label>
-                        <input
-                          type="number"
-                          value={current.duration?.minutes ?? 0}
-                          onChange={(e) =>
-                            handleStylistChange(stylist.id, "duration", {
-                              minutes: Number(e.target.value),
-                            })
-                          }
-                          placeholder="Minutes"
-                          className="border rounded p-1 w-full"
-                        />
-                      </div>
+            <div className="space-y-3">
+              {staffList.map((stylist) => {
+                const rec = assignments[stylist.id] || {};
+                const total = Number(rec.mins) || 0;
+                const hrs = Math.floor(total / 60);
+                const mins = total % 60;
+
+                return (
+                  <div
+                    key={stylist.id}
+                    className="text-gray-700 border p-4 rounded-lg bg-gray-50 grid grid-cols-6 gap-4 items-center"
+                  >
+                    <label className="col-span-2 flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={!!rec.checked}
+                        onChange={(e) => setAssigned(stylist.id, e.target.checked)}
+                      />
+                      <span className="text-sm font-semibold text-bronze">{stylist.name}</span>
+                    </label>
+
+                    <div className="col-span-2 flex flex-col">
+                      <label className="text-xs text-gray-700 mb-1">Price (£)</label>
+                      <input
+                        type="number"
+                        value={rec.price ?? ""}
+                        onChange={(e) => setPrice(stylist.id, e.target.value)}
+                        placeholder="Price"
+                        className="border rounded p-1 w-full"
+                        min="0"
+                        step="0.01"
+                      />
                     </div>
-                  );
-                })}
+
+                    <div className="flex flex-col">
+                      <label className="text-xs text-gray-700 mb-1">Hours</label>
+                      <input
+                        type="number"
+                        value={hrs || ""}
+                        onChange={(e) => setHrs(stylist.id, e.target.value)}
+                        placeholder="Hours"
+                        className="border rounded p-1 w-full"
+                        min="0"
+                      />
+                    </div>
+
+                    <div className="flex flex-col">
+                      <label className="text-xs text-gray-700 mb-1">Minutes</label>
+                      <input
+                        type="number"
+                        value={mins || ""}
+                        onChange={(e) => setMins(stylist.id, e.target.value)}
+                        placeholder="Minutes"
+                        className="border rounded p-1 w-full"
+                        min="0"
+                        max="59"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
+
             <div className="flex justify-end mt-6 gap-2">
               <button
                 onClick={() => setShowModal(false)}
@@ -343,8 +405,9 @@ export default function ManageServices({ staffId }) {
               <Button
                 onClick={handleSaveStylist}
                 className="bg-[#cd7f32] text-white"
+                disabled={saving}
               >
-                Save Changes
+                {saving ? "Saving..." : "Save Changes"}
               </Button>
             </div>
           </div>

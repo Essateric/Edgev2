@@ -3,6 +3,7 @@ import Modal from "../Modal";
 import Select from "react-select";
 import { format } from "date-fns";
 import { supabase } from "../../supabaseClient"; // ✅ add supabase
+import { findOrCreateClient } from "../../onlinebookings/lib/findOrCreateClient.js";
 
 export default function SelectClientModal({
   isOpen,
@@ -36,67 +37,37 @@ export default function SelectClientModal({
   const isEmail = (s = "") => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s).trim());
 
   // ⚙️ Find existing by email/mobile; else create; then select
-  const handleCreateOrSelect = async () => {
-    const fn = newClient.first_name.trim();
-    const ln = newClient.last_name.trim();
-    const em = newClient.email.trim();
-    const mo = normPhone(newClient.mobile);
+const handleCreateOrSelect = async () => {
+  const fn = newClient.first_name.trim();
+  const ln = newClient.last_name.trim();
+  const em = newClient.email.trim();
+  const mo = newClient.mobile;
 
-    if (!fn || !ln) {
-      alert("Enter first and last name.");
-      return;
-    }
-    if (em && !isEmail(em)) {
-      alert("Enter a valid email (or leave blank).");
-      return;
-    }
+  if (!fn || !ln) {
+    alert("Enter first and last name.");
+    return;
+  }
 
-    setCreating(true);
-    try {
-      // 1) Look up by email/mobile to avoid duplicates
-      let q = supabase.from("clients").select("id,first_name,last_name,email,mobile").limit(1);
-      if (em && mo) q = q.or(`email.eq.${em},mobile.eq.${mo}`);
-      else if (em) q = q.eq("email", em);
-      else if (mo) q = q.eq("mobile", mo);
-      const { data: found, error: findErr } = await q;
+  setCreating(true);
+  try {
+    const clientRow = await findOrCreateClient({
+      first_name: fn,
+      last_name:  ln,
+      email:      em,
+      mobile:     mo,
+      // in admin you can let email be optional:
+      requireEmail: false,
+    });
 
-      if (findErr) {
-        console.error("Find client failed:", findErr.message);
-      }
-
-      if (found?.length) {
-        // ✅ Use the existing one
-        const existing = found[0];
-        setSelectedClient(existing.id);
-        onClientCreated?.(existing); // let parent refresh local list if it wants
-        return;
-      }
-
-      // 2) Create a new client
-      const { data: created, error: insErr } = await supabase
-        .from("clients")
-        .insert([{
-          first_name: fn,
-          last_name: ln,
-          email: em || null,
-          mobile: mo || null,
-        }])
-        .select("*")
-        .single();
-
-      if (insErr) {
-        console.error("Create client failed:", insErr.message);
-        alert("Couldn't create client. Please try again.");
-        return;
-      }
-
-      // ✅ Select new client and inform parent
-      setSelectedClient(created.id);
-      onClientCreated?.(created);
-    } finally {
-      setCreating(false);
-    }
-  };
+    setSelectedClient(clientRow.id);
+    onClientCreated?.(clientRow); // let parent refresh its clients cache if desired
+  } catch (e) {
+    console.error("Create/select client failed:", e?.message || e);
+    alert(e?.message || "Couldn't create/select client.");
+  } finally {
+    setCreating(false);
+  }
+};
 
   return (
     <Modal isOpen={isOpen} onClose={onClose}>

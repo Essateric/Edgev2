@@ -26,7 +26,7 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
   const [noteContent, setNoteContent] = useState("");
 
   // History (bookings)
-  theconst [history, setHistory] = useState([]);
+  const [history, setHistory] = useState([]);
   const [providerMap, setProviderMap] = useState({}); // { staffId: "Name" }
   const [bookingMeta, setBookingMeta] = useState({});  // { bookingId: { when, title } }
 

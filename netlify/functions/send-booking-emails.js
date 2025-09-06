@@ -66,7 +66,7 @@ export async function handler(event) {
     }
 
     // Payload:
-    // { customerEmail, businessEmail, business:{name,address,timezone}, booking:{start,end}, service:{name}, provider:{name}, notes?:string }
+    // { customerEmail, businessEmail, business:{name,address,timezone}, booking:{start,end,client_name?}, service:{name}, provider:{name}, notes?:string, customerName?:string, client?:{first_name,last_name}}
     let data;
     try {
       data = JSON.parse(event.body);
@@ -78,11 +78,20 @@ export async function handler(event) {
       customerEmail,          // optional
       businessEmail,          // may be missing; we will fallback
       business = {},          // { name, address, timezone }
-      booking = {},           // { start, end }
+      booking = {},           // { start, end, client_name? }
       service = {},           // { name }
       provider = {},          // { name }
-      notes = "",             // ✅ NEW: free-text notes from customer
+      notes = "",             // free-text notes from customer
     } = data;
+
+    // 🔹 Derive the client's name from multiple possible places
+    const rawClientName =
+      String(data.customerName || "").trim() ||
+      String(booking.client_name || "").trim() ||
+      `${String(data?.client?.first_name || "").trim()} ${String(data?.client?.last_name || "").trim()}`.trim();
+
+    const clientFull = esc(rawClientName || "Customer");
+    const clientFirst = esc((rawClientName.split(" ")[0] || "there").trim());
 
     // Resolve business email: payload → env BUSINESS_EMAIL → address inside FROM_EMAIL
     const FROM_EMAIL =
@@ -109,7 +118,7 @@ export async function handler(event) {
       day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
-      timeZone: tz, // ✅ ensure correct local time
+      timeZone: tz,
     });
 
     const bizName = esc(business.name || "The Edge HD Salon");
@@ -123,11 +132,11 @@ export async function handler(event) {
     await transporter.verify();
     console.log("✅ Email transporter verified.");
 
-    // Customer email (if provided)
+    // ---------- Customer email ----------
     const customerSubject = `Booking Request Received – ${bizName}`;
     const customerHtml = `
       <div style="font-family:Arial,sans-serif;line-height:1.5">
-        <h2 style="margin:0 0 8px 0">${customerSubject}</h2>
+        <p style="margin:0 0 8px 0">Hi ${clientFirst},</p>
         <p style="margin:0 0 8px 0">Thanks for your booking request for <b>${serviceName}</b> with <b>${providerName}</b>.</p>
         <p style="margin:0 0 4px 0"><b>When:</b> ${esc(when)} (${esc(tz)})</p>
         <p style="margin:0 0 12px 0"><b>Where:</b> ${bizAddr}</p>
@@ -136,6 +145,7 @@ export async function handler(event) {
         <p style="margin:0;color:#666">If you need to change anything, just reply to this email.</p>
       </div>`;
     const customerText =
+      `Hi ${rawClientName.split(" ")[0] || "there"},\n\n` +
       `Booking Request sent – ${business.name || "The Edge HD Salon"}\n` +
       `Service: ${service.name || "a service"}\n` +
       `Provider: ${provider.name || "our team"}\n` +
@@ -143,11 +153,11 @@ export async function handler(event) {
       `Where: ${business.address || "—"}\n` +
       (notesClean ? `Notes: ${notesClean}\n` : ``);
 
-    // Salon email
-    const businessSubject = `New booking request – ${service.name || "Service"}`;
+    // ---------- Salon email ----------
+    const businessSubject = `New booking request`;
     const businessHtml = `
       <div style="font-family:Arial,sans-serif;line-height:1.5">
-        <h2 style="margin:0 0 8px 0">New booking request</h2>
+        <p style="margin:0 0 4px 0"><b>Client:</b> ${clientFull}</p>
         <p style="margin:0 0 4px 0"><b>Service:</b> ${serviceName}</p>
         <p style="margin:0 0 4px 0"><b>Provider:</b> ${providerName}</p>
         <p style="margin:0 0 4px 0"><b>When:</b> ${esc(when)} (${esc(tz)})</p>
@@ -156,6 +166,7 @@ export async function handler(event) {
       </div>`;
     const businessText =
       `New booking request\n` +
+      `Client: ${rawClientName || "—"}\n` +
       `Service: ${service.name || "—"}\n` +
       `Provider: ${provider.name || "—"}\n` +
       `When: ${when} (${tz})\n` +

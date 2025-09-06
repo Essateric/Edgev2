@@ -1,3 +1,4 @@
+// src/components/AddNewStaffModal.jsx
 import React, { useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../supabaseClient";
@@ -7,10 +8,7 @@ const daysOrder = [
 ];
 
 const defaultWeeklyHours = Object.fromEntries(
-  daysOrder.map((day) => [
-    day,
-    { start: "", end: "", off: day === "Saturday" || day === "Sunday" },
-  ])
+  daysOrder.map((day) => [day, { start: "", end: "", off: day === "Saturday" || day === "Sunday" }])
 );
 
 export default function AddNewStaffModal({ open, onClose, onSaved }) {
@@ -22,32 +20,19 @@ export default function AddNewStaffModal({ open, onClose, onSaved }) {
     pin: "",
     permission: "Junior Stylist",
   });
-
   const [weeklyHours, setWeeklyHours] = useState(defaultWeeklyHours);
   const [loading, setLoading] = useState(false);
 
-  const handleChange = (e) => {
-    setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
-  };
+  const handleChange = (e) => setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
 
-  const handleHourChange = (day, field, value) => {
-    setWeeklyHours((prev) => ({
-      ...prev,
-      [day]: { ...prev[day], [field]: value },
-    }));
-  };
+  const handleHourChange = (day, field, value) =>
+    setWeeklyHours((p) => ({ ...p, [day]: { ...p[day], [field]: value } }));
 
-  const handleToggleOff = (day) => {
-    setWeeklyHours((prev) => ({
-      ...prev,
-      [day]: {
-        ...prev[day],
-        off: !prev[day].off,
-        // If turning OFF (prev.off was false), clear times; if turning ON, keep whatever is there
-        ...(prev[day].off ? {} : { start: "", end: "" }),
-      },
+  const handleToggleOff = (day) =>
+    setWeeklyHours((p) => ({
+      ...p,
+      [day]: { ...p[day], off: !p[day].off, ...(p[day].off ? {} : { start: "", end: "" }) },
     }));
-  };
 
   const normalizeWeeklyHours = (input) =>
     Object.fromEntries(
@@ -73,16 +58,24 @@ export default function AddNewStaffModal({ open, onClose, onSaved }) {
       return;
     }
 
+    console.groupCollapsed("%c➕ AddNewStaffModal.handleSubmit", "color:#8b5cf6;font-weight:bold");
     try {
       setLoading(true);
 
-      // Prefer existing token, but fall back to the live session if needed
+      // Get JWT
       let token = currentUser?.token || null;
       if (!token) {
-        const { data: sess } = await supabase.auth.getSession();
+        const { data: sess, error: sessErr } = await supabase.auth.getSession();
+        if (sessErr) console.warn("⚠️ getSession error:", sessErr);
         token = sess?.session?.access_token || null;
       }
+
+      console.debug("🔐 JWT present?", Boolean(token));
+      console.debug("🧾 Form:", { ...form, pin: form.pin ? "****" : "" });
+      console.debug("🕒 Weekly hours (raw):", weeklyHours);
+
       if (!token) {
+        console.error("⛔ No JWT available");
         alert("❌ You must be logged in.");
         return;
       }
@@ -95,62 +88,119 @@ export default function AddNewStaffModal({ open, onClose, onSaved }) {
         weekly_hours: normalizeWeeklyHours(weeklyHours),
       };
 
-      // ✅ Use Supabase Functions client; it attaches the current session JWT automatically
-      const { data, error } = await supabase.functions.invoke("addnewstaff", {
-        body: payload,
-      });
+      console.debug("📦 Payload to function:", { ...payload, pin: "****" });
 
-      if (error) {
-        console.error("❌ Add staff error:", error);
-        alert(error.message || "Failed to create staff");
+      // -------------------------------
+      // 1) Try supabase.functions.invoke
+      // -------------------------------
+      console.time("⏱️ addnewstaff invoke");
+      let data, error;
+      try {
+        const resp = await supabase.functions.invoke("addnewstaff", {
+          body: payload,
+          headers: { Authorization: `Bearer ${token}` }, // ensure auth reaches the function
+        });
+        data = resp.data;
+        error = resp.error;
+      } finally {
+        console.timeEnd("⏱️ addnewstaff invoke");
+      }
+
+      // If invoke worked, continue
+      if (!error) {
+        if (data?.logs && Array.isArray(data.logs)) {
+          console.groupCollapsed("%c✅ addnewstaff success logs (invoke)", "color:#22c55e");
+          data.logs.forEach((line, i) => console.log(`${i + 1}.`, line));
+          console.groupEnd();
+        } else {
+          console.debug("✅ addnewstaff success via invoke (no logs returned)");
+        }
+        await handlePostSuccess(data);
         return;
       }
 
-      // Support both old/new shapes:
-      // - Old: { user, token_hash?, email_otp? }
-      // - New: { ok: true, staff: {...} }
-      const user = data?.user || data?.staff || null;
-      const token_hash = data?.token_hash;
-      const email_otp = data?.email_otp;
+      // ---------------------------------------------------
+      // 2) Fallback: direct fetch for full error visibility
+      // ---------------------------------------------------
+      console.warn("⚠️ invoke failed — trying direct fetch to read raw response…");
 
-      // (Optional) If your function returns magic link / OTP material and you still want to auto-login
-      if (token_hash || email_otp) {
-        let out;
-        if (token_hash) {
-          out = await supabase.auth.verifyOtp({
-            type: "magiclink",
-            token_hash, // with magiclink you do NOT pass email
-          });
+      const FN_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/addnewstaff`;
+      const res = await fetch(FN_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      // log basic response meta
+      const meta = {
+        status: res.status,
+        ok: res.ok,
+        sb_request_id: res.headers.get("sb_request_id"),
+        x_sb_error_code: res.headers.get("x_sb_error_code"),
+        content_type: res.headers.get("content-type"),
+      };
+      console.error("🟥 Direct fetch response meta:", meta);
+
+      // try parse body as JSON, else text
+      let server = {};
+      let text = "";
+      try {
+        if (meta.content_type && meta.content_type.includes("application/json")) {
+          server = await res.clone().json();
         } else {
-          out = await supabase.auth.verifyOtp({
-            type: "email",
-            email: user?.email,
-            token: email_otp,
-          });
+          text = await res.clone().text();
+          server = text ? { raw: text } : {};
         }
-        if (out.error) throw out.error;
-
-        const session = out.data.session;
-        const stored = {
-          id: out.data.user.id,
-          email: out.data.user.email,
-          name: user?.name,
-          permission: user?.permission,
-          token: session?.access_token,
-          offline: false,
-        };
-        localStorage.setItem("currentUser", JSON.stringify(stored));
+      } catch (parseErr) {
+        console.warn("⚠️ Could not parse body:", parseErr);
       }
 
-      onSaved?.();   // refresh staff list in parent
-      onClose?.();   // close modal
+      // dump server logs if present
+      if (server && Array.isArray(server.logs)) {
+        console.groupCollapsed("%c📝 Edge Function logs (direct fetch)", "color:#f59e0b");
+        server.logs.forEach((line, i) => console.log(`${i + 1}.`, line));
+        console.groupEnd();
+      } else if (text) {
+        console.debug("📜 Raw body:", text);
+      } else {
+        console.debug("ℹ️ No body returned from function");
+      }
+
+      if (!res.ok) {
+        const msg =
+          server?.error ||
+          server?.details ||
+          server?.message ||
+          `Add staff failed (HTTP ${meta.status})`;
+        alert(msg);
+        return;
+      }
+
+      // success via direct fetch
+      await handlePostSuccess(server);
     } catch (err) {
-      console.error(err);
-      alert(err.message || "Something went wrong.");
+      console.error("🟥 AddNewStaffModal.handleSubmit error:", err);
+      alert(err?.message || "Something went wrong.");
     } finally {
       setLoading(false);
+      console.groupEnd();
     }
   };
+
+  // ---------------- helpers ----------------
+const handlePostSuccess = async (result) => {
+  const staff = result?.staff || result?.user || null;
+  console.debug("📩 Function return (no login/OTP path):", { hasStaff: !!staff });
+
+  // ✅ Do NOT verifyOtp here. Admin stays logged in.
+  console.info("🎉 Staff added; refreshing list and closing modal");
+  onSaved?.(); // refresh staff in parent
+  onClose?.(); // close modal
+};
 
   if (!open) return null;
 
