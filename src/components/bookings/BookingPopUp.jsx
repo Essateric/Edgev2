@@ -42,6 +42,19 @@ const isProcessingRow = (row) => {
   return cat === "processing" || title.includes("processing time");
 };
 
+// ✅ Timezone-safe helpers for "timestamp without time zone" storage
+// Save as local wall-clock SQL string (no timezone)
+const toLocalSQL = (d) => format(d, "yyyy-MM-dd HH:mm:ss");
+// Parse ANY string as LOCAL time (supports "YYYY-MM-DD HH:mm:ss" or ISO)
+const asLocalDate = (v) => {
+  if (v instanceof Date) return v;
+  if (typeof v === "string") {
+    const s = v.includes("T") ? v : v.replace(" ", "T");
+    return new Date(s);
+  }
+  return new Date(v);
+};
+
 export default function BookingPopUp({
   isOpen,
   booking,
@@ -66,7 +79,7 @@ export default function BookingPopUp({
   const [repeatPattern, setRepeatPattern] = useState("weekly");
   const [repeatCount, setRepeatCount] = useState(6);
   const [repeatDayOfMonth, setRepeatDayOfMonth] = useState(
-    booking?.start ? new Date(booking.start).getDate() : 1
+    booking?.start ? asLocalDate(booking.start).getDate() : 1
   );
 
   const { supabaseClient } = useAuth();
@@ -151,7 +164,7 @@ export default function BookingPopUp({
   // All services in time order (includes processing)
   const sortedAllServices = useMemo(() => {
     if (!Array.isArray(relatedBookings) || relatedBookings.length === 0) return [];
-    return [...relatedBookings].sort((a, b) => new Date(a.start) - new Date(b.start));
+    return [...relatedBookings].sort((a, b) => asLocalDate(a.start) - asLocalDate(b.start));
   }, [relatedBookings]);
 
   // What we DISPLAY (hide processing)
@@ -163,12 +176,12 @@ export default function BookingPopUp({
   // Blueprint for repeat bookings — must include processing gap
   const blueprint = useMemo(() => {
     if (!sortedAllServices.length) return null;
-    const baseStart = new Date(sortedAllServices[0].start);
+    const baseStart = asLocalDate(sortedAllServices[0].start);
     const baseHour = baseStart.getHours();
     const baseMin = baseStart.getMinutes();
     const items = sortedAllServices.map((s) => {
-      const sStart = new Date(s.start);
-      const sEnd = new Date(s.end);
+      const sStart = asLocalDate(s.start);
+      const sEnd = asLocalDate(s.end);
       const offsetMin = Math.round((sStart - baseStart) / 60000);
       const duration = Math.round((sEnd - sStart) / 60000);
       return {
@@ -248,9 +261,9 @@ export default function BookingPopUp({
     }
   };
   const generateOccurrenceBase = (index) => {
-    const base = blueprint?.baseStart ?? new Date(booking.start);
-    const h = blueprint?.baseHour ?? new Date(booking.start).getHours();
-    const m = blueprint?.baseMin ?? new Date(booking.start).getMinutes();
+    const base = blueprint?.baseStart ?? asLocalDate(booking.start);
+    const h = blueprint?.baseHour ?? asLocalDate(booking.start).getHours();
+    const m = blueprint?.baseMin ?? asLocalDate(booking.start).getMinutes();
     switch (repeatPattern) {
       case "weekly": return setHMS(addDays(base, 7 * (index + 1)), h, m);
       case "fortnightly": return setHMS(addDays(base, 14 * (index + 1)), h, m);
@@ -269,7 +282,8 @@ export default function BookingPopUp({
     const created = []; const skipped = [];
     for (let i = 0; i < Math.max(1, Number(repeatCount) || 0); i++) {
       const occBase = generateOccurrenceBase(i);
-      // overlap check
+
+      // overlap check (use local SQL strings, not UTC ISO)
       let conflict = false;
       for (const item of blueprint.items) {
         const sStart = new Date(occBase.getTime() + item.offsetMin * 60000);
@@ -277,11 +291,13 @@ export default function BookingPopUp({
         const { data: overlaps, error: overlapErr } = await supabaseClient
           .from("bookings").select("id")
           .eq("resource_id", booking.resource_id)
-          .lt("start", sEnd.toISOString()).gt("end", sStart.toISOString());
+          .lt("start", toLocalSQL(sEnd))
+          .gt("end", toLocalSQL(sStart));
         if (overlapErr || (overlaps?.length)) { conflict = true; break; }
       }
       if (conflict) { skipped.push(occBase); continue; }
-      // create
+
+      // create (save local wall-clock SQL strings)
       const newBookingId = uuidv4();
       const rows = blueprint.items.map((item) => {
         const sStart = new Date(occBase.getTime() + item.offsetMin * 60000);
@@ -291,8 +307,8 @@ export default function BookingPopUp({
           client_id: booking.client_id,
           client_name: booking.client_name,
           resource_id: booking.resource_id,
-          start: sStart.toISOString(),
-          end: sEnd.toISOString(),
+          start: toLocalSQL(sStart),
+          end: toLocalSQL(sEnd),
           title: item.title,
           price: item.price,
           duration: item.duration,
@@ -300,10 +316,12 @@ export default function BookingPopUp({
           status: "confirmed",
         };
       });
+
       const { data: inserted, error: insErr } = await supabaseClient
         .from("bookings").insert(rows).select("*");
       if (insErr) { skipped.push(occBase); continue; }
       created.push({ when: occBase, rows: inserted });
+
       try {
         const firstItem = blueprint.items[0];
         await SaveBookingsLog({
@@ -380,7 +398,7 @@ export default function BookingPopUp({
         ) : (
           <div className="space-y-1">
             {displayServices.map((service, index) => {
-              const startTime = new Date(service.start);
+              const startTime = asLocalDate(service.start);
               const formattedTime = !isNaN(startTime) ? format(startTime, "HH:mm") : "--:--";
               return (
                 <div key={index} className="flex flex-col text-sm text-gray-700 border-b py-1">

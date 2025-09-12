@@ -35,27 +35,26 @@ export default async function SaveBookingsLog({
     // Only use a real UUID for logged_by. Never "Unknown" string.
     let staffLogger = logged_by && logged_by !== "Unknown" ? logged_by : null;
 
-       // Public site logs shouldn't try to resolve staff; keep null
-   if (!staffLogger && String(reason || "").toLowerCase().includes("online booking")) {
-     staffLogger = null;
-   }
+    // Public site logs shouldn't try to resolve staff; keep null
+    if (!staffLogger && String(reason || "").toLowerCase().includes("online booking")) {
+      staffLogger = null;
+    }
 
     // ⛔ Skip staff lookups when requested (public site)
     if (!skipStaffLookup && !staffLogger) {
       const { data: { user } = {} } = await supabase.auth.getUser();
 
       if (user?.id) {
-        // 1) Prefer staff.uid === auth user.id
+        // ✅ FIX: don't quote the column name; use plain 'UID'
         const byUid = await supabase
           .from("staff")
           .select("id")
-          .eq('"UID"', user.id)
+          .eq("UID", user.id)
           .maybeSingle();
 
         if (!byUid.error && byUid.data?.id) {
           staffLogger = byUid.data.id;
         } else if (user.email) {
-          // 2) Fallback by email
           const byEmail = await supabase
             .from("staff")
             .select("id")
@@ -65,7 +64,7 @@ export default async function SaveBookingsLog({
           if (!byEmail.error && byEmail.data?.id) {
             staffLogger = byEmail.data.id;
           } else {
-            // 3) Last resort: auth UID itself
+            // last resort: auth UID itself
             staffLogger = user.id;
           }
         } else {
