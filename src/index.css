@@ -33,7 +33,6 @@ body {
   animation: shine 4s linear infinite;
 }
 
-
 @keyframes shine {
   0% {
     background-position: 200% center;
@@ -106,8 +105,8 @@ body {
 .p-6{
   background-color:white;
   color:gray;
-padding: .5rem;
-border-radius: 5px;
+  padding: .5rem;
+  border-radius: 5px;
 }
 
 .rbc-time-gutter .rbc-time-slot {
@@ -119,7 +118,6 @@ border-radius: 5px;
   font-weight: bold;
   color: #dba15f;
 }
-
 
 /* Group (each hour block) */
 .rbc-timeslot-group {
@@ -155,22 +153,21 @@ border-radius: 5px;
 }
 
 .rbc-current-time-indicator {
-    position: absolute;
-    z-index: 3;
-    left: 0;
-    right: 0;
-    height: 2px;
-    background-color: #ae2d2d;
-    pointer-events: none;
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background-color: #ae2d2d;
+  pointer-events: none;
 }
 
 /* Keep the grid/table background white */
 .rbc-time-content {
   background-color: white !important;
-    max-height: 85vh;
+  max-height: 85vh;
   overflow-y: auto;
 }
-
 
 /* Optional: maintain white background inside each cell */
 .rbc-day-slot,
@@ -214,7 +211,6 @@ border-radius: 5px;
   z-index: 9999 !important;
 }
 
-
 /* Calendar Navigation Buttons */
 .rbc-toolbar button {
   @apply text-white border border-gray-500 rounded px-3 py-1;
@@ -248,7 +244,7 @@ border-radius: 5px;
   border-radius: 0 !important;
   transition: top 0.2s ease, height 0.2s ease;
   will-change: top, height;
-    overflow: visible;
+  overflow: visible;
 }
 
 .rbc-addons-dnd .rbc-event {
@@ -258,7 +254,6 @@ border-radius: 5px;
 .rbc-addons-dnd .rbc-event-resizable {
   cursor: ns-resize !important;
 }
-
 
 .rbc-event-content {
   display: flex;
@@ -296,9 +291,25 @@ border-radius: 5px;
   align-items: center;
 }
 
-
 @media (max-width: 500px) {
   .rbc-timeslot-group {
     height: 25px;
   }
+}
+
+/* ----------------------------- */
+/* DnD “jump into header” fix    */
+/* ----------------------------- */
+/* Prevent parent transforms from skewing drag calculations.
+   React Big Calendar computes mouse→time using getBoundingClientRect().
+   Any CSS transform on an ancestor can throw that math off. */
+.rbc-time-view,
+.rbc-time-content,
+.rbc-time-header {
+  transform: none !important;
+}
+
+/* Make the scroller the positioning context for drag math */
+.rbc-time-content {
+  position: relative;
 }

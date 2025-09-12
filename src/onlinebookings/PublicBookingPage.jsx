@@ -2,7 +2,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabaseClient.js";
 import Stepper from "./components/Stepper.jsx";
-// ServiceList replaced by inline accordion below
 import ProviderList from "./components/ProviderList.jsx";
 import CalendarSlots from "./components/CalendarSlots.jsx";
 import ClientForm from "./components/ClientForm.jsx";
@@ -18,7 +17,6 @@ import {
 import { sendBookingEmails } from "./lib/email.js";
 import { v4 as uuidv4 } from "uuid";
 import SaveBookingsLog from "../components/bookings/SaveBookingsLog";
-import { findOrCreateClient } from "./lib/findOrCreateClient"; // kept for future use
 import edgeLogo from "../assets/EdgeLogo.png";
 
 const LOGO_SRC = edgeLogo || "/edge-logo.png";
@@ -39,6 +37,33 @@ const initialClient = {
   mobile: "",
   notes: "",
 };
+
+// Whitelist columns we actually insert into `bookings`
+const BOOKING_COLUMNS = [
+  "booking_id",
+  "title",
+  "category",
+  "client_id",
+  "client_name",
+  "resource_id",
+  "start",
+  "end",
+  "duration",
+  "price",
+  "status",
+  "service_id",
+];
+
+function sanitizeBookingRow(row) {
+  const out = {};
+  for (const k of BOOKING_COLUMNS) {
+    if (row[k] !== undefined) out[k] = row[k];
+  }
+  // harden types
+  if (out.duration != null) out.duration = Math.round(Number(out.duration) || 0);
+  if (out.price != null) out.price = Number(out.price) || 0;
+  return out;
+}
 
 const uniqById = (arr) => {
   const seen = new Set();
@@ -63,14 +88,16 @@ const minsToLabel = (total) => {
   return `${h ? `${h}h ` : ""}${m || (!h ? d : 0)}m`;
 };
 
-// insert that gracefully falls back if some columns don't exist yet
+// Insert rows and gracefully retry if some columns don't exist yet (e.g. service_id/sort_index on older DBs)
 async function safeInsertBookings(rows) {
-  let { data, error } = await supabase.from("bookings").insert(rows).select("*");
+  // try sanitized first (only BOOKING_COLUMNS)
+  const cleanRows = rows.map(sanitizeBookingRow);
+  let { data, error } = await supabase.from("bookings").insert(cleanRows).select("*");
   if (!error) return data;
 
   const msg = (error.message || "").toLowerCase();
-  if (msg.includes("service_id") || msg.includes("sort_index")) {
-    const stripped = rows.map(({ service_id, sort_index, ...rest }) => rest);
+  if (msg.includes("service_id")) {
+    const stripped = cleanRows.map(({ service_id, ...rest }) => rest);
     const retry = await supabase.from("bookings").insert(stripped).select("*");
     if (!retry.error) return retry.data;
     throw retry.error;
@@ -172,57 +199,67 @@ export default function PublicBookingPage() {
     };
   };
 
-  // cart totals (+30m once if any chemical) — only after stylist is chosen
+  // Build a "timeline" of services: each item = {offsetMin, duration}
+  // - After chemical services, insert a 30m *gap* by increasing the offset of subsequent items.
   const {
-    totalDuration,
-    totalPrice,
+    timeline,
     hasChemical,
     serviceNameForEmail,
     hasUnknownPrice,
+    sumActiveDuration,
+    sumPrice,
   } = useMemo(() => {
-    if (!selectedServices.length) {
+    if (!selectedServices.length || !selectedProvider) {
       return {
-        totalDuration: 0,
-        totalPrice: 0,
+        timeline: [],
         hasChemical: false,
         serviceNameForEmail: "",
         hasUnknownPrice: true,
+        sumActiveDuration: 0,
+        sumPrice: 0,
       };
     }
 
-    let durationSum = 0;
-    let priceSum = 0;
-    let anyChemical = false;
+    let offset = 0;
+    let anyChem = false;
     let unknown = false;
+    let priceSum = 0;
+    const items = [];
 
     for (const svc of selectedServices) {
       const { duration: d, price: p } = getEffectivePD(svc);
-      if (!selectedProvider) {
-        unknown = true;
-      } else {
-        durationSum += Number(d || 0);
-        if (isTBA(p)) unknown = true;
-        else priceSum += Number(p);
-      }
-      if (isChemicalService(svc)) anyChemical = true;
-    }
+      const dur = Number(d || 0);
 
-    if (selectedProvider && anyChemical) durationSum += 30;
+      items.push({ offsetMin: offset, duration: dur, svc });
+
+      // pricing (TBA stays out)
+      if (isTBA(p)) unknown = true;
+      else priceSum += Number(p || 0);
+
+      // next start offset
+      offset += dur;
+      if (isChemicalService(svc)) {
+        anyChem = true;
+        // Insert a 30m GAP — not booked, just shifts the next service.
+        offset += 30;
+      }
+    }
 
     const nameForEmail =
       selectedServices.map((s) => s.name).join(", ") +
-      (anyChemical ? " (+processing)" : "");
+      (anyChem ? " (+processing gap)" : "");
 
     return {
-      totalDuration: selectedProvider ? durationSum : 0,
-      totalPrice: selectedProvider ? priceSum : 0,
-      hasChemical: anyChemical,
+      timeline: items, // for slot search & saving
+      hasChemical: anyChem,
       serviceNameForEmail: nameForEmail,
-      hasUnknownPrice: !selectedProvider || unknown,
+      hasUnknownPrice: unknown,
+      sumActiveDuration: items.reduce((acc, it) => acc + it.duration, 0), // no gaps
+      sumPrice: priceSum,
     };
   }, [selectedServices, providerOverrides, selectedProvider]);
 
-  // compute free slots for the total duration (only once a provider + date are selected)
+  // compute free slots for the whole timeline (first service start), checking each segment individually
   useEffect(() => {
     if (!selectedServices.length || !selectedProvider || !selectedDate) return;
 
@@ -230,8 +267,6 @@ export default function PublicBookingPage() {
     (async () => {
       setSlotsLoading(true);
       try {
-        const dur = totalDuration || 30; // safety fallback
-        const stepMins = 15;
         const dayStart = startOfDay(selectedDate);
         const dayEnd = endOfDay(selectedDate);
 
@@ -244,8 +279,17 @@ export default function PublicBookingPage() {
           return;
         }
 
-        let candidates = buildSlotsFromWindows(dayStart, windows, stepMins, dur);
+        // total span (from first start to end of last service) includes gaps implicitly
+        const totalSpan =
+          timeline.length
+            ? timeline[timeline.length - 1].offsetMin +
+              timeline[timeline.length - 1].duration
+            : 30;
 
+        const stepMins = 15;
+        let candidates = buildSlotsFromWindows(dayStart, windows, stepMins, totalSpan);
+
+        // if today, don't offer past times
         const now = new Date();
         if (dayStart.getTime() === startOfDay(now).getTime()) {
           candidates = candidates.filter((t) => t > now);
@@ -255,22 +299,26 @@ export default function PublicBookingPage() {
           return;
         }
 
+        // get bookings for the day for this stylist (include any that overlap the day)
         const { data: existing } = await supabase
           .from("bookings")
-          .select("id,start,end")
+          .select("start,end")
           .eq("resource_id", selectedProvider.id)
-          .lte("start", dayEnd.toISOString())
-          .gte("end", dayStart.toISOString());
+          .lt("start", dayEnd.toISOString())
+          .gt("end", dayStart.toISOString());
 
         const busy = (existing || []).map((b) => ({
           start: new Date(b.start),
           end: new Date(b.end),
         }));
 
-        const free = candidates.filter((t) => {
-          const s = t,
-            e = addMinutes(t, dur);
-          return busy.every((b) => !rangesOverlap(s, e, b.start, b.end));
+        // A slot is free if EVERY service segment (with offsets) doesn't overlap busy
+        const free = candidates.filter((base) => {
+          return timeline.every((seg) => {
+            const s = addMinutes(base, seg.offsetMin);
+            const e = addMinutes(s, seg.duration);
+            return busy.every((b) => !rangesOverlap(s, e, b.start, b.end));
+          });
         });
 
         if (active) setAvailableSlots(free);
@@ -282,7 +330,7 @@ export default function PublicBookingPage() {
     return () => {
       active = false;
     };
-  }, [selectedServices, selectedProvider, selectedDate, totalDuration]);
+  }, [selectedServices, selectedProvider, selectedDate, timeline]);
 
   // step 1 toggle (add/remove)
   const toggleService = (svc) => {
@@ -293,7 +341,7 @@ export default function PublicBookingPage() {
     });
   };
 
-  // ---------- save as grouped rows ----------
+  // ---------- save as grouped rows (with 30m GAP after chemical; no processing row) ----------
   async function saveBooking() {
     if (!selectedServices.length || !selectedProvider || !selectedDate || !selectedTime) return;
 
@@ -314,41 +362,21 @@ export default function PublicBookingPage() {
       const start = new Date(selectedDate);
       start.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
 
-      const rows = [];
-      let cursor = new Date(start);
-
-      for (const svc of selectedServices) {
-        const { duration: d, price: p } = getEffectivePD(svc);
-        const sStart = new Date(cursor);
-        const sEnd = addMinutes(sStart, Number(d || 0));
-
-        rows.push({
-          title: svc.name,
-          category: svc.category || null,
-          duration: Number(d || 0),
+      // Build rows using the precomputed timeline (gaps already baked into offsets)
+      const rows = timeline.map((seg) => {
+        const sStart = addMinutes(start, seg.offsetMin);
+        const sEnd = addMinutes(sStart, seg.duration);
+        const { price: p } = getEffectivePD(seg.svc);
+        return {
+          title: seg.svc.name,
+          category: seg.svc.category || null,
+          duration: seg.duration,
           price: p,
           start: sStart.toISOString(),
           end: sEnd.toISOString(),
-          service_id: svc.id,
-        });
-
-        cursor = sEnd;
-      }
-
-      if (hasChemical) {
-        const sStart = new Date(cursor);
-        const sEnd = addMinutes(sStart, 30);
-        rows.push({
-          title: "Processing time",
-          category: "Processing",
-          duration: 30,
-          price: null,
-          start: sStart.toISOString(),
-          end: sEnd.toISOString(),
-          service_id: null,
-        });
-        cursor = sEnd;
-      }
+          service_id: seg.svc.id,
+        };
+      });
 
       const totalStartISO = rows[0].start;
       const totalEndISO = rows[rows.length - 1].end;
@@ -431,21 +459,31 @@ export default function PublicBookingPage() {
         }
       }
 
-      // race-safe overlap check across full span
-      const { data: overlaps, error: overlapErr } = await supabase
+      // Fetch day bookings once and check overlaps per service row (include any that overlaps the day)
+      const dayStartISO = startOfDay(selectedDate).toISOString();
+      const dayEndISO = endOfDay(selectedDate).toISOString();
+      const { data: dayBookings, error: dayErr } = await supabase
         .from("bookings")
-        .select("id")
+        .select("start,end")
         .eq("resource_id", selectedProvider.id)
-        .lt("start", totalEndISO)
-        .gt("end", totalStartISO);
-      if (overlapErr) throw overlapErr;
-      if (overlaps?.length) {
-        alert("Sorry, that time was just taken. Please pick another slot.");
-        return;
+        .lt("start", dayEndISO)
+        .gt("end", dayStartISO);
+      if (dayErr) throw dayErr;
+
+      for (const r of rows) {
+        const s = new Date(r.start);
+        const e = new Date(r.end);
+        const clash = (dayBookings || []).some((b) =>
+          rangesOverlap(s, e, new Date(b.start), new Date(b.end))
+        );
+        if (clash) {
+          alert("Sorry, one of those times was just taken. Please pick another slot.");
+          return;
+        }
       }
 
-      // create grouped rows
-      const payloadRows = rows.map((r, idx) => ({
+      // create grouped rows (we'll sanitize before insert)
+      const payloadRows = rows.map((r) => ({
         booking_id: bookingId,
         title: r.title,
         category: r.category,
@@ -458,7 +496,6 @@ export default function PublicBookingPage() {
         price: r.price,
         status: "confirmed",
         service_id: r.service_id,
-        sort_index: idx,
       }));
 
       const inserted = await safeInsertBookings(payloadRows);
@@ -478,8 +515,8 @@ export default function PublicBookingPage() {
               selectedServices[0]?.name ||
               "Multiple services",
             category: "Multi",
-            price: totalPrice,
-            duration: totalDuration,
+            price: sumPrice,
+            duration: sumActiveDuration, // only active time, no gaps
           },
           start: totalStartISO,
           end: totalEndISO,
@@ -507,7 +544,7 @@ export default function PublicBookingPage() {
             customerName: `${first} ${last}`.trim(),
             client: { first_name: first, last_name: last },
             bookingClientName: `${first} ${last}`.trim(),
-            customerPhone: mobileN, // include phone for salon email
+            customerPhone: mobileN,
           });
         } catch (e) {
           console.error("[email] failed:", e);
@@ -708,7 +745,7 @@ export default function PublicBookingPage() {
 
         {hasChemical && selectedProvider && (
           <div className="mt-3 text-sm text-amber-300">
-            + 30m processing time will be added
+            Processing time for chemical treatments applied.
           </div>
         )}
 
@@ -716,20 +753,20 @@ export default function PublicBookingPage() {
           <div className="flex items-center justify-between text-base">
             <span className="text-gray-300 whitespace-nowrap">Total time</span>
             <span className="text-white font-medium text-right">
-              {selectedProvider ? minsToLabel(totalDuration) : "—"}
+              {selectedProvider ? minsToLabel(sumActiveDuration) : "—"}
             </span>
           </div>
           <div className="flex items-center justify-between text-lg mt-2">
             <span className="text-gray-300 whitespace-nowrap">Total price</span>
             <span className="text-white font-semibold text-right">
-              {hasUnknownPrice ? "TBA" : money(totalPrice)}
+              {hasUnknownPrice ? "TBA" : money(sumPrice)}
             </span>
           </div>
         </div>
 
         {hasUnknownPrice && (
           <p className="mt-3 text-xs text-gray-400">
-            Prices for TBA services will be discussed during the appointment.
+            Please selecta stylist for price.
           </p>
         )}
       </section>
@@ -774,8 +811,8 @@ export default function PublicBookingPage() {
                 <span className="text-sm text-gray-300">
                   {selectedServices.length > 0
                     ? selectedProvider
-                      ? `${minsToLabel(totalDuration)} • ${
-                          hasUnknownPrice ? "TBA" : money(totalPrice)
+                      ? `${minsToLabel(sumActiveDuration)} • ${
+                          hasUnknownPrice ? "TBA" : money(sumPrice)
                         }`
                       : "Pick a stylist to see time & price"
                     : "Choose one or more services"}

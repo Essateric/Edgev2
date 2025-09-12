@@ -1,3 +1,4 @@
+// File: src/pages/ManageStaff.jsx
 import React, { useEffect, useState } from "react";
 import { supabase as defaultSupabase } from "../supabaseClient";
 import { createClient } from "@supabase/supabase-js";
@@ -8,15 +9,30 @@ import { useAuth } from "../contexts/AuthContext";
 import PageLoader from "../components/PageLoader.jsx";
 
 const daysOrder = [
-  "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
 ];
 
 const defaultWeeklyHours = Object.fromEntries(
-  daysOrder.map((day) => [
-    day,
-    { start: "", end: "", off: false }
-  ])
+  daysOrder.map((day) => [day, { start: "", end: "", off: false }])
 );
+
+// 🔹 Central list of roles (includes the new "Colour Specialist")
+export const ROLE_OPTIONS = [
+  "Business Owner",
+  "Admin",
+  "Manager",
+  "Senior Stylist",
+  "Stylist",
+  "Colour Specialist", // NEW
+  "Apprentice",
+  "Reception",
+];
 
 export default function ManageStaff() {
   const [staff, setStaff] = useState([]);
@@ -30,6 +46,10 @@ export default function ManageStaff() {
   const [editServicesModalOpen, setEditServicesModalOpen] = useState(false);
 
   const [showAddModal, setShowAddModal] = useState(false);
+
+  // 🔹 New: Role editing modal state
+  const [showRoleModal, setShowRoleModal] = useState(false);
+  const [roleStaff, setRoleStaff] = useState(null);
 
   const { currentUser, pageLoading, authLoading } = useAuth();
 
@@ -46,13 +66,16 @@ export default function ManageStaff() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const { data: staffData, error: staffError } = await defaultSupabase.from("staff").select("*");
-      const { data: servicesData, error: servicesError } = await defaultSupabase.from("services").select("id, name, category");
+      const { data: staffData, error: staffError } = await defaultSupabase
+        .from("staff")
+        .select("*");
+      const { data: servicesData, error: servicesError } = await defaultSupabase
+        .from("services")
+        .select("id, name, category");
 
       if (staffError) {
         console.error("❌ Error fetching staff:", staffError);
       } else {
-        console.log("✅ Staff fetched from DB:", staffData);
         setStaff(
           (staffData || []).map((doc) => ({
             ...doc,
@@ -64,7 +87,6 @@ export default function ManageStaff() {
       if (servicesError) {
         console.error("❌ Error fetching services:", servicesError);
       } else {
-        console.log("✅ Services fetched from DB:", servicesData);
         setServicesList(servicesData || []);
       }
     } catch (err) {
@@ -89,8 +111,6 @@ export default function ManageStaff() {
 
   // Called when user clicks 'Edit Hours' button for a staff member
   const openHoursModal = (member) => {
-    console.log("🟢 openHoursModal called with member:", member);
-    console.log("🟢 Member ID:", member?.id);
     setModalStaff(member);
     setModalHours(normalizeWeeklyHours(member.weekly_hours));
     setShowHoursModal(true);
@@ -98,74 +118,67 @@ export default function ManageStaff() {
 
   // PATCH-style save: Only changed days are updated, the rest remain.
   // Accept latestHours as parameter (comes from the modal!)
-const saveModalHours = async (latestHours) => {
-  if (!currentUser?.token) {
-    alert("❌ You must be logged in to update staff hours.");
-    return;
-  }
-
-  console.log("✅ Attempting to save hours for modalStaff:", modalStaff);
-  console.log("✅ modalStaff.id:", modalStaff?.id);
-  console.log("✅ Hours payload to save:", latestHours);
-
-  // 1) Fetch current weekly_hours (for patch/merge)
-  const { data: oldData, error: fetchError } = await defaultSupabase
-    .from("staff")
-    .select("weekly_hours")
-    .eq("id", modalStaff.id)
-    .single();
-
-  if (fetchError) {
-    alert("❌ Error fetching current hours: " + fetchError.message);
-    return;
-  }
-
-  // 2) Compute only changed days
-  const oldHours = oldData?.weekly_hours || {};
-  const changes = {};
-  for (const day of daysOrder) {
-    const modalDay = latestHours[day] || {};
-    const oldDay = oldHours[day] || {};
-    if (
-      String(modalDay.start) !== String(oldDay.start) ||
-      String(modalDay.end) !== String(oldDay.end) ||
-      Boolean(modalDay.off) !== Boolean(oldDay.off)
-    ) {
-      changes[day] = {
-        start: modalDay.start || "",
-        end: modalDay.end || "",
-        off: !!modalDay.off,
-      };
+  const saveModalHours = async (latestHours) => {
+    if (!currentUser?.token) {
+      alert("❌ You must be logged in to update staff hours.");
+      return;
     }
-  }
 
-  if (Object.keys(changes).length === 0) {
-    alert("No changes to save.");
-    return;
-  }
+    // 1) Fetch current weekly_hours (for patch/merge)
+    const { data: oldData, error: fetchError } = await defaultSupabase
+      .from("staff")
+      .select("weekly_hours")
+      .eq("id", modalStaff.id)
+      .single();
 
-  // 3) Merge and log
-  const updatedWeeklyHours = { ...oldHours, ...changes };
-  console.log("🚀 PATCH: Only these days changed:", changes);
-  console.log("🚀 Final merged weekly_hours object:", updatedWeeklyHours);
+    if (fetchError) {
+      alert("❌ Error fetching current hours: " + fetchError.message);
+      return;
+    }
 
-  // 4) Update — reuse defaultSupabase; DO NOT call .select() here
-  const { error: updateError } = await defaultSupabase
-    .from("staff")
-    .update({ weekly_hours: updatedWeeklyHours })
-    .eq("id", modalStaff.id);
+    // 2) Compute only changed days
+    const oldHours = oldData?.weekly_hours || {};
+    const changes = {};
+    for (const day of daysOrder) {
+      const modalDay = latestHours[day] || {};
+      const oldDay = oldHours[day] || {};
+      if (
+        String(modalDay.start) !== String(oldDay.start) ||
+        String(modalDay.end) !== String(oldDay.end) ||
+        Boolean(modalDay.off) !== Boolean(oldDay.off)
+      ) {
+        changes[day] = {
+          start: modalDay.start || "",
+          end: modalDay.end || "",
+          off: !!modalDay.off,
+        };
+      }
+    }
 
-  if (updateError) {
-    alert("❌ Error saving hours: " + updateError.message);
-    return;
-  }
+    if (Object.keys(changes).length === 0) {
+      alert("No changes to save.");
+      return;
+    }
 
-  // ✅ Success
-  alert("✅ Hours updated successfully.");
-  await fetchData();
-  setShowHoursModal(false);
-};
+    // 3) Merge and log
+    const updatedWeeklyHours = { ...oldHours, ...changes };
 
+    // 4) Update — reuse defaultSupabase; DO NOT call .select() here
+    const { error: updateError } = await defaultSupabase
+      .from("staff")
+      .update({ weekly_hours: updatedWeeklyHours })
+      .eq("id", modalStaff.id);
+
+    if (updateError) {
+      alert("❌ Error saving hours: " + updateError.message);
+      return;
+    }
+
+    // ✅ Success
+    alert("✅ Hours updated successfully.");
+    await fetchData();
+    setShowHoursModal(false);
+  };
 
   // Delete staff by id (uses Edge Function)
   const handleDelete = async (id) => {
@@ -182,7 +195,7 @@ const saveModalHours = async (latestHours) => {
     try {
       // Call your Edge Function instead of Supabase admin API directly!
       const res = await fetch(
-        "https://vmtcofezozrblfxudauk.supabase.co/functions/v1/delete-staff", // <-- change to your Edge Function URL
+        "https://vmtcofezozrblfxudauk.supabase.co/functions/v1/delete-staff",
         {
           method: "POST",
           headers: {
@@ -217,6 +230,38 @@ const saveModalHours = async (latestHours) => {
     setEditServicesStaff(null);
   };
 
+  // 🔹 Open role editor (click name or button)
+  const openRoleModal = (staffMember) => {
+    setRoleStaff(staffMember);
+    setShowRoleModal(true);
+  };
+
+  // 🔹 Save role to DB
+  const saveRole = async (newRole) => {
+    if (!currentUser?.token) {
+      alert("❌ You must be logged in to update roles.");
+      return;
+    }
+    if (!roleStaff?.id) {
+      alert("❌ No staff member selected.");
+      return;
+    }
+    const { error } = await defaultSupabase
+      .from("staff")
+      .update({ permission: newRole })
+      .eq("id", roleStaff.id);
+
+    if (error) {
+      alert("❌ Error updating role: " + error.message);
+      return;
+    }
+
+    alert("✅ Role updated.");
+    setShowRoleModal(false);
+    setRoleStaff(null);
+    await fetchData();
+  };
+
   if (pageLoading || authLoading || loading) {
     return <PageLoader />;
   }
@@ -243,9 +288,19 @@ const saveModalHours = async (latestHours) => {
             >
               <div className="flex justify-between items-start">
                 <div>
-                  <h4 className="text-lg font-bold text-gray-800">{member.name}</h4>
-                  <p className="text-sm text-gray-500">Email: {member.email || "N/A"}</p>
-                  <p className="text-sm text-gray-500">Role: {member.permission}</p>
+                  <h4
+                    className="text-lg font-bold text-gray-800 cursor-pointer hover:underline"
+                    title="Click to edit role"
+                    onClick={() => openRoleModal(member)}
+                  >
+                    {member.name}
+                  </h4>
+                  <p className="text-sm text-gray-500">
+                    Email: {member.email || "N/A"}
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    Role: {member.permission || "—"}
+                  </p>
 
                   <div className="mt-2">
                     <h5 className="text-md font-semibold mb-1">Hours:</h5>
@@ -286,6 +341,12 @@ const saveModalHours = async (latestHours) => {
                     Edit Services
                   </button>
                   <button
+                    onClick={() => openRoleModal(member)}
+                    className="bg-indigo-600 text-white px-3 py-1 rounded"
+                  >
+                    Edit Role
+                  </button>
+                  <button
                     onClick={() => handleDelete(member.id)}
                     className="bg-red-600 text-white px-3 py-1 rounded"
                   >
@@ -316,13 +377,77 @@ const saveModalHours = async (latestHours) => {
         />
       )}
 
+      {/* 🔹 Role editor modal */}
+      {showRoleModal && (
+        <EditRoleModal
+          open={showRoleModal}
+          staff={roleStaff}
+          roleOptions={ROLE_OPTIONS}
+          onClose={() => {
+            setShowRoleModal(false);
+            setRoleStaff(null);
+          }}
+          onSave={saveRole}
+        />
+      )}
+
       {showAddModal && (
         <AddNewStaffModal
           open={showAddModal}
           onClose={() => setShowAddModal(false)}
           onSaved={fetchData}
+          // 🔹 If your AddNewStaffModal supports it, pass the same options
+          roleOptions={ROLE_OPTIONS}
         />
       )}
+    </div>
+  );
+}
+
+/* ========= Simple role editor modal (local component) ========= */
+function EditRoleModal({ open, staff, roleOptions = [], onClose, onSave }) {
+  const [selected, setSelected] = useState(staff?.permission || "");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-5">
+        <h3 className="text-xl font-semibold mb-2 text-gray-800">Edit Role</h3>
+        <p className="text-sm text-gray-600 mb-4">
+          Update the role for <b>{staff?.name}</b>.
+        </p>
+
+        <label className="block text-sm text-gray-700 mb-1">Role</label>
+        <select
+          className="w-full border rounded p-2 mb-4"
+          value={selected}
+          onChange={(e) => setSelected(e.target.value)}
+        >
+          <option value="" disabled>
+            Select a role…
+          </option>
+          {roleOptions.map((role) => (
+            <option key={role} value={role}>
+              {role}
+            </option>
+          ))}
+        </select>
+
+        <div className="flex justify-end gap-2">
+          <button
+            className="px-4 py-2 rounded bg-gray-200 text-gray-800"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            className="px-4 py-2 rounded bg-indigo-600 text-white disabled:opacity-50"
+            disabled={!selected}
+            onClick={() => onSave(selected)}
+          >
+            Save
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

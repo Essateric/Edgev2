@@ -16,6 +16,7 @@ import SetPin from "./pages/SetPin.jsx";
 import PageLoader from "./components/PageLoader.jsx";
 
 
+
 function App() {
   const { currentUser, pageLoading, authLoading } = useAuth();
   if (pageLoading || authLoading) return <PageLoader />;

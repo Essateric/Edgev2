@@ -6,7 +6,7 @@ import ClientNotesModal from "../clients/ClientNotesModal";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSaveClientDOB } from "../hooks/useSaveClientDOB";
 import { v4 as uuidv4 } from "uuid";
-import SaveBookingsLog from "./SaveBookingsLog"; // path already used in your project
+import SaveBookingsLog from "./SaveBookingsLog";
 
 // ---- Money helpers ----
 const toNumber = (v) => {
@@ -19,36 +19,27 @@ const toNumber = (v) => {
 const formatGBP = (v) => `£${toNumber(v).toFixed(2)}`;
 
 // ---- Date helpers ----
-const addDays = (d, n) => {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
-};
-const daysInMonth = (year, monthIndex) => new Date(year, monthIndex + 1, 0).getDate();
-const setHMS = (d, h, m, s = 0, ms = 0) => {
-  const x = new Date(d);
-  x.setHours(h, m, s, ms);
-  return x;
-};
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
+const setHMS = (d, h, m, s = 0, ms = 0) => { const x = new Date(d); x.setHours(h, m, s, ms); return x; };
 const clampDayInMonth = (y, m, day) => Math.min(day, daysInMonth(y, m));
 const addMonthsPreserveDay = (base, add, dayOverride = null) => {
-  const y = base.getFullYear();
-  const m = base.getMonth();
-  const d = dayOverride ?? base.getDate();
-  const targetY = y + Math.floor((m + add) / 12);
-  const targetM = (m + add) % 12;
+  const y = base.getFullYear(); const m = base.getMonth(); const d = dayOverride ?? base.getDate();
+  const targetY = y + Math.floor((m + add) / 12); const targetM = (m + add) % 12;
   const dd = clampDayInMonth(targetY, targetM, d);
-  const res = new Date(base);
-  res.setFullYear(targetY, targetM, dd);
-  return res;
+  const res = new Date(base); res.setFullYear(targetY, targetM, dd); return res;
 };
 const addYearsPreserveDay = (base, years) => {
-  const y = base.getFullYear() + years;
-  const m = base.getMonth();
-  const d = clampDayInMonth(y, m, base.getDate());
-  const res = new Date(base);
-  res.setFullYear(y, m, d);
-  return res;
+  const y = base.getFullYear() + years; const m = base.getMonth();
+  const d = clampDayInMonth(y, m, base.getDate()); const res = new Date(base);
+  res.setFullYear(y, m, d); return res;
+};
+
+// 🔎 helper: identify processing rows (hide from list/totals)
+const isProcessingRow = (row) => {
+  const cat = String(row?.category || "").toLowerCase();
+  const title = String(row?.title || "").toLowerCase();
+  return cat === "processing" || title.includes("processing time");
 };
 
 export default function BookingPopUp({
@@ -65,9 +56,14 @@ export default function BookingPopUp({
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [isEditingDob, setIsEditingDob] = useState(false);
 
-  // NEW: repeat modal state
+  // NEW: load client if missing from props
+  const [clientRow, setClientRow] = useState(null);
+  const [clientLoading, setClientLoading] = useState(false);
+  const [clientError, setClientError] = useState("");
+
+  // Repeat modal state
   const [repeatOpen, setRepeatOpen] = useState(false);
-  const [repeatPattern, setRepeatPattern] = useState("weekly"); // weekly | fortnightly | monthly | yearly | monthly_nth_day
+  const [repeatPattern, setRepeatPattern] = useState("weekly");
   const [repeatCount, setRepeatCount] = useState(6);
   const [repeatDayOfMonth, setRepeatDayOfMonth] = useState(
     booking?.start ? new Date(booking.start).getDate() : 1
@@ -79,21 +75,46 @@ export default function BookingPopUp({
   const { dobInput, setDobInput, savingDOB, dobError, saveDOB } =
     useSaveClientDOB();
 
-  const client = clients.find((c) => c.id === booking?.client_id);
+  // Try from props first
+  const clientFromList = clients.find((c) => c.id === booking?.client_id);
+  const client = clientFromList || clientRow || null;
 
-  // debug user (kept from your code)
+  // Fetch client if not provided via props (happens for online bookings)
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      setClientError("");
+      if (!isOpen || !booking?.client_id) return;
+      if (clientFromList) { setClientRow(null); return; } // already have it
+      try {
+        setClientLoading(true);
+        const { data, error } = await supabaseClient
+          .from("clients")
+          .select("id, first_name, last_name, email, mobile, dob")
+          .eq("id", booking.client_id)
+          .maybeSingle();
+        if (!active) return;
+        if (error) throw error;
+        setClientRow(data || null);
+      } catch (e) {
+        if (active) setClientError(e?.message || "Failed to load client.");
+      } finally {
+        if (active) setClientLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [isOpen, booking?.client_id, clientFromList, supabaseClient]);
+
+  // debug user (kept)
   useEffect(() => {
     let mounted = true;
     const checkUser = async () => {
       const { data: user, error } = await supabaseClient.auth.getUser();
       if (!mounted) return;
-      console.log("🧠 Supabase user:", user);
       if (error) console.error("❌ Supabase auth error:", error);
     };
     if (supabaseClient) checkUser();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [supabaseClient]);
 
   // services for the booking group
@@ -105,52 +126,47 @@ export default function BookingPopUp({
         .from("bookings")
         .select("*")
         .eq("booking_id", booking.booking_id);
-
       if (!active) return;
-
-      if (error) {
-        console.error("Error fetching related bookings:", error);
-      } else {
-        setRelatedBookings(data || []);
-      }
+      if (error) console.error("Error fetching related bookings:", error);
+      else setRelatedBookings(data || []);
     };
-
     if (supabaseClient && booking?.booking_id) fetchRelatedBookings();
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [supabaseClient, booking?.booking_id]);
 
-  // seed DOB input
+  // seed DOB input when client ready
   useEffect(() => {
     if (!client) return;
     if (client?.dob) {
       const v = String(client.dob);
-      setDobInput(v.includes("T") ? v.split("T")[0] : v); // "YYYY-MM-DD"
+      setDobInput(v.includes("T") ? v.split("T")[0] : v);
     } else {
       setDobInput("");
     }
   }, [client, setDobInput]);
 
   // -----------------------------
-  // HOOK-ORDER FIX: Always call hooks.
-  // These memos must run on every render; they just return safe fallbacks when data is missing.
+  // HOOK-ORDER SAFE MEMOS
   // -----------------------------
-  const sortedServices = useMemo(() => {
+  // All services in time order (includes processing)
+  const sortedAllServices = useMemo(() => {
     if (!Array.isArray(relatedBookings) || relatedBookings.length === 0) return [];
-    return [...relatedBookings].sort(
-      (a, b) => new Date(a.start) - new Date(b.start)
-    );
+    return [...relatedBookings].sort((a, b) => new Date(a.start) - new Date(b.start));
   }, [relatedBookings]);
 
-  // Build a compact blueprint of services (offset + duration relative to the first start)
+  // What we DISPLAY (hide processing)
+  const displayServices = useMemo(
+    () => sortedAllServices.filter((s) => !isProcessingRow(s)),
+    [sortedAllServices]
+  );
+
+  // Blueprint for repeat bookings — must include processing gap
   const blueprint = useMemo(() => {
-    if (!sortedServices.length) return null;
-    const baseStart = new Date(sortedServices[0].start);
+    if (!sortedAllServices.length) return null;
+    const baseStart = new Date(sortedAllServices[0].start);
     const baseHour = baseStart.getHours();
     const baseMin = baseStart.getMinutes();
-
-    const items = sortedServices.map((s) => {
+    const items = sortedAllServices.map((s) => {
       const sStart = new Date(s.start);
       const sEnd = new Date(s.end);
       const offsetMin = Math.round((sStart - baseStart) / 60000);
@@ -163,44 +179,50 @@ export default function BookingPopUp({
         offsetMin,
       };
     });
-
     return { baseStart, baseHour, baseMin, items };
-  }, [sortedServices]);
+  }, [sortedAllServices]);
 
-  // After all hooks are declared, you can safely gate the render.
-  if (!booking || !client) return null;
+  // --- Render guards ---
+  if (!isOpen || !booking) return null;
 
-  const clientName = `${client.first_name} ${client.last_name}`;
+  // If client still loading, render a tiny loader (don’t return null)
+  if (!client && clientLoading) {
+    return (
+      <Modal isOpen={isOpen} onClose={onClose} className="w-full max-w-[440px]">
+        <div className="p-4 text-sm text-gray-700">Loading client…</div>
+      </Modal>
+    );
+  }
+
+  // If client truly not found, show a minimal fallback (still open modal)
+  if (!client && !clientLoading) {
+    return (
+      <Modal isOpen={isOpen} onClose={onClose} className="w-full max-w-[440px]">
+        <div className="p-4">
+          <h2 className="text-lg font-bold text-rose-600">Client not found</h2>
+          {clientError && <p className="text-sm text-red-600 mt-1">{clientError}</p>}
+          <div className="mt-3">
+            <Button onClick={onClose} className="bg-orange-500 text-white">Close</Button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  const clientName = `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim() || "Client";
   const clientPhone = client.mobile || "N/A";
-
-  const displayDob = dobInput
-    ? format(new Date(`${dobInput}T00:00:00`), "do MMM")
-    : "DOB not set";
-
-  // compute total
-  const serviceTotal = sortedServices.reduce((sum, s) => sum + toNumber(s.price), 0);
-
+  const displayDob = dobInput ? format(new Date(`${dobInput}T00:00:00`), "do MMM") : "DOB not set";
+  // ⬇️ Total excludes processing rows
+  const serviceTotal = displayServices.reduce((sum, s) => sum + toNumber(s.price), 0);
   const stylist = stylistList.find((s) => s.id === booking.resource_id);
 
   const handleCancelBooking = async () => {
-    const confirmDelete = window.confirm(
-      "Are you sure you want to cancel this booking?"
-    );
+    const confirmDelete = window.confirm("Are you sure you want to cancel this booking?");
     if (!confirmDelete) return;
-
     try {
-      const { error } = await supabaseClient
-        .from("bookings")
-        .delete()
-        .eq("id", booking.id);
-
-      if (error) {
-        console.error("Failed to delete booking:", error);
-        alert("Something went wrong.");
-      } else {
-        onDeleteSuccess(booking.id);
-        onClose();
-      }
+      const { error } = await supabaseClient.from("bookings").delete().eq("id", booking.id);
+      if (error) { console.error("Failed to delete booking:", error); alert("Something went wrong."); }
+      else { onDeleteSuccess?.(booking.id); onClose(); }
     } catch (err) {
       console.error("Failed to cancel booking:", err);
       alert("Something went wrong. Please try again.");
@@ -208,22 +230,13 @@ export default function BookingPopUp({
   };
 
   const handleSaveDOBClick = async () => {
-    if (!dobInput) {
-      alert("Please pick a date before saving!");
-      return;
-    }
-    console.log("Attempting to save DOB", { dobInput, clientId: client.id });
+    if (!dobInput) { alert("Please pick a date before saving!"); return; }
     const res = await saveDOB({ clientId: client.id, dob: dobInput });
-    if (res.ok) {
-      alert("DOB updated! Check Supabase to confirm.");
-      setIsEditingDob(false);
-    } else {
-      alert("Supabase error: " + (res.error?.message || "Failed to save DOB"));
-    }
+    if (res.ok) { alert("DOB updated!"); setIsEditingDob(false); }
+    else { alert("Supabase error: " + (res.error?.message || "Failed to save DOB")); }
   };
 
   // ===== REPEAT LOGIC =====
-
   const patternLabel = (p) => {
     switch (p) {
       case "weekly": return "Weekly";
@@ -234,73 +247,41 @@ export default function BookingPopUp({
       default: return p;
     }
   };
-
-  const generateOccurrenceBase = (index /* 0..count-1 */) => {
-    // first occurrence is "next" one (i = 0)
+  const generateOccurrenceBase = (index) => {
     const base = blueprint?.baseStart ?? new Date(booking.start);
     const h = blueprint?.baseHour ?? new Date(booking.start).getHours();
     const m = blueprint?.baseMin ?? new Date(booking.start).getMinutes();
-
     switch (repeatPattern) {
-      case "weekly":
-        return setHMS(addDays(base, 7 * (index + 1)), h, m);
-      case "fortnightly":
-        return setHMS(addDays(base, 14 * (index + 1)), h, m);
-      case "monthly":
-        return setHMS(addMonthsPreserveDay(base, index + 1), h, m);
-      case "yearly":
-        return setHMS(addYearsPreserveDay(base, index + 1), h, m);
+      case "weekly": return setHMS(addDays(base, 7 * (index + 1)), h, m);
+      case "fortnightly": return setHMS(addDays(base, 14 * (index + 1)), h, m);
+      case "monthly": return setHMS(addMonthsPreserveDay(base, index + 1), h, m);
+      case "yearly": return setHMS(addYearsPreserveDay(base, index + 1), h, m);
       case "monthly_nth_day": {
         const nextMonth = addMonthsPreserveDay(base, index + 1, repeatDayOfMonth);
         return setHMS(nextMonth, h, m);
       }
-      default:
-        return setHMS(addDays(base, 7 * (index + 1)), h, m);
+      default: return setHMS(addDays(base, 7 * (index + 1)), h, m);
     }
   };
 
   const createRepeatSet = async () => {
-    if (!blueprint || !stylist) {
-      alert("Missing service blueprint or stylist.");
-      return;
-    }
-
-    const created = [];
-    const skipped = [];
-
+    if (!blueprint || !stylist) { alert("Missing service blueprint or stylist."); return; }
+    const created = []; const skipped = [];
     for (let i = 0; i < Math.max(1, Number(repeatCount) || 0); i++) {
       const occBase = generateOccurrenceBase(i);
-
-      // overlap check for the *whole occurrence* by testing each service timeslot
+      // overlap check
       let conflict = false;
       for (const item of blueprint.items) {
         const sStart = new Date(occBase.getTime() + item.offsetMin * 60000);
         const sEnd = new Date(sStart.getTime() + item.duration * 60000);
-
         const { data: overlaps, error: overlapErr } = await supabaseClient
-          .from("bookings")
-          .select("id")
+          .from("bookings").select("id")
           .eq("resource_id", booking.resource_id)
-          .lt("start", sEnd.toISOString())
-          .gt("end", sStart.toISOString());
-
-        if (overlapErr) {
-          console.error("Overlap check failed:", overlapErr.message);
-          conflict = true;
-          break;
-        }
-        if (overlaps?.length) {
-          conflict = true;
-          break;
-        }
+          .lt("start", sEnd.toISOString()).gt("end", sStart.toISOString());
+        if (overlapErr || (overlaps?.length)) { conflict = true; break; }
       }
-
-      if (conflict) {
-        skipped.push(occBase);
-        continue;
-      }
-
-      // create all services under a new booking_id
+      if (conflict) { skipped.push(occBase); continue; }
+      // create
       const newBookingId = uuidv4();
       const rows = blueprint.items.map((item) => {
         const sStart = new Date(occBase.getTime() + item.offsetMin * 60000);
@@ -319,21 +300,10 @@ export default function BookingPopUp({
           status: "confirmed",
         };
       });
-
       const { data: inserted, error: insErr } = await supabaseClient
-        .from("bookings")
-        .insert(rows)
-        .select("*");
-
-      if (insErr) {
-        console.error("Insert repeat occurrence failed:", insErr.message);
-        skipped.push(occBase);
-        continue;
-      }
-
+        .from("bookings").insert(rows).select("*");
+      if (insErr) { skipped.push(occBase); continue; }
       created.push({ when: occBase, rows: inserted });
-
-      // log once per occurrence (use first item as "service" for snapshot)
       try {
         const firstItem = blueprint.items[0];
         await SaveBookingsLog({
@@ -344,35 +314,21 @@ export default function BookingPopUp({
           stylist_id: booking.resource_id,
           stylist_name: stylist?.title || stylist?.name || "Unknown",
           service: {
-            name: firstItem.title,
-            category: firstItem.category,
-            price: firstItem.price,
-            duration: firstItem.duration,
+            name: firstItem.title, category: firstItem.category,
+            price: firstItem.price, duration: firstItem.duration,
           },
-          start: rows[0].start,
-          end: rows[0].end,
-          logged_by: null,               // will resolve to current staff inside SaveBookingsLog
-          reason: `Repeat Booking: ${patternLabel(repeatPattern)}`,
-          before_snapshot: null,
-          after_snapshot: rows[0],
+          start: rows[0].start, end: rows[0].end,
+          logged_by: null, reason: `Repeat Booking: ${patternLabel(repeatPattern)}`,
+          before_snapshot: null, after_snapshot: rows[0],
         });
-      } catch (e) {
-        console.warn("Repeat booking saved, but log write failed:", e?.message);
-      }
+      } catch (e) { /* log write failure is non-fatal */ }
     }
-
     setRepeatOpen(false);
-
-    // Notify + nudge refresh. (If your calendar listens to changes, this may be enough.)
     const msg = [
       `${created.length} repeat ${created.length === 1 ? "booking" : "bookings"} created.`,
       skipped.length ? `${skipped.length} skipped due to conflicts.` : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
+    ].filter(Boolean).join(" ");
     alert(msg || "Done.");
-
-    // optional: ask parent to refresh if you have a handler
     window.dispatchEvent(new CustomEvent("bookings:changed", { detail: { type: "repeat-created" } }));
   };
 
@@ -391,30 +347,18 @@ export default function BookingPopUp({
                 <input
                   type="date"
                   value={dobInput || ""}
-                  onChange={(e) => {
-                    setDobInput(e.target.value);
-                    console.log("Picked date:", e.target.value);
-                  }}
+                  onChange={(e) => setDobInput(e.target.value)}
                   className="border p-1 text-sm"
                 />
-                <Button
-                  onClick={handleSaveDOBClick}
-                  className="text-xs"
-                  disabled={!dobInput || savingDOB}
-                >
+                <Button onClick={handleSaveDOBClick} className="text-xs" disabled={!dobInput || savingDOB}>
                   {savingDOB ? "Saving..." : "Save"}
                 </Button>
-                <Button onClick={() => setIsEditingDob(false)} className="text-xs">
-                  Cancel
-                </Button>
+                <Button onClick={() => setIsEditingDob(false)} className="text-xs">Cancel</Button>
               </>
             ) : (
               <>
                 <span>{displayDob}</span>
-                <button
-                  onClick={() => setIsEditingDob(true)}
-                  className="text-xs text-blue-600 underline"
-                >
+                <button onClick={() => setIsEditingDob(true)} className="text-xs text-blue-600 underline">
                   Edit
                 </button>
               </>
@@ -431,12 +375,11 @@ export default function BookingPopUp({
       {/* SERVICES */}
       <div className="mt-4">
         <p className="text-md font-semibold text-gray-800 mb-1">Services</p>
-
-        {sortedServices.length === 0 ? (
+        {displayServices.length === 0 ? (
           <p className="text-sm text-gray-500 italic">No services found.</p>
         ) : (
           <div className="space-y-1">
-            {sortedServices.map((service, index) => {
+            {displayServices.map((service, index) => {
               const startTime = new Date(service.start);
               const formattedTime = !isNaN(startTime) ? format(startTime, "HH:mm") : "--:--";
               return (
@@ -454,8 +397,6 @@ export default function BookingPopUp({
                 </div>
               );
             })}
-
-            {/* TOTAL ROW */}
             <div className="flex justify-between items-center pt-2 border-t mt-2 text-sm text-gray-800">
               <span className="w-3/4 text-right font-semibold">Total</span>
               <span className="w-1/4 text-right font-semibold text-gray-900">
@@ -470,31 +411,17 @@ export default function BookingPopUp({
       <div className="mt-4 flex flex-wrap gap-2 items-center">
         <span className="text-sm text-green-700 font-semibold">Confirmed</span>
 
-        <button className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded">
-          Arrived
-        </button>
-        <button className="bg-gray-500 text-white px-3 py-1 rounded">
-          Checkout
-        </button>
+        <button className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded">Arrived</button>
+        <button className="bg-gray-500 text-white px-3 py-1 rounded">Checkout</button>
 
-        {/* NEW: Repeat bookings */}
-        <button
-          onClick={() => setRepeatOpen(true)}
-          className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded"
-        >
+        <button onClick={() => setRepeatOpen(true)} className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded">
           Repeat bookings
         </button>
 
-        <button
-          onClick={() => setShowActions(true)}
-          className="bg-gray-200 text-gray-800 px-3 py-1 rounded"
-        >
+        <button onClick={() => setShowActions(true)} className="bg-gray-200 text-gray-800 px-3 py-1 rounded">
           &#x2022;&#x2022;&#x2022;
         </button>
-        <button
-          onClick={onClose}
-          className="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1 rounded"
-        >
+        <button onClick={onClose} className="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1 rounded">
           Close
         </button>
       </div>
@@ -503,28 +430,17 @@ export default function BookingPopUp({
       {showActions && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-4 w-full max-w-xs shadow-md space-y-2">
-            <button className="block w-full text-left hover:bg-gray-100 p-2 rounded">
-              No show
-            </button>
-            <button className="block w-full text-left hover:bg-gray-100 p-2 rounded">
-              Awaiting review
-            </button>
-            <button className="block w-full text-left hover:bg-gray-100 p-2 rounded">
-              Rebook
-            </button>
-            <button onClick={onEdit} className="block w-full text left hover:bg-gray-100 p-2 rounded">
-              Edit
-            </button>
+            <button className="block w-full text-left hover:bg-gray-100 p-2 rounded">No show</button>
+            <button className="block w-full text-left hover:bg-gray-100 p-2 rounded">Awaiting review</button>
+            <button className="block w-full text-left hover:bg-gray-100 p-2 rounded">Rebook</button>
+            <button onClick={onEdit} className="block w-full text left hover:bg-gray-100 p-2 rounded">Edit</button>
             <button
               onClick={handleCancelBooking}
               className="block w-full text-left text-red-600 hover:bg-red-100 p-2 rounded"
             >
               Cancel
             </button>
-            <button
-              onClick={() => setShowActions(false)}
-              className="mt-2 w-full bg-gray-200 text-gray-700 py-1 rounded"
-            >
+            <button onClick={() => setShowActions(false)} className="mt-2 w-full bg-gray-200 text-gray-700 py-1 rounded">
               Close
             </button>
           </div>
@@ -593,7 +509,6 @@ export default function BookingPopUp({
                 />
               </label>
 
-              {/* Preview of first repeated date */}
               {blueprint && (
                 <p className="text-xs text-gray-600">
                   First new booking will be on{" "}
