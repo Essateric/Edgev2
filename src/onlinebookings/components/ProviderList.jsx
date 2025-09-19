@@ -8,7 +8,7 @@ export default function ProviderList({
   onSelect,
   onNext,
 }) {
-  // ---- Normalize & filter providers safely (works on mobile cold loads) ----
+  // ---- Selected service ids (stringified) ----
   const selectedIds = useMemo(() => {
     const ids = (selectedServices ?? []).map((s) =>
       String(s?.id ?? s?.service_id ?? s)
@@ -16,31 +16,75 @@ export default function ProviderList({
     return new Set(ids);
   }, [selectedServices]);
 
+  // ---- Helpers to normalize provider skills ----
+  function normalizeServiceIds(raw) {
+    if (!raw) return [];
+    // Already an array (numbers/strings/objects)
+    if (Array.isArray(raw)) return raw;
+
+    // JSON-encoded array?
+    if (typeof raw === "string") {
+      const str = raw.trim();
+      // CSV "1,2,3"
+      if (str.includes(",") && !str.startsWith("["))
+        return str.split(",").map((x) => x.trim()).filter(Boolean);
+
+      // JSON: '["1","2"]' or '[1,2]' or '[{"id":1}]'
+      if (str.startsWith("[") && str.endsWith("]")) {
+        try {
+          const parsed = JSON.parse(str);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      }
+      // Single value string
+      return [str];
+    }
+
+    // Anything else (number, object)
+    return [raw];
+  }
+
+  function toSkillSet(p) {
+    const list = normalizeServiceIds(p?.service_ids);
+    return new Set(
+      list.map((x) => String(x?.id ?? x?.service_id ?? x))
+    );
+  }
+
   const visibleProviders = useMemo(() => {
-    // Defensive normalize so missing fields don't nuke the list on mobile
     const base = (providers ?? []).map((p) => ({
       ...p,
       is_active: p?.is_active ?? true,
       online_bookings: p?.online_bookings ?? true,
-      service_ids: Array.isArray(p?.service_ids) ? p.service_ids : [],
     }));
 
     // Show only active, online-bookable stylists
-    const filtered = base.filter(
+    const candidates = base.filter(
       (p) => p.is_active !== false && p.online_bookings !== false
     );
 
-    // If no services chosen, show everyone (better UX on first visit)
-    if (!selectedIds.size) return filtered;
-
-    // Otherwise require ANY of the selected services to match stylist skills
-    return filtered.filter((p) => {
-      const skills = new Set(
-        p.service_ids.map((x) => String(x?.id ?? x?.service_id ?? x))
+    // If no services chosen, show everyone
+    if (!selectedIds.size) {
+      return candidates.sort((a, b) =>
+        String(a?.name || "").localeCompare(String(b?.name || ""))
       );
+    }
+
+    // Otherwise: match ANY selected service.
+    // IMPORTANT: If a stylist has no visible skills (null/empty/masked by RLS),
+    // we INCLUDE them rather than hide them—prevents false "no stylists" cases.
+    const filtered = candidates.filter((p) => {
+      const skills = toSkillSet(p);
+      if (skills.size === 0) return true; // permissive fallback
       for (const id of selectedIds) if (skills.has(id)) return true;
       return false;
     });
+
+    return filtered.sort((a, b) =>
+      String(a?.name || "").localeCompare(String(b?.name || ""))
+    );
   }, [providers, selectedIds]);
 
   const noneAvailable = visibleProviders.length === 0;
@@ -80,7 +124,7 @@ export default function ProviderList({
                     : "border-neutral-700"
                 }`}
               >
-                {/* Keep the input in the label for best iOS tap behavior */}
+                {/* Keep input inside label for reliable iOS taps */}
                 <input
                   type="radio"
                   name="provider"
