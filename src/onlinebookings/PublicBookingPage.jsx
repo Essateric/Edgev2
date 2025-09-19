@@ -141,6 +141,18 @@ export default function PublicBookingPage() {
   // Stylist-specific overrides from staff_services
   const [providerOverrides, setProviderOverrides] = useState([]);
 
+  // Inline toast (success / error) shown in-page
+const [toast, setToast] = useState(null);
+/** Show a toast banner for N ms (default 5s). */
+function showToast(message, { type = "success", ms = 5000 } = {}) {
+  setToast({ message, type, ts: Date.now() });
+  if (ms > 0) {
+    window.clearTimeout(showToast._t);
+    showToast._t = window.setTimeout(() => setToast(null), ms);
+  }
+}
+
+
   const isTBA = (p) =>
     p == null || p === "" || Number(p) === 0 || Number.isNaN(Number(p));
 
@@ -561,9 +573,9 @@ export default function PublicBookingPage() {
           console.error("[email] failed:", e);
         }
       }
+showToast("Thanks! Your booking request has been sent successfully.", { type: "success" });
+resetBookingFlow();
 
-      alert("Thanks! Your booking request has been sent.");
-      resetBookingFlow();
     } catch (e) {
       console.error("saveBooking failed", e);
       alert("Couldn't save booking. Please try again.");
@@ -785,6 +797,33 @@ export default function PublicBookingPage() {
   return (
     <div className="min-h-screen bg-black text-white text-[15px]">
       {header}
+      {/* Inline toast banner */}
+{toast && (
+  <div className="max-w-6xl mx-auto px-4 pt-4">
+    <div
+      className={`flex items-start gap-3 rounded-xl border px-4 py-3 shadow
+        ${toast.type === "success"
+          ? "bg-emerald-900/40 border-emerald-700 text-emerald-100"
+          : "bg-rose-900/40 border-rose-700 text-rose-100"}`}
+      role="status"
+      aria-live="polite"
+    >
+      <span className="mt-0.5 text-lg">{
+        toast.type === "success" ? "✅" : "⚠️"
+      }</span>
+      <div className="flex-1">{toast.message}</div>
+      <button
+        className="shrink-0 text-white/70 hover:text-white"
+        onClick={() => setToast(null)}
+        aria-label="Dismiss"
+        title="Dismiss"
+      >
+        ×
+      </button>
+    </div>
+  </div>
+)}
+
 
       {/* Mobile cart */}
       <div className="max-w-6xl mx-auto px-4 pt-6 lg:hidden">

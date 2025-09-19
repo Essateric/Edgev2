@@ -30,6 +30,19 @@ const esc = (s) =>
 const withLineBreaks = (s = "") => esc(s).replace(/\r?\n/g, "<br>");
 const extractEmail = (s = "") => (s.match(/<([^>]+)>/)?.[1] || s).trim();
 
+// simple phone formatter (keeps +44 or leading 0; groups for readability)
+const fmtPhone = (s = "") => {
+  const clean = String(s || "").replace(/[^\d+]/g, "");
+  if (!clean) return "—";
+  // If it starts with +44, keep; otherwise normalize to leading 0 if present
+  if (clean.startsWith("+44")) {
+    // +44 7xxx xxx xxx pattern-ish
+    return clean.replace(/^\+44/, "+44 ").replace(/(\d{3})(\d{3})(\d{3,})$/, "$1 $2 $3");
+  }
+  // Try 0xxx xxx xxxx
+  return clean.replace(/^0?/, "0").replace(/(\d{3})(\d{3})(\d{3,})$/, "$1 $2 $3");
+};
+
 function makeTransporter() {
   const user = process.env.BOOKING_EMAIL_USER;
   const pass = process.env.BOOKING_EMAIL_PASS;
@@ -66,7 +79,16 @@ export async function handler(event) {
     }
 
     // Payload:
-    // { customerEmail, businessEmail, business:{name,address,timezone}, booking:{start,end,client_name?}, service:{name}, provider:{name}, notes?:string, customerName?:string, client?:{first_name,last_name}}
+    // {
+    //   customerEmail, businessEmail,
+    //   business:{name,address,timezone},
+    //   booking:{start,end,client_name?},
+    //   service:{name}, provider:{name},
+    //   notes?:string,
+    //   customerName?:string,
+    //   client?:{first_name,last_name,mobile?},
+    //   customerPhone?:string   <-- we'll display this for the salon
+    // }
     let data;
     try {
       data = JSON.parse(event.body);
@@ -82,16 +104,23 @@ export async function handler(event) {
       service = {},           // { name }
       provider = {},          // { name }
       notes = "",             // free-text notes from customer
+      customerPhone,          // <-- NEW: prefer this if present
+      client,                 // may also contain mobile
     } = data;
 
     // 🔹 Derive the client's name from multiple possible places
     const rawClientName =
       String(data.customerName || "").trim() ||
       String(booking.client_name || "").trim() ||
-      `${String(data?.client?.first_name || "").trim()} ${String(data?.client?.last_name || "").trim()}`.trim();
+      `${String(client?.first_name || "").trim()} ${String(client?.last_name || "").trim()}`.trim();
 
     const clientFull = esc(rawClientName || "Customer");
     const clientFirst = esc((rawClientName.split(" ")[0] || "there").trim());
+
+    // 🔹 Derive a displayable phone for the salon
+    const derivedPhone = customerPhone || client?.mobile || "";
+    const phoneText = fmtPhone(derivedPhone);
+    const phoneHtml = `<p style="margin:0 0 4px 0"><b>Phone:</b> ${esc(phoneText)}</p>`;
 
     // Resolve business email: payload → env BUSINESS_EMAIL → address inside FROM_EMAIL
     const FROM_EMAIL =
@@ -153,11 +182,12 @@ export async function handler(event) {
       `Where: ${business.address || "—"}\n` +
       (notesClean ? `Notes: ${notesClean}\n` : ``);
 
-    // ---------- Salon email ----------
+    // ---------- Salon email (now includes Phone) ----------
     const businessSubject = `New booking request`;
     const businessHtml = `
       <div style="font-family:Arial,sans-serif;line-height:1.5">
         <p style="margin:0 0 4px 0"><b>Client:</b> ${clientFull}</p>
+        ${phoneHtml}
         <p style="margin:0 0 4px 0"><b>Service:</b> ${serviceName}</p>
         <p style="margin:0 0 4px 0"><b>Provider:</b> ${providerName}</p>
         <p style="margin:0 0 4px 0"><b>When:</b> ${esc(when)} (${esc(tz)})</p>
@@ -167,6 +197,7 @@ export async function handler(event) {
     const businessText =
       `New booking request\n` +
       `Client: ${rawClientName || "—"}\n` +
+      `Phone: ${phoneText}\n` +                  // <-- added to text version
       `Service: ${service.name || "—"}\n` +
       `Provider: ${provider.name || "—"}\n` +
       `When: ${when} (${tz})\n` +
