@@ -90,8 +90,8 @@ const minsToLabel = (total) => {
 
 // Insert rows and gracefully retry if some columns don't exist yet (e.g. service_id/sort_index on older DBs)
 async function safeInsertBookings(rows) {
-  // try sanitized first (only BOOKING_COLUMNS)
   const cleanRows = rows.map(sanitizeBookingRow);
+
   let { data, error } = await supabase.from("bookings").insert(cleanRows).select("*");
   if (!error) return data;
 
@@ -159,27 +159,20 @@ export default function PublicBookingPage() {
         .order("name");
       setServices(s || []);
 
+      // IMPORTANT: no inline comments here; they break URL-encoded select()
       const { data: staff } = await supabase
-     .from("staff")
-     .select(`
-       id,
-       name,
-       email,
-       permission,
-       weekly_hours,
-       service_ids,          -- REQUIRED for filtering by service
-       online_bookings,      -- show/hide online-bookable stylists
-       is_active             -- hide inactive stylists
-     `)
-     .order("name");
-   // Normalise shapes so mobile doesn’t crash the filter
-   const normalised = (staff || []).map(p => ({
-     ...p,
-     service_ids: Array.isArray(p?.service_ids) ? p.service_ids : [],
-     online_bookings: p?.online_bookings ?? true,
-     is_active: p?.is_active ?? true,
-   }));
-   setProviders(normalised);
+        .from("staff")
+        .select("id,name,email,permission,weekly_hours,service_ids,online_bookings,is_active")
+        .order("name");
+
+      // Normalise shapes so mobile cold loads don't fail filtering
+      const normalised = (staff || []).map((p) => ({
+        ...p,
+        service_ids: Array.isArray(p?.service_ids) ? p.service_ids : [],
+        online_bookings: p?.online_bookings ?? true,
+        is_active: p?.is_active ?? true,
+      }));
+      setProviders(normalised);
     })();
   }, []);
 
@@ -782,7 +775,7 @@ export default function PublicBookingPage() {
 
         {hasUnknownPrice && (
           <p className="mt-3 text-xs text-gray-400">
-            Please selecta stylist for price.
+            Please select a stylist for price.
           </p>
         )}
       </section>
@@ -864,7 +857,7 @@ export default function PublicBookingPage() {
 
               <ProviderList
                 providers={providers}
-                selectedServices={selectedServices}
+                selectedServices={selectedServices} {/* <-- pass for filtering */}
                 selectedProvider={selectedProvider}
                 onSelect={(p) => {
                   setSelectedProvider(p);
