@@ -31,17 +31,36 @@ const withLineBreaks = (s = "") => esc(s).replace(/\r?\n/g, "<br>");
 const extractEmail = (s = "") => (s.match(/<([^>]+)>/)?.[1] || s).trim();
 
 // simple phone formatter (keeps +44 or leading 0; groups for readability)
+// simple UK mobile formatter:
+// "07305422191"  -> "07305 422 191"
+// "+447305422191"-> "+44 7305 422 191"
 const fmtPhone = (s = "") => {
-  const clean = String(s || "").replace(/[^\d+]/g, "");
-  if (!clean) return "—";
-  // If it starts with +44, keep; otherwise normalize to leading 0 if present
-  if (clean.startsWith("+44")) {
-    // +44 7xxx xxx xxx pattern-ish
-    return clean.replace(/^\+44/, "+44 ").replace(/(\d{3})(\d{3})(\d{3,})$/, "$1 $2 $3");
+  const raw = String(s || "").replace(/[^\d+]/g, "");
+  if (!raw) return "—";
+
+  // +44 case (international)
+  if (raw.startsWith("+44")) {
+    let nsn = raw.slice(3);            // strip +44
+    if (nsn.startsWith("0")) nsn = nsn.slice(1); // drop national 0 if present
+    // expect 10 digits for a mobile after +44 (e.g. 7305422191)
+    if (nsn.length >= 10) {
+      return `+44 ${nsn.slice(0,4)} ${nsn.slice(4,7)} ${nsn.slice(7,10)}`;
+    }
+    return `+44 ${nsn}`; // fallback
   }
-  // Try 0xxx xxx xxxx
-  return clean.replace(/^0?/, "0").replace(/(\d{3})(\d{3})(\d{3,})$/, "$1 $2 $3");
+
+  // National format: ensure leading 0 and then 11 digits
+  let num = raw;
+  if (!num.startsWith("0")) num = "0" + num;
+  num = num.slice(0, 11); // trim if longer
+  if (num.length === 11) {
+    return `${num.slice(0,5)} ${num.slice(5,8)} ${num.slice(8,11)}`;
+  }
+
+  // Fallback to raw if we can't confidently format
+  return num;
 };
+
 
 function makeTransporter() {
   const user = process.env.BOOKING_EMAIL_USER;
