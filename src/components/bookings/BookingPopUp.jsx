@@ -8,7 +8,7 @@ import { useSaveClientDOB } from "../hooks/useSaveClientDOB";
 import { v4 as uuidv4 } from "uuid";
 import SaveBookingsLog from "./SaveBookingsLog";
 
-// ---- Money helpers ----
+/* ---------- Money helpers ---------- */
 const toNumber = (v) => {
   if (v == null) return 0;
   if (typeof v === "number") return isFinite(v) ? v : 0;
@@ -18,7 +18,7 @@ const toNumber = (v) => {
 };
 const formatGBP = (v) => `£${toNumber(v).toFixed(2)}`;
 
-// ---- Date helpers ----
+/* ---------- Date helpers ---------- */
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
 const setHMS = (d, h, m, s = 0, ms = 0) => { const x = new Date(d); x.setHours(h, m, s, ms); return x; };
@@ -35,17 +35,15 @@ const addYearsPreserveDay = (base, years) => {
   res.setFullYear(y, m, d); return res;
 };
 
-// 🔎 helper: identify processing rows (hide from list/totals)
+/* Hide processing rows from list/totals */
 const isProcessingRow = (row) => {
   const cat = String(row?.category || "").toLowerCase();
   const title = String(row?.title || "").toLowerCase();
   return cat === "processing" || title.includes("processing time");
 };
 
-// ✅ Timezone-safe helpers for "timestamp without time zone" storage
-// Save as local wall-clock SQL string (no timezone)
+/* Timezone-safe helpers for timestamp w/o TZ storage (local wall-clock) */
 const toLocalSQL = (d) => format(d, "yyyy-MM-dd HH:mm:ss");
-// Parse ANY string as LOCAL time (supports "YYYY-MM-DD HH:mm:ss" or ISO)
 const asLocalDate = (v) => {
   if (v instanceof Date) return v;
   if (typeof v === "string") {
@@ -54,6 +52,34 @@ const asLocalDate = (v) => {
   }
   return new Date(v);
 };
+
+/* ---------- Staff lookup helper (robust; avoids 400s on unknown columns) ---------- */
+async function fetchStaffForCurrentUser(supabase) {
+  const { data: authData, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !authData?.user) return null;
+  const user = authData.user;
+
+  const tryBy = async (column, value) => {
+    try {
+      const { data, error } = await supabase
+        .from("staff")
+        .select("id, name, email, permission")
+        .eq(column, value)
+        .maybeSingle();
+      if (error || !data) return null;
+      return data;
+    } catch {
+      return null;
+    }
+  };
+
+  return (
+    (await tryBy("auth_user_id", user.id)) ||
+    (await tryBy("UID", user.id)) ||  // if legacy quoted column
+    (await tryBy("uid", user.id)) ||  // if later lowercased
+    (await tryBy("email", user.email))
+  );
+}
 
 export default function BookingPopUp({
   isOpen,
@@ -69,7 +95,10 @@ export default function BookingPopUp({
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [isEditingDob, setIsEditingDob] = useState(false);
 
-  // NEW: load client if missing from props
+  // Optional: resolved current staff (to pass down to notes modal)
+  const [currentStaff, setCurrentStaff] = useState(null);
+
+  // Load client if missing from props
   const [clientRow, setClientRow] = useState(null);
   const [clientLoading, setClientLoading] = useState(false);
   const [clientError, setClientError] = useState("");
@@ -84,7 +113,7 @@ export default function BookingPopUp({
 
   const { supabaseClient } = useAuth();
 
-  // saves clients.dob (DATE)
+  // Saves clients.dob (DATE)
   const { dobInput, setDobInput, savingDOB, dobError, saveDOB } =
     useSaveClientDOB();
 
@@ -92,13 +121,13 @@ export default function BookingPopUp({
   const clientFromList = clients.find((c) => c.id === booking?.client_id);
   const client = clientFromList || clientRow || null;
 
-  // Fetch client if not provided via props (happens for online bookings)
+  // Fetch client if not provided via props
   useEffect(() => {
     let active = true;
     (async () => {
       setClientError("");
       if (!isOpen || !booking?.client_id) return;
-      if (clientFromList) { setClientRow(null); return; } // already have it
+      if (clientFromList) { setClientRow(null); return; }
       try {
         setClientLoading(true);
         const { data, error } = await supabaseClient
@@ -118,7 +147,18 @@ export default function BookingPopUp({
     return () => { active = false; };
   }, [isOpen, booking?.client_id, clientFromList, supabaseClient]);
 
-  // debug user (kept)
+  // Resolve current staff (robust; avoids /staff?uid=... 400s)
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      if (!isOpen || !supabaseClient) return;
+      const staff = await fetchStaffForCurrentUser(supabaseClient);
+      if (on) setCurrentStaff(staff);
+    })();
+    return () => { on = false; };
+  }, [isOpen, supabaseClient]);
+
+  // Debug user (kept)
   useEffect(() => {
     let mounted = true;
     const checkUser = async () => {
@@ -130,7 +170,7 @@ export default function BookingPopUp({
     return () => { mounted = false; };
   }, [supabaseClient]);
 
-  // services for the booking group
+  // Services for the booking group
   useEffect(() => {
     let active = true;
     const fetchRelatedBookings = async () => {
@@ -147,7 +187,7 @@ export default function BookingPopUp({
     return () => { active = false; };
   }, [supabaseClient, booking?.booking_id]);
 
-  // seed DOB input when client ready
+  // Seed DOB input when client ready
   useEffect(() => {
     if (!client) return;
     if (client?.dob) {
@@ -158,22 +198,17 @@ export default function BookingPopUp({
     }
   }, [client, setDobInput]);
 
-  // -----------------------------
-  // HOOK-ORDER SAFE MEMOS
-  // -----------------------------
-  // All services in time order (includes processing)
+  /* ---------- Memos ---------- */
   const sortedAllServices = useMemo(() => {
     if (!Array.isArray(relatedBookings) || relatedBookings.length === 0) return [];
     return [...relatedBookings].sort((a, b) => asLocalDate(a.start) - asLocalDate(b.start));
   }, [relatedBookings]);
 
-  // What we DISPLAY (hide processing)
   const displayServices = useMemo(
     () => sortedAllServices.filter((s) => !isProcessingRow(s)),
     [sortedAllServices]
   );
 
-  // Blueprint for repeat bookings — must include processing gap
   const blueprint = useMemo(() => {
     if (!sortedAllServices.length) return null;
     const baseStart = asLocalDate(sortedAllServices[0].start);
@@ -195,10 +230,9 @@ export default function BookingPopUp({
     return { baseStart, baseHour, baseMin, items };
   }, [sortedAllServices]);
 
-  // --- Render guards ---
+  /* ---------- Render guards ---------- */
   if (!isOpen || !booking) return null;
 
-  // If client still loading, render a tiny loader (don’t return null)
   if (!client && clientLoading) {
     return (
       <Modal isOpen={isOpen} onClose={onClose} className="w-full max-w-[440px]">
@@ -207,7 +241,6 @@ export default function BookingPopUp({
     );
   }
 
-  // If client truly not found, show a minimal fallback (still open modal)
   if (!client && !clientLoading) {
     return (
       <Modal isOpen={isOpen} onClose={onClose} className="w-full max-w-[440px]">
@@ -225,7 +258,6 @@ export default function BookingPopUp({
   const clientName = `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim() || "Client";
   const clientPhone = client.mobile || "N/A";
   const displayDob = dobInput ? format(new Date(`${dobInput}T00:00:00`), "do MMM") : "DOB not set";
-  // ⬇️ Total excludes processing rows
   const serviceTotal = displayServices.reduce((sum, s) => sum + toNumber(s.price), 0);
   const stylist = stylistList.find((s) => s.id === booking.resource_id);
 
@@ -249,7 +281,33 @@ export default function BookingPopUp({
     else { alert("Supabase error: " + (res.error?.message || "Failed to save DOB")); }
   };
 
-  // ===== REPEAT LOGIC =====
+  /* ---------- Optional: safe note insert you can pass to ClientNotesModal ---------- */
+  const handleAddNoteSafe = async ({ clientId, noteText, bookingId }) => {
+    const text = (noteText || "").trim();
+    if (!text) return { ok: false, error: { message: "Empty note" } };
+
+    const { data: authData } = await supabaseClient.auth.getUser();
+    const staff = currentStaff; // already resolved above
+
+    const payload = {
+      client_id: clientId,
+      note_content: text,
+      booking_id: bookingId ?? null,
+      created_by: staff?.name || staff?.email || authData?.user?.email || "unknown",
+      created_by_id: staff?.id ?? null,
+    };
+
+    const { data, error } = await supabaseClient
+      .from("client_notes")
+      .insert(payload)     // ✅ no ?columns=...
+      .select()
+      .single();
+
+    if (error) return { ok: false, error };
+    return { ok: true, data };
+  };
+
+  /* ---------- Repeat logic ---------- */
   const patternLabel = (p) => {
     switch (p) {
       case "weekly": return "Weekly";
@@ -260,6 +318,7 @@ export default function BookingPopUp({
       default: return p;
     }
   };
+
   const generateOccurrenceBase = (index) => {
     const base = blueprint?.baseStart ?? asLocalDate(booking.start);
     const h = blueprint?.baseHour ?? asLocalDate(booking.start).getHours();
@@ -283,7 +342,7 @@ export default function BookingPopUp({
     for (let i = 0; i < Math.max(1, Number(repeatCount) || 0); i++) {
       const occBase = generateOccurrenceBase(i);
 
-      // overlap check (use local SQL strings, not UTC ISO)
+      // overlap check (start < newEnd AND end > newStart)
       let conflict = false;
       for (const item of blueprint.items) {
         const sStart = new Date(occBase.getTime() + item.offsetMin * 60000);
@@ -297,7 +356,7 @@ export default function BookingPopUp({
       }
       if (conflict) { skipped.push(occBase); continue; }
 
-      // create (save local wall-clock SQL strings)
+      // create rows (local wall-clock SQL strings)
       const newBookingId = uuidv4();
       const rows = blueprint.items.map((item) => {
         const sStart = new Date(occBase.getTime() + item.offsetMin * 60000);
@@ -339,7 +398,7 @@ export default function BookingPopUp({
           logged_by: null, reason: `Repeat Booking: ${patternLabel(repeatPattern)}`,
           before_snapshot: null, after_snapshot: rows[0],
         });
-      } catch (e) { /* log write failure is non-fatal */ }
+      } catch (e) { /* non-fatal if log write fails */ }
     }
     setRepeatOpen(false);
     const msg = [
@@ -451,7 +510,7 @@ export default function BookingPopUp({
             <button className="block w-full text-left hover:bg-gray-100 p-2 rounded">No show</button>
             <button className="block w-full text-left hover:bg-gray-100 p-2 rounded">Awaiting review</button>
             <button className="block w-full text-left hover:bg-gray-100 p-2 rounded">Rebook</button>
-            <button onClick={onEdit} className="block w-full text left hover:bg-gray-100 p-2 rounded">Edit</button>
+            <button onClick={onEdit} className="block w-full text-left hover:bg-gray-100 p-2 rounded">Edit</button>
             <button
               onClick={handleCancelBooking}
               className="block w-full text-left text-red-600 hover:bg-red-100 p-2 rounded"
@@ -472,6 +531,9 @@ export default function BookingPopUp({
           bookingId={booking?.id}
           isOpen={showNotesModal}
           onClose={() => setShowNotesModal(false)}
+          /* Optional goodies to avoid 400s inside the modal: */
+          staffContext={currentStaff || null}
+          onAddNote={handleAddNoteSafe}   // modal can call this to insert safely (no ?columns)
         />
       )}
 

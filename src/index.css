@@ -313,3 +313,50 @@ body {
 .rbc-time-content {
   position: relative;
 }
+
+/* --------------------------------------- */
+/* DnD behavior: keep others opaque + hide source while dragging */
+/* --------------------------------------- */
+
+/* No global fade while dragging/hovering drop targets */
+.rbc-addons-dnd .rbc-event,
+.rbc-addons-dnd .rbc-addons-dnd-is-dragging .rbc-event,
+.rbc-addons-dnd .rbc-addons-dnd-over .rbc-event {
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+/* 1) When RBC puts the dragging class directly on the event */
+.rbc-event.rbc-addons-dnd-dragging,
+.rbc-event.rbc-dnd-dragging,
+.rbc-addons-dnd-is-dragging .rbc-event.rbc-selected {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* 2) When RBC puts the dragging class on a CHILD (cover via :has()) */
+.rbc-event:has(.rbc-addons-dnd-dragging),
+.rbc-event:has(.rbc-dnd-dragging),
+.rbc-event:has(.rbc-event-content.rbc-addons-dnd-dragging),
+.rbc-event:has(.rbc-event-content[aria-grabbed="true"]),
+.rbc-event:has(.rbc-event-content[draggable="true"].rbc-addons-dnd-dragging) {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Transparent selection rectangle (no grey wash) */
+.rbc-slot-selection {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Intentionally no pointer-events override during drag */
+/* Hide the event being dragged (wins over earlier "opacity:1" rules) */
+/* Hide the event being dragged (must be last to beat earlier !important rules) */
+.hide-drag-source {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}

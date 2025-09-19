@@ -160,10 +160,26 @@ export default function PublicBookingPage() {
       setServices(s || []);
 
       const { data: staff } = await supabase
-        .from("staff")
-        .select("id,name,weekly_hours,permission,email")
-        .order("name");
-      setProviders(staff || []);
+     .from("staff")
+     .select(`
+       id,
+       name,
+       email,
+       permission,
+       weekly_hours,
+       service_ids,          -- REQUIRED for filtering by service
+       online_bookings,      -- show/hide online-bookable stylists
+       is_active             -- hide inactive stylists
+     `)
+     .order("name");
+   // Normalise shapes so mobile doesn’t crash the filter
+   const normalised = (staff || []).map(p => ({
+     ...p,
+     service_ids: Array.isArray(p?.service_ids) ? p.service_ids : [],
+     online_bookings: p?.online_bookings ?? true,
+     is_active: p?.is_active ?? true,
+   }));
+   setProviders(normalised);
     })();
   }, []);
 
@@ -848,6 +864,7 @@ export default function PublicBookingPage() {
 
               <ProviderList
                 providers={providers}
+                selectedServices={selectedServices}
                 selectedProvider={selectedProvider}
                 onSelect={(p) => {
                   setSelectedProvider(p);
