@@ -8,7 +8,7 @@ export default function ProviderList({
   onSelect,
   onNext,
 }) {
-  // ---- Selected service ids (stringified) ----
+  // Selected service ids (stringified)
   const selectedIds = useMemo(() => {
     const ids = (selectedServices ?? []).map((s) =>
       String(s?.id ?? s?.service_id ?? s)
@@ -16,75 +16,67 @@ export default function ProviderList({
     return new Set(ids);
   }, [selectedServices]);
 
-  // ---- Helpers to normalize provider skills ----
-  function normalizeServiceIds(raw) {
-    if (!raw) return [];
-    // Already an array (numbers/strings/objects)
-    if (Array.isArray(raw)) return raw;
-
-    // JSON-encoded array?
-    if (typeof raw === "string") {
-      const str = raw.trim();
-      // CSV "1,2,3"
-      if (str.includes(",") && !str.startsWith("["))
-        return str.split(",").map((x) => x.trim()).filter(Boolean);
-
-      // JSON: '["1","2"]' or '[1,2]' or '[{"id":1}]'
-      if (str.startsWith("[") && str.endsWith("]")) {
+  // Normalize provider skills into a Set<string>
+  function toSkillSet(p) {
+    const raw = p?.service_ids;
+    const arr = Array.isArray(raw)
+      ? raw
+      : typeof raw === "string"
+      ? normalizeFromString(raw)
+      : raw == null
+      ? []
+      : [raw];
+    return new Set(arr.map((x) => String(x?.id ?? x?.service_id ?? x)));
+    function normalizeFromString(s) {
+      const t = s.trim();
+      if (t.startsWith("[") && t.endsWith("]")) {
         try {
-          const parsed = JSON.parse(str);
+          const parsed = JSON.parse(t);
           return Array.isArray(parsed) ? parsed : [];
         } catch {
           return [];
         }
       }
-      // Single value string
-      return [str];
+      if (t.includes(",")) return t.split(",").map((x) => x.trim()).filter(Boolean);
+      return t ? [t] : [];
     }
-
-    // Anything else (number, object)
-    return [raw];
-  }
-
-  function toSkillSet(p) {
-    const list = normalizeServiceIds(p?.service_ids);
-    return new Set(
-      list.map((x) => String(x?.id ?? x?.service_id ?? x))
-    );
   }
 
   const visibleProviders = useMemo(() => {
+    // Base candidate list (active + online)
     const base = (providers ?? []).map((p) => ({
       ...p,
       is_active: p?.is_active ?? true,
       online_bookings: p?.online_bookings ?? true,
     }));
-
-    // Show only active, online-bookable stylists
     const candidates = base.filter(
       (p) => p.is_active !== false && p.online_bookings !== false
     );
 
-    // If no services chosen, show everyone
+    // If no services chosen -> show everyone (good first-load UX)
     if (!selectedIds.size) {
-      return candidates.sort((a, b) =>
-        String(a?.name || "").localeCompare(String(b?.name || ""))
-      );
+      return sortByName(candidates);
     }
 
-    // Otherwise: match ANY selected service.
-    // IMPORTANT: If a stylist has no visible skills (null/empty/masked by RLS),
-    // we INCLUDE them rather than hide them—prevents false "no stylists" cases.
-    const filtered = candidates.filter((p) => {
+    // Detect the "mapping empty" situation (RLS/empty staff_services)
+    const allSkillsEmpty = candidates.every((p) => toSkillSet(p).size === 0);
+    if (allSkillsEmpty) {
+      // Mapping unavailable → don't hide anyone
+      return sortByName(candidates);
+    }
+
+    // Normal filter: include stylist if ANY selected service matches
+    let filtered = candidates.filter((p) => {
       const skills = toSkillSet(p);
-      if (skills.size === 0) return true; // permissive fallback
+      if (skills.size === 0) return true; // permissive fallback for partially missing data
       for (const id of selectedIds) if (skills.has(id)) return true;
       return false;
     });
 
-    return filtered.sort((a, b) =>
-      String(a?.name || "").localeCompare(String(b?.name || ""))
-    );
+    // Absolute fallback: if filtering produced nothing, show everyone
+    if (filtered.length === 0) filtered = candidates;
+
+    return sortByName(filtered);
   }, [providers, selectedIds]);
 
   const noneAvailable = visibleProviders.length === 0;
@@ -124,7 +116,6 @@ export default function ProviderList({
                     : "border-neutral-700"
                 }`}
               >
-                {/* Keep input inside label for reliable iOS taps */}
                 <input
                   type="radio"
                   name="provider"
@@ -145,5 +136,11 @@ export default function ProviderList({
         </div>
       )}
     </section>
+  );
+}
+
+function sortByName(arr) {
+  return [...arr].sort((a, b) =>
+    String(a?.name || "").localeCompare(String(b?.name || ""))
   );
 }

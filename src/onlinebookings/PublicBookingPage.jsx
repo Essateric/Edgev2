@@ -104,19 +104,14 @@ function normalizeServiceIds(raw) {
   return [raw];
 }
 
-// Insert rows and gracefully retry if some columns don't exist yet
+// ---------- INSERT via RPC (no read-after-insert) ----------
 async function safeInsertBookings(rows) {
-  const cleanRows = rows.map(sanitizeBookingRow);
-  let { data, error } = await supabase.from("bookings").insert(cleanRows).select("*");
-  if (!error) return data;
-  const msg = (error.message || "").toLowerCase();
-  if (msg.includes("service_id")) {
-    const stripped = cleanRows.map(({ service_id, ...rest }) => rest);
-    const retry = await supabase.from("bookings").insert(stripped).select("*");
-    if (!retry.error) return retry.data;
-    throw retry.error;
-  }
-  throw error;
+  // rows are already sanitized by our payload mapping below
+  const { error } = await supabase.rpc("public_create_booking_multi", {
+    p_rows: rows,
+  });
+  if (error) throw error;
+  return [];
 }
 
 export default function PublicBookingPage() {
@@ -162,38 +157,34 @@ export default function PublicBookingPage() {
     setStep(1);
   }
 
-  // ===== Fetch services + providers + map services to providers =====
+  // ===== Fetch services + providers + map services to providers (via RPCs) =====
   useEffect(() => {
     (async () => {
-      // Services
-      const { data: s } = await supabase
-        .from("services")
-        .select("id,name,category,is_chemical,base_duration,base_price")
-        .order("name");
+      // 1) Services (RPC)
+      const { data: s } = await supabase.rpc("public_get_services");
       setServices(s || []);
 
-      // Staff (your schema: no service_ids/online_bookings/is_active columns)
-      const { data: staff } = await supabase
-        .from("staff")
-        .select("id,name,email,permission,weekly_hours")
-        .order("name");
+      // 2) Staff (RPC)
+      const { data: staff } = await supabase.rpc("public_get_staff");
 
-      // Links staff_services -> build service_ids per stylist
-      const { data: links } = await supabase
-        .from("staff_services")
-        .select("staff_id,service_id");
+      // 3) Staff ↔ services links (RPC)
+      let links = [];
+      {
+        const { data: l } = await supabase.rpc("public_get_staff_services");
+        links = l || [];
+      }
 
-      const map = new Map(); // staff_id -> Set(service_id)
-      (links || []).forEach((r) => {
+      // Build mapping staff_id -> Set(service_id)
+      const map = new Map();
+      for (const r of links) {
         if (!map.has(r.staff_id)) map.set(r.staff_id, new Set());
         map.get(r.staff_id).add(r.service_id);
-      });
+      }
 
+      // Normalise providers for UI (service_ids[], defaults for flags)
       const normalised = (staff || []).map((p) => ({
         ...p,
-        // derive skills from staff_services (empty array if none)
         service_ids: Array.from(map.get(p.id) || []),
-        // sensible defaults (since not present in your schema)
         online_bookings: true,
         is_active: true,
       }));
@@ -291,6 +282,8 @@ export default function PublicBookingPage() {
       try {
         const dayStart = startOfDay(selectedDate);
         const dayEnd = endOfDay(selectedDate);
+        const dayStartISO = dayStart.toISOString();
+        const dayEndISO = dayEnd.toISOString();
 
         const windows = getWindowsForWeekday(
           selectedProvider.weekly_hours,
@@ -319,14 +312,14 @@ export default function PublicBookingPage() {
           return;
         }
 
-        const { data: existing } = await supabase
-          .from("bookings")
-          .select("start,end")
-          .eq("resource_id", selectedProvider.id)
-          .lt("start", dayEnd.toISOString())
-          .gt("end", dayStart.toISOString());
+        // Busy spans via RPC (public_get_booked_spans)
+        const { data: spans, error: spansErr } = await supabase.rpc(
+          "public_get_booked_spans",
+          { p_staff: selectedProvider.id, p_start: dayStartISO, p_end: dayEndISO }
+        );
+        if (spansErr) throw spansErr;
 
-        const busy = (existing || []).map((b) => ({
+        const busy = (spans || []).map((b) => ({
           start: new Date(b.start),
           end: new Date(b.end),
         }));
@@ -474,15 +467,13 @@ export default function PublicBookingPage() {
         }
       }
 
-      // clash check
+      // clash check via RPC (no direct table SELECT)
       const dayStartISO = startOfDay(selectedDate).toISOString();
       const dayEndISO = endOfDay(selectedDate).toISOString();
-      const { data: dayBookings, error: dayErr } = await supabase
-        .from("bookings")
-        .select("start,end")
-        .eq("resource_id", selectedProvider.id)
-        .lt("start", dayEndISO)
-        .gt("end", dayStartISO);
+      const { data: dayBookings, error: dayErr } = await supabase.rpc(
+        "public_get_booked_spans",
+        { p_staff: selectedProvider.id, p_start: dayStartISO, p_end: dayEndISO }
+      );
       if (dayErr) throw dayErr;
 
       for (const r of rows) {
@@ -497,7 +488,7 @@ export default function PublicBookingPage() {
         }
       }
 
-      // insert grouped rows
+      // insert grouped rows (via RPC)
       const payloadRows = rows.map((r) => ({
         booking_id: bookingId,
         title: r.title,
@@ -513,7 +504,7 @@ export default function PublicBookingPage() {
         service_id: r.service_id,
       }));
 
-      const inserted = await safeInsertBookings(payloadRows);
+      await safeInsertBookings(payloadRows);
 
       // log
       try {
@@ -523,7 +514,8 @@ export default function PublicBookingPage() {
           client_id: clientId,
           client_name: `${first} ${last}`.trim(),
           stylist_id: selectedProvider.id,
-          stylist_name: selectedProvider.name || selectedProvider.title || "Unknown",
+          stylist_name:
+            selectedProvider.name || selectedProvider.title || "Unknown",
           service: {
             name:
               serviceNameForEmail ||
@@ -538,7 +530,7 @@ export default function PublicBookingPage() {
           logged_by: null,
           reason: "Online Booking (multi)",
           before_snapshot: null,
-          after_snapshot: inserted?.[0] || null,
+          after_snapshot: null,
           skipStaffLookup: true,
         });
       } catch (e) {
@@ -552,14 +544,18 @@ export default function PublicBookingPage() {
             customerEmail: email,
             businessEmail: BUSINESS.notifyEmail,
             business: BUSINESS,
-            booking: { start: totalStartISO, end: totalEndISO, client_name: `${first} ${last}`.trim() },
+            booking: {
+              start: totalStartISO,
+              end: totalEndISO,
+              client_name: `${first} ${last}`.trim(),
+            },
             service: { name: serviceNameForEmail },
             provider: selectedProvider,
             notes: (client.notes || "").trim(),
             customerName: `${first} ${last}`.trim(),
             client: { first_name: first, last_name: last },
             bookingClientName: `${first} ${last}`.trim(),
-            customerPhone: mobileN,
+            customerPhone: normalizePhone(client.mobile || ""),
           });
         } catch (e) {
           console.error("[email] failed:", e);
