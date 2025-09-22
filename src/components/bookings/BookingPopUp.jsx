@@ -75,8 +75,8 @@ async function fetchStaffForCurrentUser(supabase) {
 
   return (
     (await tryBy("auth_user_id", user.id)) ||
-    (await tryBy("UID", user.id)) ||  // if legacy quoted column
-    (await tryBy("uid", user.id)) ||  // if later lowercased
+    (await tryBy("UID", user.id)) ||
+    (await tryBy("uid", user.id)) ||
     (await tryBy("email", user.email))
   );
 }
@@ -94,6 +94,10 @@ export default function BookingPopUp({
   const [relatedBookings, setRelatedBookings] = useState([]);
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [isEditingDob, setIsEditingDob] = useState(false);
+
+  // Notes for this booking/client
+  const [notes, setNotes] = useState([]);
+  const [notesLoading, setNotesLoading] = useState(false);
 
   // Optional: resolved current staff (to pass down to notes modal)
   const [currentStaff, setCurrentStaff] = useState(null);
@@ -187,6 +191,41 @@ export default function BookingPopUp({
     return () => { active = false; };
   }, [supabaseClient, booking?.booking_id]);
 
+  // Load notes when popup opens and we know the client and related rows
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      if (!isOpen || !client || !supabaseClient) return;
+      setNotesLoading(true);
+      try {
+        // Fetch all notes for this client
+        const { data, error } = await supabaseClient
+          .from("client_notes")
+          .select("id, client_id, booking_id, note_content, created_at, created_by")
+          .eq("client_id", client.id)
+          .order("created_at", { ascending: false });
+        if (error) throw error;
+
+        // If we know the booking group, prefer notes tied to any row in it.
+        const groupIds = new Set((relatedBookings || []).map(r => r.id));
+        const filtered = (data || []).filter(n => {
+          // show notes explicitly attached to any row in this booking group
+          if (n.booking_id && groupIds.has(n.booking_id)) return true;
+          // also show general client notes (no booking_id)
+          if (!n.booking_id) return true;
+          return false;
+        });
+        if (on) setNotes(filtered);
+      } catch (e) {
+        console.error("[notes] fetch failed:", e?.message || e);
+        if (on) setNotes([]);
+      } finally {
+        if (on) setNotesLoading(false);
+      }
+    })();
+    return () => { on = false; };
+  }, [isOpen, client, supabaseClient, relatedBookings]);
+
   // Seed DOB input when client ready
   useEffect(() => {
     if (!client) return;
@@ -261,6 +300,11 @@ export default function BookingPopUp({
   const serviceTotal = displayServices.reduce((sum, s) => sum + toNumber(s.price), 0);
   const stylist = stylistList.find((s) => s.id === booking.resource_id);
 
+  // ONLINE BADGE: show if current row or any group row is public
+  const isOnline =
+    booking?.source === "public" ||
+    (Array.isArray(relatedBookings) && relatedBookings.some(r => r.source === "public"));
+
   const handleCancelBooking = async () => {
     const confirmDelete = window.confirm("Are you sure you want to cancel this booking?");
     if (!confirmDelete) return;
@@ -293,13 +337,12 @@ export default function BookingPopUp({
       client_id: clientId,
       note_content: text,
       booking_id: bookingId ?? null,
-      created_by: staff?.name || staff?.email || authData?.user?.email || "unknown",
-      created_by_id: staff?.id ?? null,
+      created_by: staff?.name || staff?.email || authData?.user?.email || "unknown"
     };
 
     const { data, error } = await supabaseClient
       .from("client_notes")
-      .insert(payload)     // ✅ no ?columns=...
+      .insert(payload)
       .select()
       .single();
 
@@ -373,6 +416,7 @@ export default function BookingPopUp({
           duration: item.duration,
           category: item.category,
           status: "confirmed",
+          // optionally: source: 'calendar' (kept implicit; trigger can set this)
         };
       });
 
@@ -417,7 +461,13 @@ export default function BookingPopUp({
           <h2 className="text-lg font-bold text-rose-600">{clientName}</h2>
           <p className="text-sm text-gray-700">📞 {clientPhone}</p>
 
-          <div className="text-sm text-gray-700 flex items-center gap-2">
+          {isOnline && (
+            <span className="inline-block mt-1 text-[11px] px-2 py-0.5 rounded bg-emerald-600/15 text-emerald-700 border border-emerald-700/30">
+              Online
+            </span>
+          )}
+
+          <div className="text-sm text-gray-700 flex items-center gap-2 mt-1">
             🎂{" "}
             {isEditingDob ? (
               <>
@@ -484,6 +534,40 @@ export default function BookingPopUp({
         )}
       </div>
 
+      {/* CLIENT NOTES FOR THIS BOOKING */}
+      <div className="mt-4">
+        <p className="text-md font-semibold text-gray-800 mb-1">Notes</p>
+        {notesLoading ? (
+          <p className="text-sm text-gray-500 italic">Loading notes…</p>
+        ) : notes.length === 0 ? (
+          <p className="text-sm text-gray-500 italic">No notes for this booking/client yet.</p>
+        ) : (
+          <div className="space-y-2 max-h-[160px] overflow-auto">
+            {notes.map((n) => {
+              const isClient =
+                String(n.created_by || "").toLowerCase() === "client" ||
+                String(n.note_content || "").toLowerCase().startsWith("notes added by client:");
+              return (
+                <div key={n.id} className="border rounded p-2 bg-white text-gray-900 text-sm">
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="whitespace-pre-line break-words flex-1">{n.note_content}</div>
+                    {isClient && (
+                      <span className="text-[11px] px-2 py-0.5 rounded bg-amber-600/20 text-amber-700 shrink-0">
+                        client
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-gray-500 mt-1">
+                    {new Date(n.created_at).toLocaleString()}
+                    {n.created_by ? ` · by ${n.created_by}` : ""}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* BUTTON ROW */}
       <div className="mt-4 flex flex-wrap gap-2 items-center">
         <span className="text-sm text-green-700 font-semibold">Confirmed</span>
@@ -533,7 +617,19 @@ export default function BookingPopUp({
           onClose={() => setShowNotesModal(false)}
           /* Optional goodies to avoid 400s inside the modal: */
           staffContext={currentStaff || null}
-          onAddNote={handleAddNoteSafe}   // modal can call this to insert safely (no ?columns)
+          onAddNote={handleAddNoteSafe}
+          onAfterChange={async () => {
+            try {
+              const { data } = await supabaseClient
+                .from("client_notes")
+                .select("id, client_id, booking_id, note_content, created_at, created_by")
+                .eq("client_id", client.id)
+                .order("created_at", { ascending: false });
+              const groupIds = new Set((relatedBookings || []).map(r => r.id));
+              const filtered = (data || []).filter(n => !n.booking_id || groupIds.has(n.booking_id));
+              setNotes(filtered);
+            } catch {}
+          }}
         />
       )}
 

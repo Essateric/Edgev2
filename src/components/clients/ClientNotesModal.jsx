@@ -35,6 +35,12 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
   // Current stylist display name (author of notes)
   const [staffName, setStaffName] = useState("Stylist");
 
+  // Pagination
+  const HISTORY_PAGE_SIZE = 10;
+  const NOTES_PAGE_SIZE = 4;
+  const [historyPage, setHistoryPage] = useState(1);
+  const [notesPage, setNotesPage] = useState(1);
+
   // 🔹 use the current signed-in user from AuthContext (no DB lookup)
   const { currentUser } = useAuth();
 
@@ -151,7 +157,7 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
   }, [isOpen, clientId]);
 
   // Notes on open
-  useEffect(() => { if (isOpen && clientId) loadNotes(); }, [isOpen, clientId]);
+  useEffect(() => { if (isOpen && clientId) { loadNotes(); setNotesPage(1); } }, [isOpen, clientId]);
 
   // --- Load history (bookings) when opened ---
   useEffect(() => {
@@ -192,6 +198,7 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
       }
 
       setHistory(unique);
+      setHistoryPage(1); // reset to first page whenever history reloads
 
       // Provider map
       const ids = Array.from(new Set(unique.map((b) => b.resource_id).filter(Boolean)));
@@ -229,6 +236,24 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
     return () => { active = false; };
   }, [isOpen, clientId]);
 
+  // -------- pagination helpers --------
+  const paginatedHistory = useMemo(() => {
+    const start = (historyPage - 1) * HISTORY_PAGE_SIZE;
+    return history.slice(start, start + HISTORY_PAGE_SIZE);
+  }, [history, historyPage]);
+
+  const paginatedNotes = useMemo(() => {
+    const start = (notesPage - 1) * NOTES_PAGE_SIZE;
+    return notes.slice(start, start + NOTES_PAGE_SIZE);
+  }, [notes, notesPage]);
+
+  const pageInfo = (page, total, size) => {
+    if (!total) return "0–0 of 0";
+    const start = (page - 1) * size + 1;
+    const end = Math.min(page * size, total);
+    return `${start}–${end} of ${total}`;
+  };
+
   // -------- actions --------
   const handleAddNote = async () => {
     const text = noteContent.trim();
@@ -237,46 +262,24 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
     // Resolve author with both staffId + name (no DB lookup)
     const who = await getCurrentStaffIdentity();
     const authorName = who.name || "Stylist";
-    const staffId = who.staffId || null;   // staff.id if available
-    const authId  = who.authId  || null;   // supabase auth uid (fallback)
 
-    // Base payload (always valid)
-    const basePayload = {
+    const payload = {
       client_id: clientId,
       note_content: text,
       created_by: authorName,
       booking_id: bookingId || null,   // link to booking if provided
     };
 
-    // Try inserting with common FK columns; fall back to base if column doesn't exist
-    const candidatePayloads = [
-      { ...basePayload, created_by_id: staffId || authId }, // common pattern
-      { ...basePayload, author_id:     staffId || authId }, // alt
-      { ...basePayload, staff_id:      staffId || null },   // alt
-      basePayload,
-    ];
-
-    let ok = false;
-    let lastErr = null;
-
-    for (const payload of candidatePayloads) {
-      const { error } = await supabase.from("client_notes").insert([payload]);
-      if (!error) { ok = true; break; }
-      lastErr = error;
-      // Only retry on "unknown column"/"invalid input" type errors; otherwise break early
-      const msg = (error?.message || "").toLowerCase();
-      const retryable = msg.includes("column") || msg.includes("invalid input") || msg.includes("input value");
-      if (!retryable) break;
-    }
-
-    if (!ok) {
-      console.error("Add note failed:", lastErr?.message || lastErr);
-      alert("Couldn't save note. " + (lastErr?.message || ""));
+    const { error } = await supabase.from("client_notes").insert([payload]);
+    if (error) {
+      console.error("Add note failed:", error?.message || error);
+      alert("Couldn't save note. " + (error?.message || ""));
       return;
     }
 
     setNoteContent("");
     await loadNotes();
+    setNotesPage(1); // show newest note
   };
 
   const emailIsInvalid = !!emailInput && !isValidEmail(emailInput);
@@ -363,7 +366,28 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
 
         {/* HISTORY TABLE */}
         <div>
-          <p className="text-sm font-semibold mb-2">Service History</p>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-semibold">Service History</p>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-gray-600">{pageInfo(historyPage, history.length, HISTORY_PAGE_SIZE)}</span>
+              <div className="flex gap-1">
+                <button
+                  className="px-2 py-1 border rounded disabled:opacity-40"
+                  onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
+                  disabled={historyPage === 1}
+                >
+                  Previous
+                </button>
+                <button
+                  className="px-2 py-1 border rounded disabled:opacity-40"
+                  onClick={() => setHistoryPage((p) => (p * HISTORY_PAGE_SIZE >= history.length ? p : p + 1))}
+                  disabled={historyPage * HISTORY_PAGE_SIZE >= history.length}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
 
           {history.length === 0 ? (
             <p className="text-sm text-gray-500">No history for this client yet.</p>
@@ -378,7 +402,7 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
                   </tr>
                 </thead>
                 <tbody>
-                  {history.map((h) => {
+                  {paginatedHistory.map((h) => {
                     const d = new Date(h.start);
                     const dateTime = isNaN(d) ? "—" : `${format(d, "dd MMM yyyy")} · ${format(d, "HH:mm")}`;
                     const provider = providerMap[h.resource_id] || "—";
@@ -408,36 +432,49 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
           <Button onClick={handleAddNote}>Add Note</Button>
         </div>
 
-        {/* NOTES LIST */}
-        <div className="space-y-2 max-h-[300px] overflow-auto bg-white p-1 rounded">
-          {notes.map((note) => {
-            const meta = note.booking_id ? bookingMeta[note.booking_id] : null;
-            return (
-              <div key={note.id} className="border rounded p-2 text-sm bg-white text-gray-900">
-                <div>{note.note_content}</div>
-                <div className="text-xs text-gray-500">
-                  {new Date(note.created_at).toLocaleString()} by {note.created_by || "Unknown"}
-                  {meta ? <> · <span className="italic">for {meta.title} on {meta.when}</span></> : null}
-                </div>
+        {/* NOTES LIST (paginated, 4 per page) */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-semibold">Notes</p>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-gray-600">{pageInfo(notesPage, notes.length, NOTES_PAGE_SIZE)}</span>
+              <div className="flex gap-1">
+                <button
+                  className="px-2 py-1 border rounded disabled:opacity-40"
+                  onClick={() => setNotesPage((p) => Math.max(1, p - 1))}
+                  disabled={notesPage === 1}
+                >
+                  Previous
+                </button>
+                <button
+                  className="px-2 py-1 border rounded disabled:opacity-40"
+                  onClick={() => setNotesPage((p) => (p * NOTES_PAGE_SIZE >= notes.length ? p : p + 1))}
+                  disabled={notesPage * NOTES_PAGE_SIZE >= notes.length}
+                >
+                  Next
+                </button>
               </div>
-            );
-          })}
-          {notes.length === 0 && (
-            <div className="text-sm text-gray-500 bg-white border rounded p-2">No notes for this client yet.</div>
-          )}
+            </div>
+          </div>
+
+          <div className="space-y-2 max-h-[300px] overflow-auto bg-white p-1 rounded">
+            {paginatedNotes.map((note) => {
+              const meta = note.booking_id ? bookingMeta[note.booking_id] : null;
+              return (
+                <div key={note.id} className="border rounded p-2 text-sm bg-white text-gray-900">
+                  <div>{note.note_content}</div>
+                  <div className="text-xs text-gray-500">
+                    {new Date(note.created_at).toLocaleString()} by {note.created_by || "Unknown"}
+                    {meta ? <> · <span className="italic">for {meta.title} on {meta.when}</span></> : null}
+                  </div>
+                </div>
+              );
+            })}
+            {notes.length === 0 && (
+              <div className="text-sm text-gray-500 bg-white border rounded p-2">No notes for this client yet.</div>
+            )}
+          </div>
         </div>
-
-        <Button onClick={() => setShowFullHistory(true)} className="bg-bronze text-white text-sm px-3 py-1 rounded">
-          View Full History
-        </Button>
-
-        {showFullHistory && (
-          <ClientHistoryFullScreen
-            clientId={clientId}
-            isOpen={showFullHistory}
-            onClose={() => setShowFullHistory(false)}
-          />
-        )}
       </div>
     </Modal>
   );

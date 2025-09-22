@@ -517,6 +517,52 @@ function showToast(message, { type = "success", ms = 5000 } = {}) {
       }));
 
       await safeInsertBookings(payloadRows);
+// --- save client's own notes and attach to the booking group ---
+try {
+  const rawNotes = String(client.notes || "").trim();
+  if (rawNotes) {
+    // primary path: your RPC that attaches a note for the whole group
+    const { error: rpcErr } = await supabase.rpc("public_add_client_note_for_group", {
+      p_booking_id: bookingId, // group UUID we generated
+      p_client_id: clientId,
+      p_note: rawNotes,
+    });
+    if (rpcErr) throw rpcErr;
+  }
+} catch (e) {
+  console.warn(
+    "[client_notes] group RPC failed, falling back to row-linked note:",
+    e?.message
+  );
+  // Fallback: link the note to one concrete booking row in this group
+  try {
+    const rawNotes = String(client.notes || "").trim();
+    if (rawNotes) {
+      const { data: rows, error: rowsErr } = await supabase
+        .from("bookings")
+        .select("id")
+        .eq("booking_id", bookingId)
+        .order("start", { ascending: true })
+        .limit(1);
+
+      if (rowsErr) throw rowsErr;
+      const bookingRowId = rows?.[0]?.id || null;
+
+      await supabase.from("client_notes").insert([
+        {
+          client_id: clientId,
+          note_content: `Notes added by client: ${rawNotes}`,
+          created_by: "client",
+          booking_id: bookingRowId, // <-- important so it appears in the popup
+        },
+      ]);
+    }
+  } catch (e2) {
+    console.warn("[client_notes] fallback insert failed:", e2?.message);
+  }
+}
+
+
 
       // log
       try {
