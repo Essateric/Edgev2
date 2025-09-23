@@ -948,10 +948,10 @@ export default function PublicBookingPage() {
     <div className="min-h-screen bg-black text-white text-[15px]">
       {header}
 
-{/* Inline toast (centered, mobile-friendly) */}
+{/* Inline toast (centered, unified styling across mobile & desktop) */}
 {toast && (
   <div className="fixed inset-0 z-[9999] px-3 sm:px-4 flex items-center justify-center pointer-events-none">
-    {/* backdrop for contrast, but click-through except the card */}
+    {/* subtle backdrop for contrast */}
     <div className="absolute inset-0 bg-black/50" aria-hidden="true" />
 
     <div
@@ -960,12 +960,11 @@ export default function PublicBookingPage() {
                   px-4 py-4 sm:px-6 sm:py-6
                   max-h-[85vh] overflow-auto
                   ${toast.type === "success"
-                    ? "bg-emerald-900/40 border-emerald-700 text-emerald-100"
-                    : "bg-rose-900/40 border-rose-700 text-rose-100"}`}
+                    ? "bg-emerald-900 border-emerald-600 text-emerald-50"
+                    : "bg-rose-900 border-rose-600 text-rose-50"}`}
       role="status"
       aria-live="polite"
       style={{
-        // play nice with iOS safe areas (not harmful elsewhere)
         paddingTop: "max(1rem, env(safe-area-inset-top))",
         paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
         paddingLeft: "max(1rem, env(safe-area-inset-left))",
@@ -983,7 +982,7 @@ export default function PublicBookingPage() {
         </div>
 
         <button
-          className="shrink-0 text-white/80 hover:text-white text-2xl sm:text-3xl ml-2"
+          className="shrink-0 text-white/90 hover:text-white text-2xl sm:text-3xl ml-2"
           onClick={() => setToast(null)}
           aria-label="Dismiss"
           title="Dismiss"
@@ -994,6 +993,7 @@ export default function PublicBookingPage() {
     </div>
   </div>
 )}
+
 
 
       {/* Mobile cart */}
