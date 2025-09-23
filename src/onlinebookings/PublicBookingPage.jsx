@@ -161,6 +161,9 @@ export default function PublicBookingPage() {
     }
   }
 
+  window.scrollTo({ top: 0, behavior: "smooth" });
+
+
   const isTBA = (p) =>
     p == null || p === "" || Number(p) === 0 || Number.isNaN(Number(p));
 
@@ -945,28 +948,42 @@ export default function PublicBookingPage() {
     <div className="min-h-screen bg-black text-white text-[15px]">
       {header}
 
-      {/* Inline toast banner (centered) */}
+{/* Inline toast (centered, mobile-friendly) */}
 {toast && (
-  <div className="fixed inset-0 z-50 px-4 flex items-center justify-center pointer-events-none">
+  <div className="fixed inset-0 z-[9999] px-3 sm:px-4 flex items-center justify-center pointer-events-none">
+    {/* backdrop for contrast, but click-through except the card */}
+    <div className="absolute inset-0 bg-black/50" aria-hidden="true" />
+
     <div
-      className={`pointer-events-auto relative w-full sm:w-[520px] md:w-[620px] lg:w-[680px]
+      className={`pointer-events-auto relative w-full max-w-full sm:max-w-[520px] md:max-w-[620px] lg:max-w-[680px]
                   rounded-2xl border shadow-2xl
-                  px-5 py-5 md:px-7 md:py-7 md:min-h-[180px]
+                  px-4 py-4 sm:px-6 sm:py-6
+                  max-h-[85vh] overflow-auto
                   ${toast.type === "success"
                     ? "bg-emerald-900/40 border-emerald-700 text-emerald-100"
                     : "bg-rose-900/40 border-rose-700 text-rose-100"}`}
       role="status"
       aria-live="polite"
+      style={{
+        // play nice with iOS safe areas (not harmful elsewhere)
+        paddingTop: "max(1rem, env(safe-area-inset-top))",
+        paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
+        paddingLeft: "max(1rem, env(safe-area-inset-left))",
+        paddingRight: "max(1rem, env(safe-area-inset-right))",
+      }}
     >
-      <div className="flex items-start gap-4">
-        <span className="mt-0.5 text-3xl md:text-4xl">
+      <div className="flex items-start gap-3 sm:gap-4">
+        <span className="mt-0.5 text-2xl sm:text-3xl md:text-4xl shrink-0">
           {toast.type === "success" ? "✅" : "⚠️"}
         </span>
-        <div className="flex-1 text-base md:text-lg leading-relaxed">
+
+        {/* message can be string or JSX */}
+        <div className="flex-1 text-base sm:text-lg leading-relaxed">
           {toast.message}
         </div>
+
         <button
-          className="shrink-0 text-white/80 hover:text-white text-2xl md:text-3xl ml-2"
+          className="shrink-0 text-white/80 hover:text-white text-2xl sm:text-3xl ml-2"
           onClick={() => setToast(null)}
           aria-label="Dismiss"
           title="Dismiss"
@@ -977,6 +994,7 @@ export default function PublicBookingPage() {
     </div>
   </div>
 )}
+
 
       {/* Mobile cart */}
       <div className="max-w-6xl mx-auto px-4 pt-6 lg:hidden">
