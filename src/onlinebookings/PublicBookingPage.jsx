@@ -202,8 +202,7 @@ export default function PublicBookingPage() {
         const isMartinByName = String(p.name || p.title || "")
           .trim()
           .toLowerCase() === "martin";
-        const isMartinById =
-          p.id === "9cf991b3-2ea5-44c1-b915-615fdd9f993c";
+        const isMartinById = p.id === "9cf991b3-2ea5-44c1-b915-615fdd9f993c";
         const isMartin = isMartinById || isMartinByName;
 
         return {
@@ -669,25 +668,41 @@ export default function PublicBookingPage() {
           client: { first_name: first, last_name: last },
           bookingClientName: `${first} ${last}`.trim(),
         });
+
         if (!resp?.ok && resp !== undefined) {
           console.warn("[email] server responded not ok:", resp);
-          showToast(
-            "Booking saved, but emails couldn’t be sent. We’ll confirm by phone/SMS.",
-            { type: "error" }
-          );
+          // still show the big success toast below
         }
       } catch (e) {
         console.error("[email] failed:", e);
-        showToast(
-          "Booking saved, but emails couldn’t be sent. We’ll confirm by phone/SMS.",
-          { type: "error" }
-        );
+        // still show the big success toast below
       }
 
-      // 9) Done
-      showToast("Thanks! Your booking request has been sent successfully.", {
-        type: "success",
-      });
+      // 9) Show the BIG success toast (once), keep it open until user closes
+      showToast(
+        <>
+          <div className="font-semibold text-xl md:text-2xl mb-2">
+            Thank you for booking with The Edge HD Salon.
+          </div>
+          <div className="text-base md:text-lg leading-relaxed">
+            Your booking request has been received. We will contact you soon to confirm.
+            <br className="hidden md:block" />
+            In the meantime, if you’d like to join our WhatsApp channel for the latest
+            news and updates,&nbsp;
+            <a
+              href="https://whatsapp.com/channel/0029Vb6Yqs9CXC3LeNFFtB3b"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline font-semibold"
+            >
+              click here
+            </a>.
+          </div>
+        </>,
+        { type: "success", ms: 0 } // stays open until dismissed
+      );
+
+      // IMPORTANT: reset AFTER showing the toast
       resetBookingFlow();
     } catch (e) {
       console.error("saveBooking failed", e);
@@ -697,7 +712,7 @@ export default function PublicBookingPage() {
     }
   }
 
-  // HEADER
+  // HEADER (outside saveBooking)
   const header = (
     <div className="sticky top-0 z-10 bg-black/90 backdrop-blur border-b border-neutral-800">
       <div className="max-w-6xl mx-auto px-4 py-4 flex items-center gap-4">
@@ -930,34 +945,35 @@ export default function PublicBookingPage() {
     <div className="min-h-screen bg-black text-white text-[15px]">
       {header}
 
-      {/* Inline toast banner */}
-      {toast && (
-  <div
-    className="
-      fixed z-50 inset-x-0
-      bottom-4 top-auto md:top-4 md:bottom-auto
-      px-4 pointer-events-none
-    "
-    role="status"
-    aria-live="polite"
-  >
+      {/* Inline toast banner (centered) */}
+{toast && (
+  <div className="fixed inset-0 z-50 px-4 flex items-center justify-center pointer-events-none">
     <div
-      className={`max-w-xl mx-auto pointer-events-auto
-        flex items-start gap-3 rounded-xl border px-4 py-3 shadow
-        ${toast.type === "success"
-          ? "bg-emerald-900/90 border-emerald-700 text-emerald-100"
-          : "bg-rose-900/90 border-rose-700 text-rose-100"}`}
+      className={`pointer-events-auto relative w-full sm:w-[520px] md:w-[620px] lg:w-[680px]
+                  rounded-2xl border shadow-2xl
+                  px-5 py-5 md:px-7 md:py-7 md:min-h-[180px]
+                  ${toast.type === "success"
+                    ? "bg-emerald-900/40 border-emerald-700 text-emerald-100"
+                    : "bg-rose-900/40 border-rose-700 text-rose-100"}`}
+      role="status"
+      aria-live="polite"
     >
-      <span className="mt-0.5 text-lg">{toast.type === "success" ? "✅" : "⚠️"}</span>
-      <div className="flex-1">{toast.message}</div>
-      <button
-        className="shrink-0 text-white/80 hover:text-white"
-        onClick={() => setToast(null)}
-        aria-label="Dismiss"
-        title="Dismiss"
-      >
-        ×
-      </button>
+      <div className="flex items-start gap-4">
+        <span className="mt-0.5 text-3xl md:text-4xl">
+          {toast.type === "success" ? "✅" : "⚠️"}
+        </span>
+        <div className="flex-1 text-base md:text-lg leading-relaxed">
+          {toast.message}
+        </div>
+        <button
+          className="shrink-0 text-white/80 hover:text-white text-2xl md:text-3xl ml-2"
+          onClick={() => setToast(null)}
+          aria-label="Dismiss"
+          title="Dismiss"
+        >
+          ×
+        </button>
+      </div>
     </div>
   </div>
 )}

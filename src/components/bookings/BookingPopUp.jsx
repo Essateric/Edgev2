@@ -54,32 +54,19 @@ const asLocalDate = (v) => {
 };
 
 /* ---------- Staff lookup helper (robust; avoids 400s on unknown columns) ---------- */
-async function fetchStaffForCurrentUser(supabase) {
-  const { data: authData, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !authData?.user) return null;
-  const user = authData.user;
 
-  const tryBy = async (column, value) => {
-    try {
-      const { data, error } = await supabase
-        .from("staff")
-        .select("id, name, email, permission")
-        .eq(column, value)
-        .maybeSingle();
-      if (error || !data) return null;
-      return data;
-    } catch {
-      return null;
-    }
-  };
-
-  return (
-    (await tryBy("auth_user_id", user.id)) ||
-    (await tryBy("UID", user.id)) ||
-    (await tryBy("uid", user.id)) ||
-    (await tryBy("email", user.email))
-  );
-}
+ async function fetchStaffForCurrentUser(supabase) {
+   const { data: authData } = await supabase.auth.getUser();
+   const user = authData?.user;
+   if (!user?.email) return null;
+   const { data, error } = await supabase
+     .from("staff")
+     .select("id, name, email, permission")
+     .eq("email", user.email)
+     .maybeSingle();
+   if (error) return null;
+   return data || null;
+ }
 
 export default function BookingPopUp({
   isOpen,
