@@ -33,6 +33,7 @@ import "react-big-calendar/lib/css/react-big-calendar.css";
 import "react-big-calendar/lib/addons/dragAndDrop/styles.css";
 import "../styles/CalendarStyles.css";
 import PageLoader from "../components/PageLoader.jsx";
+import { addMinutes } from "date-fns";
 
 const DnDCalendar = withDragAndDrop(Calendar);
 
@@ -50,11 +51,33 @@ const toLocal = (d) => {
   const x = new Date(d);
   return new Date(x.getFullYear(), x.getMonth(), x.getDate(), x.getHours(), x.getMinutes(), 0, 0);
 };
+
 const clampRange = (start, end) => {
   const s = toLocal(start);
   let e = toLocal(end);
   if (!(e > s)) e = new Date(s.getTime() + 60 * 1000); // ≥ 1 minute
   return { start: s, end: e };
+};
+
+// Snap a date to nearest step (floor by default)
+const snapToStep = (d, step = 15) => {
+  const x = new Date(d);
+  x.setSeconds(0, 0);
+  const mins = x.getMinutes();
+  const snapped = Math.floor(mins / step) * step;
+  x.setMinutes(snapped);
+  return x;
+};
+
+
+// Clamp within your business hours for *that date*
+const clampWithinDay = (d, minH = 9, maxH = 20) => {
+  const base = new Date(d);
+  const min = new Date(base.getFullYear(), base.getMonth(), base.getDate(), minH, 0, 0, 0);
+  const max = new Date(base.getFullYear(), base.getMonth(), base.getDate(), maxH, 0, 0, 0);
+  if (base < min) return min;
+  if (base > max) return max;
+  return base;
 };
 
 

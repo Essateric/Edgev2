@@ -61,6 +61,20 @@ function sanitizeBookingRow(row) {
   return out;
 }
 
+// very simple email check + common gmail typo guard
+function isValidEmail(s) {
+  if (!s) return false;
+  const e = String(s).trim().toLowerCase();
+  // basic format
+  const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+  if (!ok) return false;
+  // block obvious gmail typos that bounce
+  const typos = ["gmail.c", "gmail.co", "gmail.con", "gmail.coom", "gmail.cc"];
+  if (typos.some(t => e.endsWith(`@${t}`))) return false;
+  return true;
+}
+
+
 const uniqById = (arr) => {
   const seen = new Set();
   return arr.filter((x) => {
@@ -142,16 +156,15 @@ export default function PublicBookingPage() {
   const [providerOverrides, setProviderOverrides] = useState([]);
 
   // Inline toast (success / error) shown in-page
-const [toast, setToast] = useState(null);
-/** Show a toast banner for N ms (default 5s). */
-function showToast(message, { type = "success", ms = 5000 } = {}) {
-  setToast({ message, type, ts: Date.now() });
-  if (ms > 0) {
-    window.clearTimeout(showToast._t);
-    showToast._t = window.setTimeout(() => setToast(null), ms);
+  const [toast, setToast] = useState(null);
+  /** Show a toast banner for N ms (default 5s). */
+  function showToast(message, { type = "success", ms = 5000 } = {}) {
+    setToast({ message, type, ts: Date.now() });
+    if (ms > 0) {
+      window.clearTimeout(showToast._t);
+      showToast._t = window.setTimeout(() => setToast(null), ms);
+    }
   }
-}
-
 
   const isTBA = (p) =>
     p == null || p === "" || Number(p) === 0 || Number.isNaN(Number(p));
@@ -194,12 +207,33 @@ function showToast(message, { type = "success", ms = 5000 } = {}) {
       }
 
       // Normalise providers for UI (service_ids[], defaults for flags)
-      const normalised = (staff || []).map((p) => ({
-        ...p,
-        service_ids: Array.from(map.get(p.id) || []),
-        online_bookings: true,
-        is_active: true,
-      }));
+      // Exception: Martin should show as a Senior Stylist on the public page.
+      const normalised = (staff || []).map((p) => {
+        const baseServiceIds = Array.from(map.get(p.id) || []);
+        const isMartinByName = String(p.name || p.title || "")
+          .trim()
+          .toLowerCase() === "martin";
+        const isMartinById = p.id === "9cf991b3-2ea5-44c1-b915-615fdd9f993c"; // change if needed
+        const isMartin = isMartinById || isMartinByName;
+
+        return {
+          ...p,
+          // If Martin has no explicit links, allow ALL services so he can be booked for anything selected.
+          service_ids:
+            baseServiceIds.length > 0
+              ? baseServiceIds
+              : isMartin
+              ? (s || []).map((x) => x.id)
+              : baseServiceIds,
+          // Force online visibility
+          online_bookings: true,
+          is_active: true,
+          // Public-facing title override
+          title: isMartin ? "Senior Stylist" : p.title || null,
+          // If any UI filters out non-stylists by role, spoof Martin as stylist here.
+          role: isMartin ? "stylist" : p.role,
+        };
+      });
 
       setProviders(normalised);
     })();
@@ -365,270 +399,244 @@ function showToast(message, { type = "success", ms = 5000 } = {}) {
   };
 
   // ---------- save grouped rows ----------
-  async function saveBooking() {
-    if (!selectedServices.length || !selectedProvider || !selectedDate || !selectedTime) return;
+// ---------- save grouped rows ----------
+async function saveBooking() {
+  if (!selectedServices.length || !selectedProvider || !selectedDate || !selectedTime) return;
 
-    if (!client.first_name || !client.last_name || (!client.email && !client.mobile)) {
-      alert("Please enter your first & last name, and at least email or mobile.");
-      return;
-    }
+  if (!client.first_name || !client.last_name || (!client.email && !client.mobile)) {
+    alert("Please enter your first & last name, and at least email or mobile.");
+    return;
+  }
 
-    const normalizePhone = (s = "") => String(s).replace(/[^\d]/g, "");
+  const normalizePhone = (s = "") => String(s).replace(/[^\d]/g, "");
 
-    setSaving(true);
-    try {
-      const first = String(client.first_name || "").trim();
-      const last = String(client.last_name || "").trim();
-      const email = String(client.email || "").trim().toLowerCase();
-      const mobileN = normalizePhone(client.mobile || "");
+  setSaving(true);
+  try {
+    // 1) Names/contact
+    const first = String(client.first_name || "").trim();
+    const last  = String(client.last_name  || "").trim();
+    const email = String(client.email || "").trim().toLowerCase();
+    const mobileN = normalizePhone(client.mobile || "");
 
-      const start = new Date(selectedDate);
-      start.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
+    // 2) Build rows from timeline
+    const start = new Date(selectedDate);
+    start.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
 
-      const rows = timeline.map((seg) => {
-        const sStart = addMinutes(start, seg.offsetMin);
-        const sEnd = addMinutes(sStart, seg.duration);
-        const { price: p } = getEffectivePD(seg.svc);
-        return {
-          title: seg.svc.name,
-          category: seg.svc.category || null,
-          duration: seg.duration,
-          price: p,
-          start: sStart.toISOString(),
-          end: sEnd.toISOString(),
-          service_id: seg.svc.id,
-        };
-      });
+    const rows = timeline.map((seg) => {
+      const sStart = addMinutes(start, seg.offsetMin);
+      const sEnd   = addMinutes(sStart, seg.duration);
+      const { price: p } = getEffectivePD(seg.svc);
+      return {
+        title: seg.svc.name,
+        category: seg.svc.category || null,
+        duration: seg.duration,
+        price: p,
+        start: sStart.toISOString(),
+        end: sEnd.toISOString(),
+        service_id: seg.svc.id,
+      };
+    });
 
-      const totalStartISO = rows[0].start;
-      const totalEndISO = rows[rows.length - 1].end;
-      const bookingId = uuidv4();
+    const totalStartISO = rows[0].start;
+    const totalEndISO   = rows[rows.length - 1].end;
+    const bookingId = uuidv4();
 
-      // find-or-create client
-      let clientId = null;
+    // 3) Find-or-create client
+    let clientId = null;
+    if (email) {
+      const { data: byEmail, error: findEmailErr } = await supabase
+        .from("clients")
+        .select("id, first_name, last_name, email, mobile")
+        .ilike("email", email)
+        .limit(1);
+      if (findEmailErr) throw findEmailErr;
 
-      if (email) {
-        const { data: byEmail, error: findEmailErr } = await supabase
-          .from("clients")
-          .select("id, first_name, last_name, email, mobile")
-          .ilike("email", email)
-          .limit(1);
-        if (findEmailErr) throw findEmailErr;
-
-        if (byEmail?.length) {
-          clientId = byEmail[0].id;
-          const patch = {};
-          if (!byEmail[0].first_name && first) patch.first_name = first;
-          if (!byEmail[0].last_name && last) patch.last_name = last;
-          if (!byEmail[0].mobile && mobileN) patch.mobile = mobileN;
-          if (Object.keys(patch).length) {
-            const { error: updErr } = await supabase
-              .from("clients")
-              .update(patch)
-              .eq("id", clientId);
-            if (updErr) throw updErr;
-          }
-        } else {
-          const { data: created, error: insErr } = await supabase
-            .from("clients")
-            .insert([
-              {
-                first_name: first,
-                last_name: last || null,
-                email: email,
-                mobile: mobileN || null,
-              },
-            ])
-            .select("id")
-            .single();
-          if (insErr) throw insErr;
-          clientId = created.id;
+      if (byEmail?.length) {
+        clientId = byEmail[0].id;
+        const patch = {};
+        if (!byEmail[0].first_name && first) patch.first_name = first;
+        if (!byEmail[0].last_name && last) patch.last_name = last;
+        if (!byEmail[0].mobile && mobileN) patch.mobile = mobileN;
+        if (Object.keys(patch).length) {
+          const { error: updErr } = await supabase.from("clients").update(patch).eq("id", clientId);
+          if (updErr) throw updErr;
         }
       } else {
-        const { data: candidates, error: findMobErr } = await supabase
+        const { data: created, error: insErr } = await supabase
           .from("clients")
-          .select("id, first_name, last_name, mobile")
-          .or(`mobile.eq.${mobileN},mobile.ilike.%${mobileN}%`)
-          .limit(20);
-        if (findMobErr) throw findMobErr;
-
-        const existing = (candidates || []).find(
-          (r) =>
-            String((r.mobile || "").replace(/[^\d]/g, "")) === mobileN &&
-            String(r.first_name || "").trim().toLowerCase() === first.toLowerCase() &&
-            String(r.last_name || "").trim().toLowerCase() === last.toLowerCase()
-        );
-
-        if (existing) {
-          clientId = existing.id;
-        } else {
-          const { data: created, error: insErr } = await supabase
-            .from("clients")
-            .insert([
-              {
-                first_name: first,
-                last_name: last || null,
-                email: null,
-                mobile: mobileN,
-              },
-            ])
-            .select("id")
-            .single();
-          if (insErr) throw insErr;
-          clientId = created.id;
-        }
+          .insert([{ first_name: first, last_name: last || null, email, mobile: mobileN || null }])
+          .select("id")
+          .single();
+        if (insErr) throw insErr;
+        clientId = created.id;
       }
+    } else {
+      const { data: candidates, error: findMobErr } = await supabase
+        .from("clients")
+        .select("id, first_name, last_name, mobile")
+        .or(`mobile.eq.${mobileN},mobile.ilike.%${mobileN}%`)
+        .limit(20);
+      if (findMobErr) throw findMobErr;
 
-      // clash check via RPC (no direct table SELECT)
-      const dayStartISO = startOfDay(selectedDate).toISOString();
-      const dayEndISO = endOfDay(selectedDate).toISOString();
-      const { data: dayBookings, error: dayErr } = await supabase.rpc(
-        "public_get_booked_spans",
-        { p_staff: selectedProvider.id, p_start: dayStartISO, p_end: dayEndISO }
+      const existing = (candidates || []).find(
+        (r) =>
+          String((r.mobile || "").replace(/[^\d]/g, "")) === mobileN &&
+          String(r.first_name || "").trim().toLowerCase() === first.toLowerCase() &&
+          String(r.last_name || "").trim().toLowerCase() === last.toLowerCase()
       );
-      if (dayErr) throw dayErr;
 
-      for (const r of rows) {
-        const s = new Date(r.start);
-        const e = new Date(r.end);
-        const clash = (dayBookings || []).some((b) =>
-          rangesOverlap(s, e, new Date(b.start), new Date(b.end))
-        );
-        if (clash) {
-          alert("Sorry, one of those times was just taken. Please pick another slot.");
-          return;
-        }
+      if (existing) {
+        clientId = existing.id;
+      } else {
+        const { data: created, error: insErr } = await supabase
+          .from("clients")
+          .insert([{ first_name: first, last_name: last || null, email: null, mobile: mobileN }])
+          .select("id")
+          .single();
+        if (insErr) throw insErr;
+        clientId = created.id;
       }
+    }
 
-      // insert grouped rows (via RPC)
-      const payloadRows = rows.map((r) => ({
+    // 4) Clash check
+    const dayStartISO = startOfDay(selectedDate).toISOString();
+    const dayEndISO = endOfDay(selectedDate).toISOString();
+    const { data: dayBookings, error: dayErr } = await supabase.rpc(
+      "public_get_booked_spans",
+      { p_staff: selectedProvider.id, p_start: dayStartISO, p_end: dayEndISO }
+    );
+    if (dayErr) throw dayErr;
+
+    for (const r of rows) {
+      const s = new Date(r.start);
+      const e = new Date(r.end);
+      const clash = (dayBookings || []).some((b) =>
+        rangesOverlap(s, e, new Date(b.start), new Date(b.end))
+      );
+      if (clash) {
+        alert("Sorry, one of those times was just taken. Please pick another slot.");
+        return;
+      }
+    }
+
+    // 5) Insert bookings (grouped)
+    const payloadRows = rows.map((r) => ({
+      booking_id: bookingId,
+      title: r.title,
+      category: r.category,
+      client_id: clientId,
+      client_name: `${first} ${last}`.trim(),
+      resource_id: selectedProvider.id,
+      start: r.start,
+      end: r.end,
+      duration: r.duration,
+      price: r.price,
+      status: "confirmed",
+      service_id: r.service_id,
+    }));
+    await safeInsertBookings(payloadRows);
+
+    // 6) Save client's notes (RPC, fallback to table insert)
+    try {
+      const rawNotes = String(client.notes || "").trim();
+      if (rawNotes) {
+        const { error: rpcErr } = await supabase.rpc("public_add_client_note_for_group", {
+          p_booking_id: bookingId,
+          p_client_id: clientId,
+          p_note: rawNotes,
+        });
+        if (rpcErr) throw rpcErr;
+      }
+    } catch (e) {
+      console.warn("[client_notes] group RPC failed, falling back:", e?.message);
+      try {
+        const rawNotes = String(client.notes || "").trim();
+        if (rawNotes) {
+          const { data: rowIds, error: rowsErr } = await supabase
+            .from("bookings")
+            .select("id")
+            .eq("booking_id", bookingId)
+            .order("start", { ascending: true })
+            .limit(1);
+          if (rowsErr) throw rowsErr;
+          const bookingRowId = rowIds?.[0]?.id || null;
+
+          await supabase.from("client_notes").insert([
+            {
+              client_id: clientId,
+              note_content: `Notes added by client: ${rawNotes}`,
+              created_by: "client",
+              booking_id: bookingRowId, // ensures it shows in the popup
+            },
+          ]);
+        }
+      } catch (e2) {
+        console.warn("[client_notes] fallback insert failed:", e2?.message);
+      }
+    }
+
+    // 7) Log
+    try {
+      await SaveBookingsLog({
+        action: "created",
         booking_id: bookingId,
-        title: r.title,
-        category: r.category,
         client_id: clientId,
         client_name: `${first} ${last}`.trim(),
-        resource_id: selectedProvider.id,
-        start: r.start,
-        end: r.end,
-        duration: r.duration,
-        price: r.price,
-        status: "confirmed",
-        service_id: r.service_id,
-      }));
-
-      await safeInsertBookings(payloadRows);
-// --- save client's own notes and attach to the booking group ---
-try {
-  const rawNotes = String(client.notes || "").trim();
-  if (rawNotes) {
-    // primary path: your RPC that attaches a note for the whole group
-    const { error: rpcErr } = await supabase.rpc("public_add_client_note_for_group", {
-      p_booking_id: bookingId, // group UUID we generated
-      p_client_id: clientId,
-      p_note: rawNotes,
-    });
-    if (rpcErr) throw rpcErr;
-  }
-} catch (e) {
-  console.warn(
-    "[client_notes] group RPC failed, falling back to row-linked note:",
-    e?.message
-  );
-  // Fallback: link the note to one concrete booking row in this group
-  try {
-    const rawNotes = String(client.notes || "").trim();
-    if (rawNotes) {
-      const { data: rows, error: rowsErr } = await supabase
-        .from("bookings")
-        .select("id")
-        .eq("booking_id", bookingId)
-        .order("start", { ascending: true })
-        .limit(1);
-
-      if (rowsErr) throw rowsErr;
-      const bookingRowId = rows?.[0]?.id || null;
-
-      await supabase.from("client_notes").insert([
-        {
-          client_id: clientId,
-          note_content: `Notes added by client: ${rawNotes}`,
-          created_by: "client",
-          booking_id: bookingRowId, // <-- important so it appears in the popup
+        stylist_id: selectedProvider.id,
+        stylist_name: selectedProvider.name || selectedProvider.title || "Unknown",
+        service: {
+          name: serviceNameForEmail || selectedServices[0]?.name || "Multiple services",
+          category: "Multi",
+          price: sumPrice,
+          duration: sumActiveDuration,
         },
-      ]);
+        start: totalStartISO,
+        end: totalEndISO,
+        logged_by: null,
+        reason: "Online Booking (multi)",
+        before_snapshot: null,
+        after_snapshot: null,
+        skipStaffLookup: true,
+      });
+    } catch (e) {
+      console.warn("Booking saved, but log write failed:", e?.message);
     }
-  } catch (e2) {
-    console.warn("[client_notes] fallback insert failed:", e2?.message);
+
+    // 8) Emails (always notify salon; customer copy if email valid)
+    try {
+      const customerEmailToUse = isValidEmail(email) ? email : undefined;
+      const resp = await sendBookingEmails({
+        businessEmail: BUSINESS.notifyEmail,
+        business: BUSINESS,
+        booking: { start: totalStartISO, end: totalEndISO, client_name: `${first} ${last}`.trim() },
+        service: { name: serviceNameForEmail },
+        provider: selectedProvider,
+        notes: (client.notes || "").trim(),
+        customerPhone: mobileN,
+        customerEmail: customerEmailToUse,
+        customerName: `${first} ${last}`.trim(),
+        client: { first_name: first, last_name: last },
+        bookingClientName: `${first} ${last}`.trim(),
+      });
+      if (!resp?.ok && resp !== undefined) {
+        console.warn("[email] server responded not ok:", resp);
+        showToast("Booking saved, but emails couldn’t be sent. We’ll confirm by phone/SMS.", { type: "error" });
+      }
+    } catch (e) {
+      console.error("[email] failed:", e);
+      showToast("Booking saved, but emails couldn’t be sent. We’ll confirm by phone/SMS.", { type: "error" });
+    }
+
+    // 9) Done
+    showToast("Thanks! Your booking request has been sent successfully.", { type: "success" });
+    resetBookingFlow();
+  } catch (e) {
+    console.error("saveBooking failed", e);
+    alert("Couldn't save booking. Please try again.");
+  } finally {
+    setSaving(false);
   }
 }
-
-
-
-      // log
-      try {
-        await SaveBookingsLog({
-          action: "created",
-          booking_id: bookingId,
-          client_id: clientId,
-          client_name: `${first} ${last}`.trim(),
-          stylist_id: selectedProvider.id,
-          stylist_name:
-            selectedProvider.name || selectedProvider.title || "Unknown",
-          service: {
-            name:
-              serviceNameForEmail ||
-              selectedServices[0]?.name ||
-              "Multiple services",
-            category: "Multi",
-            price: sumPrice,
-            duration: sumActiveDuration,
-          },
-          start: totalStartISO,
-          end: totalEndISO,
-          logged_by: null,
-          reason: "Online Booking (multi)",
-          before_snapshot: null,
-          after_snapshot: null,
-          skipStaffLookup: true,
-        });
-      } catch (e) {
-        console.warn("Booking saved, but log write failed:", e?.message);
-      }
-
-      // emails
-      if (email) {
-        try {
-          await sendBookingEmails({
-            customerEmail: email,
-            businessEmail: BUSINESS.notifyEmail,
-            business: BUSINESS,
-            booking: {
-              start: totalStartISO,
-              end: totalEndISO,
-              client_name: `${first} ${last}`.trim(),
-            },
-            service: { name: serviceNameForEmail },
-            provider: selectedProvider,
-            notes: (client.notes || "").trim(),
-            customerName: `${first} ${last}`.trim(),
-            client: { first_name: first, last_name: last },
-            bookingClientName: `${first} ${last}`.trim(),
-            customerPhone: normalizePhone(client.mobile || ""),
-          });
-        } catch (e) {
-          console.error("[email] failed:", e);
-        }
-      }
-showToast("Thanks! Your booking request has been sent successfully.", { type: "success" });
-resetBookingFlow();
-
-    } catch (e) {
-      console.error("saveBooking failed", e);
-      alert("Couldn't save booking. Please try again.");
-    } finally {
-      setSaving(false);
-    }
-  }
 
   // HEADER
   const header = (
@@ -844,32 +852,31 @@ resetBookingFlow();
     <div className="min-h-screen bg-black text-white text-[15px]">
       {header}
       {/* Inline toast banner */}
-{toast && (
-  <div className="max-w-6xl mx-auto px-4 pt-4">
-    <div
-      className={`flex items-start gap-3 rounded-xl border px-4 py-3 shadow
+      {toast && (
+        <div className="max-w-6xl mx-auto px-4 pt-4">
+          <div
+            className={`flex items-start gap-3 rounded-xl border px-4 py-3 shadow
         ${toast.type === "success"
           ? "bg-emerald-900/40 border-emerald-700 text-emerald-100"
           : "bg-rose-900/40 border-rose-700 text-rose-100"}`}
-      role="status"
-      aria-live="polite"
-    >
-      <span className="mt-0.5 text-lg">{
-        toast.type === "success" ? "✅" : "⚠️"
-      }</span>
-      <div className="flex-1">{toast.message}</div>
-      <button
-        className="shrink-0 text-white/70 hover:text-white"
-        onClick={() => setToast(null)}
-        aria-label="Dismiss"
-        title="Dismiss"
-      >
-        ×
-      </button>
-    </div>
-  </div>
-)}
-
+            role="status"
+            aria-live="polite"
+          >
+            <span className="mt-0.5 text-lg">{
+              toast.type === "success" ? "✅" : "⚠️"
+            }</span>
+            <div className="flex-1">{toast.message}</div>
+            <button
+              className="shrink-0 text-white/70 hover:text-white"
+              onClick={() => setToast(null)}
+              aria-label="Dismiss"
+              title="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Mobile cart */}
       <div className="max-w-6xl mx-auto px-4 pt-6 lg:hidden">

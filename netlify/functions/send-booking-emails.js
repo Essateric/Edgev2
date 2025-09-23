@@ -6,6 +6,8 @@ dotenv.config();
 
 console.log("📧 EDGE HD BOOKING EMAIL BOOTING...");
 console.log("🔐 USER:", process.env.BOOKING_EMAIL_USER || "❌ Not Set");
+console.log("🔐 PASS LEN:", (process.env.BOOKING_EMAIL_PASS || "").length);
+
 
 const ALLOW_ORIGIN = process.env.ALLOW_ORIGIN || "*";
 
