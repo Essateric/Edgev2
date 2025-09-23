@@ -108,7 +108,7 @@ export default function NewBooking({
     const items = [];
 
     for (const svc of basket) {
-      const dur = Number(svc.displayDuration || 0);
+      const dur = Math.max(1, Number(svc.displayDuration || 0)); // ✅ clamp to ≥ 1 minute
       const price = Number(svc.displayPrice || 0);
 
       items.push({ offsetMin: offset, duration: dur, svc });
