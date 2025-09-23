@@ -45,6 +45,19 @@ const localizer = dateFnsLocalizer({
   locales,
 });
 
+// keep times as local wall-clock and guarantee at least 1 minute
+const toLocal = (d) => {
+  const x = new Date(d);
+  return new Date(x.getFullYear(), x.getMonth(), x.getDate(), x.getHours(), x.getMinutes(), 0, 0);
+};
+const clampRange = (start, end) => {
+  const s = toLocal(start);
+  let e = toLocal(end);
+  if (!(e > s)) e = new Date(s.getTime() + 60 * 1000); // ≥ 1 minute
+  return { start: s, end: e };
+};
+
+
 export default function CalendarPage() {
   const { currentUser, pageLoading, authLoading } = useAuth();
 
@@ -138,42 +151,42 @@ export default function CalendarPage() {
   const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
 
-  const moveEvent = useCallback(
-    async ({ event, start, end, resourceId }) => {
-      const newDuration = (new Date(end).getTime() - new Date(start).getTime()) / 60000;
+const moveEvent = useCallback(
+  async ({ event, start, end, resourceId }) => {
+    const { start: s, end: e } = clampRange(start, end);
+    const rid = resourceId ?? event.resourceId;
 
-      const updated = {
-        ...event,
-        start,
-        end,
-        resourceId,
-        duration: newDuration,
-        stylistName:
-          stylistList.find((s) => s.id === resourceId)?.title || "Unknown",
-      };
+    const newDuration = (e.getTime() - s.getTime()) / 60000;
 
-      // 🟢 Update local state immediately
-      setEvents((prev) =>
-        prev.map((e) => (e.id === event.id ? updated : e))
-      );
+    const updated = {
+      ...event,
+      start: s,
+      end: e,
+      resourceId: rid,
+      duration: newDuration,
+      stylistName: stylistList.find((s1) => s1.id === rid)?.title || "Unknown",
+      allDay: false, // <- belt & braces
+    };
 
-      // 🟡 Then update Supabase (asynchronously)
-      try {
-        await supabase
-          .from("bookings")
-          .update({
-            start,
-            end,
-            resource_id: resourceId,
-            duration: newDuration,
-          })
-          .eq("id", event.id);
-      } catch (error) {
-        console.error("❌ Failed to move booking:", error);
-      }
-    },
-    [stylistList]
-  );
+    setEvents((prev) => prev.map((ev) => (ev.id === event.id ? updated : ev)));
+
+    try {
+      await supabase
+        .from("bookings")
+        .update({
+          start: s,        // OK to pass Date; supabase-js serializes
+          end: e,
+          resource_id: rid,
+          duration: newDuration,
+        })
+        .eq("id", event.id);
+    } catch (error) {
+      console.error("❌ Failed to move booking:", error);
+    }
+  },
+  [stylistList]
+);
+
 
   const handleCancelBookingFlow = () => {
     setIsModalOpen(false);
@@ -256,7 +269,7 @@ export default function CalendarPage() {
         resources={stylistList}
         resourceIdAccessor="id"
         resourceTitleAccessor="title"
-        resourceAccessor={(e) => e.resourceId}
+        // resourceAccessor={(e) => e.resourceId}
         date={visibleDate}
         onNavigate={(newDate) => setVisibleDate(newDate)}
         defaultView={Views.DAY}
@@ -313,6 +326,9 @@ export default function CalendarPage() {
           event: CustomCalendarEvent,
           toolbar: () => null,
         }}
+        showAllDay={false}
+allDayAccessor={() => false}
+
       />
 
       <BookingPopUp
