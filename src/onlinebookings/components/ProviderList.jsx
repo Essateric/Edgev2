@@ -6,9 +6,8 @@ export default function ProviderList({
   selectedServices = [],
   selectedProvider,
   onSelect,
-  onNext,
+  // onNext, // not used anymore
 }) {
-  // Selected service ids (stringified)
   const selectedIds = useMemo(() => {
     const ids = (selectedServices ?? []).map((s) =>
       String(s?.id ?? s?.service_id ?? s)
@@ -16,7 +15,6 @@ export default function ProviderList({
     return new Set(ids);
   }, [selectedServices]);
 
-  // Normalize provider skills into a Set<string>
   function toSkillSet(p) {
     const raw = p?.service_ids;
     const arr = Array.isArray(raw)
@@ -27,6 +25,7 @@ export default function ProviderList({
       ? []
       : [raw];
     return new Set(arr.map((x) => String(x?.id ?? x?.service_id ?? x)));
+
     function normalizeFromString(s) {
       const t = s.trim();
       if (t.startsWith("[") && t.endsWith("]")) {
@@ -43,7 +42,6 @@ export default function ProviderList({
   }
 
   const visibleProviders = useMemo(() => {
-    // Base candidate list (active + online)
     const base = (providers ?? []).map((p) => ({
       ...p,
       is_active: p?.is_active ?? true,
@@ -53,29 +51,19 @@ export default function ProviderList({
       (p) => p.is_active !== false && p.online_bookings !== false
     );
 
-    // If no services chosen -> show everyone (good first-load UX)
-    if (!selectedIds.size) {
-      return sortByName(candidates);
-    }
+    if (!selectedIds.size) return sortByName(candidates);
 
-    // Detect the "mapping empty" situation (RLS/empty staff_services)
     const allSkillsEmpty = candidates.every((p) => toSkillSet(p).size === 0);
-    if (allSkillsEmpty) {
-      // Mapping unavailable → don't hide anyone
-      return sortByName(candidates);
-    }
+    if (allSkillsEmpty) return sortByName(candidates);
 
-    // Normal filter: include stylist if ANY selected service matches
     let filtered = candidates.filter((p) => {
       const skills = toSkillSet(p);
-      if (skills.size === 0) return true; // permissive fallback for partially missing data
+      if (skills.size === 0) return true;
       for (const id of selectedIds) if (skills.has(id)) return true;
       return false;
     });
 
-    // Absolute fallback: if filtering produced nothing, show everyone
     if (filtered.length === 0) filtered = candidates;
-
     return sortByName(filtered);
   }, [providers, selectedIds]);
 
@@ -83,16 +71,7 @@ export default function ProviderList({
 
   return (
     <section className="bg-neutral-900/80 rounded-2xl shadow p-5 border border-neutral-800">
-      <div className="flex items-center justify-between">
-        <h2 className="font-semibold text-xl">Select a stylist</h2>
-        <button
-          onClick={onNext}
-          disabled={!selectedProvider}
-          className="text-sm text-white/80 hover:text-white disabled:opacity-40"
-        >
-          Next →
-        </button>
-      </div>
+      <h2 className="font-semibold text-xl">Select a stylist</h2>
 
       {noneAvailable ? (
         <div className="mt-4 p-4 rounded-lg border border-neutral-700 bg-neutral-900 text-sm text-gray-300">
@@ -101,20 +80,27 @@ export default function ProviderList({
         </div>
       ) : (
         <div
-          className="mt-3 grid sm:grid-cols-2 lg:grid-cols-3 gap-3"
           role="radiogroup"
           aria-label="Select a stylist"
+          className="mt-3 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(220px,1fr))]"
         >
           {visibleProviders.map((p) => {
             const checked = selectedProvider?.id === p.id;
             return (
               <label
                 key={p.id}
-                className={`p-4 rounded-xl border flex gap-3 items-center hover:shadow cursor-pointer ${
-                  checked
-                    ? "border-amber-400 bg-neutral-800"
-                    : "border-neutral-700"
-                }`}
+                role="radio"
+                aria-checked={checked}
+                tabIndex={0}
+                onClick={() => onSelect?.(p)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onSelect?.(p);
+                  }
+                }}
+                className={`p-4 rounded-xl border flex items-start gap-3 hover:shadow cursor-pointer transition
+                  ${checked ? "border-amber-400 bg-neutral-800" : "border-neutral-700 bg-neutral-900/40"}`}
               >
                 <input
                   type="radio"
@@ -123,11 +109,13 @@ export default function ProviderList({
                   checked={checked}
                   onChange={() => onSelect?.(p)}
                 />
-                <div className="w-10 h-10 rounded-full bg-neutral-700" />
+                <div className="h-10 w-10 rounded-full bg-neutral-700 shrink-0" />
                 <div className="min-w-0">
-                  <p className="font-medium text-white truncate">{p.name}</p>
-                  <p className="text-sm text-gray-300 truncate">
-                    {p.permission || p.email || "Staff"}
+                  <p className="font-medium text-white whitespace-normal break-words leading-snug" title={p.name || ""}>
+                    {p.name || "Team Member"}
+                  </p>
+                  <p className="text-sm text-gray-300 whitespace-normal break-words leading-snug">
+                    {p.title || p.permission || p.email || "Stylist"}
                   </p>
                 </div>
               </label>

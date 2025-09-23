@@ -533,42 +533,7 @@ export default function BookingPopUp({
           </div>
         )}
       </div>
-
-      {/* CLIENT NOTES FOR THIS BOOKING */}
-      <div className="mt-4">
-        <p className="text-md font-semibold text-gray-800 mb-1">Notes</p>
-        {notesLoading ? (
-          <p className="text-sm text-gray-500 italic">Loading notes…</p>
-        ) : notes.length === 0 ? (
-          <p className="text-sm text-gray-500 italic">No notes for this booking/client yet.</p>
-        ) : (
-          <div className="space-y-2 max-h-[160px] overflow-auto">
-            {notes.map((n) => {
-              const isClient =
-                String(n.created_by || "").toLowerCase() === "client" ||
-                String(n.note_content || "").toLowerCase().startsWith("notes added by client:");
-              return (
-                <div key={n.id} className="border rounded p-2 bg-white text-gray-900 text-sm">
-                  <div className="flex justify-between items-start gap-2">
-                    <div className="whitespace-pre-line break-words flex-1">{n.note_content}</div>
-                    {isClient && (
-                      <span className="text-[11px] px-2 py-0.5 rounded bg-amber-600/20 text-amber-700 shrink-0">
-                        client
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-[11px] text-gray-500 mt-1">
-                    {new Date(n.created_at).toLocaleString()}
-                    {n.created_by ? ` · by ${n.created_by}` : ""}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* BUTTON ROW */}
+     {/* BUTTON ROW */}
       <div className="mt-4 flex flex-wrap gap-2 items-center">
         <span className="text-sm text-green-700 font-semibold">Confirmed</span>
 

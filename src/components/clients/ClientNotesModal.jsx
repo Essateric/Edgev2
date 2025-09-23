@@ -28,7 +28,8 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
   // History (bookings)
   const [history, setHistory] = useState([]);
   const [providerMap, setProviderMap] = useState({}); // { staffId: "Name" }
-  const [bookingMeta, setBookingMeta] = useState({});  // { bookingId: { when, title } }
+  const [bookingMetaByRowId, setBookingMetaByRowId] = useState({});   // { bookingRowId: { when, title } }
+  const [bookingMetaByGroupId, setBookingMetaByGroupId] = useState({}); // { bookingGroupId(UUID): { when, title } }
 
   const [showFullHistory, setShowFullHistory] = useState(false);
 
@@ -41,18 +42,13 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
   const [historyPage, setHistoryPage] = useState(1);
   const [notesPage, setNotesPage] = useState(1);
 
-  // 🔹 use the current signed-in user from AuthContext (no DB lookup)
+  // 🔹 current signed-in user
   const { currentUser } = useAuth();
 
   // -------- helpers --------
   const isValidEmail = (s) =>
     !s || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s).trim());
 
-  /**
-   * Resolve current staff identity WITHOUT querying staff by auth_id.
-   * Returns { staffId, authId, name, email, permission }.
-   * Kept async to preserve existing call sites.
-   */
   const getCurrentStaffIdentity = async () => {
     try {
       const { data: { user } = {} } = await supabase.auth.getUser();
@@ -60,7 +56,6 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
         return { staffId: null, authId: null, name: staffName || "Stylist", email: null, permission: null };
       }
 
-      // 1) Try by uid === auth user.id
       const byUid = await supabase
         .from("staff")
         .select("id, name, email, permission")
@@ -78,7 +73,6 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
         };
       }
 
-      // 2) Fallback by email
       if (user.email) {
         const byEmail = await supabase
           .from("staff")
@@ -98,7 +92,6 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
         }
       }
 
-      // 3) Last resort: auth profile only
       return {
         staffId: null,
         authId: user.id,
@@ -116,14 +109,26 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
     return who.name || "Stylist";
   };
 
+  // Load notes; try to include booking_group_id if the column exists
   const loadNotes = async () => {
-    const { data, error } = await supabase
+    // First try with booking_group_id
+    let res = await supabase
       .from("client_notes")
-      .select("*")
+      .select("id, client_id, note_content, created_by, created_at, booking_id, booking_group_id")
       .eq("client_id", clientId)
       .order("created_at", { ascending: false });
-    if (!error) setNotes(data || []);
-    else console.error("Error fetching notes:", error.message);
+
+    if (res.error && /column .*booking_group_id/i.test(res.error.message)) {
+      // Fallback for schemas without booking_group_id
+      res = await supabase
+        .from("client_notes")
+        .select("id, client_id, note_content, created_by, created_at, booking_id")
+        .eq("client_id", clientId)
+        .order("created_at", { ascending: false });
+    }
+
+    if (!res.error) setNotes(res.data || []);
+    else console.error("Error fetching notes:", res.error.message);
   };
 
   // -------- data loads --------
@@ -167,7 +172,7 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
     (async () => {
       const { data, error } = await supabase
         .from("bookings")
-        .select("id, start, title, category, resource_id")
+        .select("id, booking_id, start, title, category, resource_id") // include group id
         .eq("client_id", clientId)
         .order("start", { ascending: false })
         .order("id", { ascending: true });
@@ -177,6 +182,8 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
       if (error) {
         console.error("History fetch failed:", error.message);
         setHistory([]);
+        setBookingMetaByRowId({});
+        setBookingMetaByGroupId({});
         return;
       }
 
@@ -198,7 +205,7 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
       }
 
       setHistory(unique);
-      setHistoryPage(1); // reset to first page whenever history reloads
+      setHistoryPage(1);
 
       // Provider map
       const ids = Array.from(new Set(unique.map((b) => b.resource_id).filter(Boolean)));
@@ -220,17 +227,21 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
       }
 
       // Booking metadata for notes context
-      const meta = {};
+      const byRow = {};
+      const byGroup = {};
       unique.forEach((b) => {
         const when = isNaN(new Date(b.start))
           ? "—"
           : format(new Date(b.start), "dd MMM yyyy");
-        meta[b.id] = {
+        const meta = {
           when,
           title: (b.category ? `${b.category}: ` : "") + (b.title || ""),
         };
+        byRow[b.id] = meta;
+        if (b.booking_id) byGroup[b.booking_id] = meta; // map group UUID too
       });
-      setBookingMeta(meta);
+      setBookingMetaByRowId(byRow);
+      setBookingMetaByGroupId(byGroup);
     })();
 
     return () => { active = false; };
@@ -259,7 +270,6 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
     const text = noteContent.trim();
     if (!text) return;
 
-    // Resolve author with both staffId + name (no DB lookup)
     const who = await getCurrentStaffIdentity();
     const authorName = who.name || "Stylist";
 
@@ -267,7 +277,8 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
       client_id: clientId,
       note_content: text,
       created_by: authorName,
-      booking_id: bookingId || null,   // link to booking if provided
+      booking_id: bookingId || null, // link to booking row if provided
+      // leave booking_group_id null on manual notes
     };
 
     const { error } = await supabase.from("client_notes").insert([payload]);
@@ -279,7 +290,7 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
 
     setNoteContent("");
     await loadNotes();
-    setNotesPage(1); // show newest note
+    setNotesPage(1);
   };
 
   const emailIsInvalid = !!emailInput && !isValidEmail(emailInput);
@@ -457,9 +468,13 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
             </div>
           </div>
 
-          <div className="space-y-2 max-h-[300px] overflow-auto bg-white p-1 rounded">
+          <div className="space-y-2 max-h=[300px] overflow-auto bg-white p-1 rounded">
             {paginatedNotes.map((note) => {
-              const meta = note.booking_id ? bookingMeta[note.booking_id] : null;
+              const meta =
+                (note.booking_id && bookingMetaByRowId[note.booking_id]) ||
+                (note.booking_group_id && bookingMetaByGroupId[note.booking_group_id]) ||
+                null;
+
               return (
                 <div key={note.id} className="border rounded p-2 text-sm bg-white text-gray-900">
                   <div>{note.note_content}</div>
