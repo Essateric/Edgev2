@@ -161,9 +161,6 @@ export default function PublicBookingPage() {
     }
   }
 
-  window.scrollTo({ top: 0, behavior: "smooth" });
-
-
   const isTBA = (p) =>
     p == null || p === "" || Number(p) === 0 || Number.isNaN(Number(p));
 
@@ -849,26 +846,6 @@ export default function PublicBookingPage() {
       <section className="w-full min-w-0 bg-neutral-900/90 rounded-2xl shadow p-5 border-2 border-amber-600/40">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-xl font-semibold text-white">Your services</h3>
-          {/* Back + Continue controls (visible for steps 1–3) */}
-          <div className="flex items-center gap-2">
-            {step > 1 && step < 4 && (
-              <button
-                className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-white text-sm"
-                onClick={handleBack}
-              >
-                ← Back
-              </button>
-            )}
-            {step < 4 && (
-              <button
-                className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-sm whitespace-nowrap"
-                disabled={!canContinue}
-                onClick={handleContinue}
-              >
-                Continue →
-              </button>
-            )}
-          </div>
         </div>
 
         {!selectedProvider && (
@@ -948,53 +925,64 @@ export default function PublicBookingPage() {
     <div className="min-h-screen bg-black text-white text-[15px]">
       {header}
 
-{/* Inline toast (centered, unified styling across mobile & desktop) */}
+{/* Brand-themed toast (centered, works identically on mobile & desktop) */}
 {toast && (
   <div className="fixed inset-0 z-[9999] px-3 sm:px-4 flex items-center justify-center pointer-events-none">
     {/* subtle backdrop for contrast */}
     <div className="absolute inset-0 bg-black/50" aria-hidden="true" />
 
     <div
-      className={`pointer-events-auto relative w-full max-w-full sm:max-w-[520px] md:max-w-[620px] lg:max-w-[680px]
-                  rounded-2xl border shadow-2xl
-                  px-4 py-4 sm:px-6 sm:py-6
-                  max-h-[85vh] overflow-auto
-                  ${toast.type === "success"
-                    ? "bg-emerald-900 border-emerald-600 text-emerald-50"
-                    : "bg-rose-900 border-rose-600 text-rose-50"}`}
+      className="pointer-events-auto relative w-full max-w-full sm:max-w-[520px] md:max-w-[620px] lg:max-w-[680px]
+                 rounded-2xl border shadow-2xl overflow-hidden"
       role="status"
       aria-live="polite"
       style={{
-        paddingTop: "max(1rem, env(safe-area-inset-top))",
-        paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
-        paddingLeft: "max(1rem, env(safe-area-inset-left))",
-        paddingRight: "max(1rem, env(safe-area-inset-right))",
+        // pick success vs error palette
+        background: toast.type === "success" ? BRAND.successBg : BRAND.errorBg,
+        borderColor: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
+        color: toast.type === "success" ? BRAND.successText : BRAND.errorText,
       }}
     >
-      <div className="flex items-start gap-3 sm:gap-4">
-        <span className="mt-0.5 text-2xl sm:text-3xl md:text-4xl shrink-0">
-          {toast.type === "success" ? "✅" : "⚠️"}
-        </span>
+      {/* top edge bar using brand accent */}
+      <div
+        style={{
+          height: 6,
+          background: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
+        }}
+      />
 
-        {/* message can be string or JSX */}
-        <div className="flex-1 text-base sm:text-lg leading-relaxed">
-          {toast.message}
+      <div
+        className="px-4 py-4 sm:px-6 sm:py-6"
+        style={{
+          paddingTop: "max(1rem, env(safe-area-inset-top))",
+          paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
+          paddingLeft: "max(1rem, env(safe-area-inset-left))",
+          paddingRight: "max(1rem, env(safe-area-inset-right))",
+        }}
+      >
+        <div className="flex items-start gap-3 sm:gap-4">
+          <span className="mt-0.5 text-2xl sm:text-3xl md:text-4xl shrink-0">
+            {toast.type === "success" ? "✅" : "⚠️"}
+          </span>
+
+          {/* message can be string or JSX */}
+          <div className="flex-1 text-base sm:text-lg leading-relaxed">
+            {toast.message}
+          </div>
+
+          <button
+            className="shrink-0 text-white/90 hover:text-white text-2xl sm:text-3xl ml-2"
+            onClick={() => setToast(null)}
+            aria-label="Dismiss"
+            title="Dismiss"
+          >
+            ×
+          </button>
         </div>
-
-        <button
-          className="shrink-0 text-white/90 hover:text-white text-2xl sm:text-3xl ml-2"
-          onClick={() => setToast(null)}
-          aria-label="Dismiss"
-          title="Dismiss"
-        >
-          ×
-        </button>
       </div>
     </div>
   </div>
 )}
-
-
 
       {/* Mobile cart */}
       <div className="max-w-6xl mx-auto px-4 pt-6 lg:hidden">
