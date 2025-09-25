@@ -884,7 +884,7 @@ export default function PublicBookingPage() {
                   onClick={() => toggleService(svc)}
                   title="Remove"
                 >
-                  ×
+                  Remove
                 </button>
               </li>
             );
