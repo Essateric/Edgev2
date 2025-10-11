@@ -1,10 +1,10 @@
 // src/onlinebookings/PublicBookingPage.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { supabase } from "../supabaseClient.js";
-import Stepper from "./components/Stepper.jsx";
-import ProviderList from "./components/ProviderList.jsx";
-import CalendarSlots from "./components/CalendarSlots.jsx";
-import ClientForm from "./components/ClientForm.jsx";
+import { supabase } from "../supabaseClient";
+import Stepper from "./components/Stepper";
+import ProviderList from "./components/ProviderList";
+import CalendarSlots from "./components/CalendarSlots";
+import ClientForm from "./components/ClientForm";
 import {
   addMinutes,
   startOfDay,
@@ -13,25 +13,23 @@ import {
   getWindowsForWeekday,
   buildSlotsFromWindows,
   rangesOverlap,
-} from "./lib/bookingUtils.js";
-import { sendBookingEmails } from "./lib/email.js";
+} from "./lib/bookingUtils";
+import { sendBookingEmails } from "./lib/email";
 import { v4 as uuidv4 } from "uuid";
 import SaveBookingsLog from "../components/bookings/SaveBookingsLog";
-import edgeLogo from "../assets/EdgeLogo.png";
-// --- policy: minimum booking notice ---
-const MIN_NOTICE_HOURS = 24;
 
-const LOGO_SRC = edgeLogo || "/edge-logo.png";
+/* ---- modular bits ---- */
+import { BRAND } from "../config/brand";
+import { MIN_NOTICE_HOURS, BUSINESS } from "./config";
+import {
+  isValidEmail,
+  uniqById,
+  isChemicalService,
+  minsToLabel,
+} from "./helpers";
+import { safeInsertBookings } from "./api";
 
-const BUSINESS = {
-  name: "The Edge HD Salon",
-  address: "9 Claremont Road, Sale, M33 7DZ",
-  timezone: "Europe/London",
-  logoSrc: LOGO_SRC,
-  notifyEmail: "edgehd.salon@gmail.com",
-};
-
-// ---------- helpers ----------
+/* ---------- helpers ---------- */
 const initialClient = {
   first_name: "",
   last_name: "",
@@ -39,92 +37,6 @@ const initialClient = {
   mobile: "",
   notes: "",
 };
-
-const BOOKING_COLUMNS = [
-  "booking_id",
-  "title",
-  "category",
-  "client_id",
-  "client_name",
-  "resource_id",
-  "start",
-  "end",
-  "duration",
-  "price",
-  "status",
-  "service_id",
-];
-
-function sanitizeBookingRow(row) {
-  const out = {};
-  for (const k of BOOKING_COLUMNS) if (row[k] !== undefined) out[k] = row[k];
-  if (out.duration != null) out.duration = Math.round(Number(out.duration) || 0);
-  if (out.price != null) out.price = Number(out.price) || 0;
-  return out;
-}
-
-// very simple email check + common gmail typo guard
-function isValidEmail(s) {
-  if (!s) return false;
-  const e = String(s).trim().toLowerCase();
-  const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
-  if (!ok) return false;
-  const typos = ["gmail.c", "gmail.co", "gmail.con", "gmail.coom", "gmail.cc"];
-  if (typos.some((t) => e.endsWith(`@${t}`))) return false;
-  return true;
-}
-
-const uniqById = (arr) => {
-  const seen = new Set();
-  return arr.filter((x) => {
-    if (!x?.id || seen.has(x.id)) return false;
-    seen.add(x.id);
-    return true;
-  });
-};
-
-// chemical if DB flag set OR category contains "treat" (Treatments)
-const isChemicalService = (svc) => {
-  const cat = String(svc?.category || "").toLowerCase();
-  return Boolean(svc?.is_chemical) || cat.includes("treat");
-};
-
-const minsToLabel = (total) => {
-  const d = Number(total) || 0;
-  if (!d) return "—";
-  const h = Math.floor(d / 60);
-  const m = d % 60;
-  return `${h ? `${h}h ` : ""}${m || (!h ? d : 0)}m`;
-};
-
-// fallback normaliser (covers CSV/JSON strings if they ever appear)
-function normalizeServiceIds(raw) {
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw;
-  if (typeof raw === "string") {
-    const s = raw.trim();
-    if (s.startsWith("[") && s.endsWith("]")) {
-      try {
-        const arr = JSON.parse(s);
-        return Array.isArray(arr) ? arr : [];
-      } catch {
-        return [];
-      }
-    }
-    if (s.includes(",")) return s.split(",").map((x) => x.trim()).filter(Boolean);
-    return [s];
-  }
-  return [raw];
-}
-
-// ---------- INSERT via RPC (no read-after-insert) ----------
-async function safeInsertBookings(rows) {
-  const { error } = await supabase.rpc("public_create_booking_multi", {
-    p_rows: rows,
-  });
-  if (error) throw error;
-  return [];
-}
 
 export default function PublicBookingPage() {
   const [step, setStep] = useState(1);
@@ -140,7 +52,7 @@ export default function PublicBookingPage() {
   // Provider & time picking
   const [selectedProvider, setSelectedProvider] = useState(null);
 
-  // 👇 NEW: start calendar at the day of (now + 24h)
+  // 👇 Start calendar at (now + 24h)
   const [viewDate, setViewDate] = useState(() => {
     const minStart = new Date(Date.now() + MIN_NOTICE_HOURS * 60 * 60 * 1000);
     return startOfDay(minStart);
@@ -181,7 +93,7 @@ export default function PublicBookingPage() {
     setProviderOverrides([]);
     setClient(initialClient);
     setSaved(null);
-    // 👇 keep calendar aligned with 24h rule after reset
+    // keep calendar aligned with 24h rule after reset
     const minStart = new Date(Date.now() + MIN_NOTICE_HOURS * 60 * 60 * 1000);
     setViewDate(startOfDay(minStart));
     setStep(1);
@@ -349,8 +261,7 @@ export default function PublicBookingPage() {
           totalSpan
         );
 
-        const now = new Date();
-        // Enforce 24-hour minimum notice for any start time
+        // Enforce minimum notice
         const minStart = new Date(Date.now() + MIN_NOTICE_HOURS * 60 * 60 * 1000);
         candidates = candidates.filter((t) => t >= minStart);
 
@@ -416,7 +327,6 @@ export default function PublicBookingPage() {
     if (step === 2) {
       setStep(1);
     } else if (step === 3) {
-      // going back to provider selection: clear chosen time/date
       setSelectedDate(null);
       setSelectedTime(null);
       setStep(2);
@@ -447,7 +357,8 @@ export default function PublicBookingPage() {
       // 2) Build rows from timeline
       const start = new Date(selectedDate);
       start.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
-      // Hard validation: booking must be at least 24h from now
+
+      // Enforce minimum notice
       {
         const minStart = new Date(Date.now() + MIN_NOTICE_HOURS * 60 * 60 * 1000);
         if (start < minStart) {
@@ -606,10 +517,7 @@ export default function PublicBookingPage() {
           if (rpcErr) throw rpcErr;
         }
       } catch (e) {
-        console.warn(
-          "[client_notes] group RPC failed, falling back:",
-          e?.message
-        );
+        console.warn("[client_notes] group RPC failed, falling back:", e?.message);
         try {
           const rawNotes = String(client.notes || "").trim();
           if (rawNotes) {
@@ -690,14 +598,12 @@ export default function PublicBookingPage() {
 
         if (!resp?.ok && resp !== undefined) {
           console.warn("[email] server responded not ok:", resp);
-          // still show the big success toast below
         }
       } catch (e) {
         console.error("[email] failed:", e);
-        // still show the big success toast below
       }
 
-      // 9) Show the BIG success toast (once), keep it open until user closes
+      // 9) Success toast (sticky)
       showToast(
         <>
           <div className="font-semibold text-xl md:text-2xl mb-2">
@@ -718,10 +624,10 @@ export default function PublicBookingPage() {
             </a>.
           </div>
         </>,
-        { type: "success", ms: 0 } // stays open until dismissed
+        { type: "success", ms: 0 }
       );
 
-      // IMPORTANT: reset AFTER showing the toast
+      // Reset AFTER showing toast
       resetBookingFlow();
     } catch (e) {
       console.error("saveBooking failed", e);
@@ -944,32 +850,27 @@ export default function PublicBookingPage() {
     <div className="min-h-screen bg-black text-white text-[15px]">
       {header}
 
-      {/* Brand-themed toast (centered, works identically on mobile & desktop) */}
+      {/* Brand-themed toast */}
       {toast && (
         <div className="fixed inset-0 z-[9999] px-3 sm:px-4 flex items-center justify-center pointer-events-none">
-          {/* subtle backdrop for contrast */}
           <div className="absolute inset-0 bg-black/50" aria-hidden="true" />
-
           <div
             className="pointer-events-auto relative w-full max-w-full sm:max-w-[520px] md:max-w-[620px] lg:max-w-[680px]
                  rounded-2xl border shadow-2xl overflow-hidden"
             role="status"
             aria-live="polite"
             style={{
-              // pick success vs error palette
               background: toast.type === "success" ? BRAND.successBg : BRAND.errorBg,
               borderColor: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
               color: toast.type === "success" ? BRAND.successText : BRAND.errorText,
             }}
           >
-            {/* top edge bar using brand accent */}
             <div
               style={{
                 height: 6,
                 background: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
               }}
             />
-
             <div
               className="px-4 py-4 sm:px-6 sm:py-6"
               style={{
@@ -983,12 +884,9 @@ export default function PublicBookingPage() {
                 <span className="mt-0.5 text-2xl sm:text-3xl md:text-4xl shrink-0">
                   {toast.type === "success" ? "✅" : "⚠️"}
                 </span>
-
-                {/* message can be string or JSX */}
                 <div className="flex-1 text-base sm:text-lg leading-relaxed">
                   {toast.message}
                 </div>
-
                 <button
                   className="shrink-0 text-white/90 hover:text-white text-2xl sm:text-3xl ml-2"
                   onClick={() => setToast(null)}
@@ -1039,7 +937,6 @@ export default function PublicBookingPage() {
                     : "Choose one or more services"}
                 </span>
                 <div className="flex items-center gap-2">
-                  {/* no Back on step 1 */}
                   <button
                     className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40"
                     disabled={!canContinue}
