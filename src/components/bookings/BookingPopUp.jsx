@@ -102,6 +102,13 @@ export default function BookingPopUp({
     booking?.start ? asLocalDate(booking.start).getDate() : 1
   );
 
+   // Clear any stale client when the selected booking changes
+ useEffect(() => {
+   setClientRow(null);
+   setClientError("");
+   setClientLoading(false);
+ }, [booking?.id]);
+
   const { supabaseClient } = useAuth();
 
   // Saves clients.dob (DATE)
