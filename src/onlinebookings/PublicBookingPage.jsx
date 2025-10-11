@@ -18,6 +18,8 @@ import { sendBookingEmails } from "./lib/email.js";
 import { v4 as uuidv4 } from "uuid";
 import SaveBookingsLog from "../components/bookings/SaveBookingsLog";
 import edgeLogo from "../assets/EdgeLogo.png";
+// --- policy: minimum booking notice ---
+const MIN_NOTICE_HOURS = 24;
 
 const LOGO_SRC = edgeLogo || "/edge-logo.png";
 
@@ -137,7 +139,13 @@ export default function PublicBookingPage() {
 
   // Provider & time picking
   const [selectedProvider, setSelectedProvider] = useState(null);
-  const [viewDate, setViewDate] = useState(() => startOfDay(new Date()));
+
+  // 👇 NEW: start calendar at the day of (now + 24h)
+  const [viewDate, setViewDate] = useState(() => {
+    const minStart = new Date(Date.now() + MIN_NOTICE_HOURS * 60 * 60 * 1000);
+    return startOfDay(minStart);
+  });
+
   const [selectedDate, setSelectedDate] = useState(null);
   const [availableSlots, setAvailableSlots] = useState([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
@@ -173,7 +181,9 @@ export default function PublicBookingPage() {
     setProviderOverrides([]);
     setClient(initialClient);
     setSaved(null);
-    setViewDate(startOfDay(new Date()));
+    // 👇 keep calendar aligned with 24h rule after reset
+    const minStart = new Date(Date.now() + MIN_NOTICE_HOURS * 60 * 60 * 1000);
+    setViewDate(startOfDay(minStart));
     setStep(1);
   }
 
@@ -340,9 +350,10 @@ export default function PublicBookingPage() {
         );
 
         const now = new Date();
-        if (dayStart.getTime() === startOfDay(now).getTime()) {
-          candidates = candidates.filter((t) => t > now);
-        }
+        // Enforce 24-hour minimum notice for any start time
+        const minStart = new Date(Date.now() + MIN_NOTICE_HOURS * 60 * 60 * 1000);
+        candidates = candidates.filter((t) => t >= minStart);
+
         if (!candidates.length) {
           setAvailableSlots([]);
           return;
@@ -436,6 +447,14 @@ export default function PublicBookingPage() {
       // 2) Build rows from timeline
       const start = new Date(selectedDate);
       start.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
+      // Hard validation: booking must be at least 24h from now
+      {
+        const minStart = new Date(Date.now() + MIN_NOTICE_HOURS * 60 * 60 * 1000);
+        if (start < minStart) {
+          alert("Bookings must be made at least 24 hours in advance. Please choose a later time.");
+          return;
+        }
+      }
 
       const rows = timeline.map((seg) => {
         const sStart = addMinutes(start, seg.offsetMin);
@@ -925,64 +944,64 @@ export default function PublicBookingPage() {
     <div className="min-h-screen bg-black text-white text-[15px]">
       {header}
 
-{/* Brand-themed toast (centered, works identically on mobile & desktop) */}
-{toast && (
-  <div className="fixed inset-0 z-[9999] px-3 sm:px-4 flex items-center justify-center pointer-events-none">
-    {/* subtle backdrop for contrast */}
-    <div className="absolute inset-0 bg-black/50" aria-hidden="true" />
+      {/* Brand-themed toast (centered, works identically on mobile & desktop) */}
+      {toast && (
+        <div className="fixed inset-0 z-[9999] px-3 sm:px-4 flex items-center justify-center pointer-events-none">
+          {/* subtle backdrop for contrast */}
+          <div className="absolute inset-0 bg-black/50" aria-hidden="true" />
 
-    <div
-      className="pointer-events-auto relative w-full max-w-full sm:max-w-[520px] md:max-w-[620px] lg:max-w-[680px]
+          <div
+            className="pointer-events-auto relative w-full max-w-full sm:max-w-[520px] md:max-w-[620px] lg:max-w-[680px]
                  rounded-2xl border shadow-2xl overflow-hidden"
-      role="status"
-      aria-live="polite"
-      style={{
-        // pick success vs error palette
-        background: toast.type === "success" ? BRAND.successBg : BRAND.errorBg,
-        borderColor: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
-        color: toast.type === "success" ? BRAND.successText : BRAND.errorText,
-      }}
-    >
-      {/* top edge bar using brand accent */}
-      <div
-        style={{
-          height: 6,
-          background: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
-        }}
-      />
-
-      <div
-        className="px-4 py-4 sm:px-6 sm:py-6"
-        style={{
-          paddingTop: "max(1rem, env(safe-area-inset-top))",
-          paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
-          paddingLeft: "max(1rem, env(safe-area-inset-left))",
-          paddingRight: "max(1rem, env(safe-area-inset-right))",
-        }}
-      >
-        <div className="flex items-start gap-3 sm:gap-4">
-          <span className="mt-0.5 text-2xl sm:text-3xl md:text-4xl shrink-0">
-            {toast.type === "success" ? "✅" : "⚠️"}
-          </span>
-
-          {/* message can be string or JSX */}
-          <div className="flex-1 text-base sm:text-lg leading-relaxed">
-            {toast.message}
-          </div>
-
-          <button
-            className="shrink-0 text-white/90 hover:text-white text-2xl sm:text-3xl ml-2"
-            onClick={() => setToast(null)}
-            aria-label="Dismiss"
-            title="Dismiss"
+            role="status"
+            aria-live="polite"
+            style={{
+              // pick success vs error palette
+              background: toast.type === "success" ? BRAND.successBg : BRAND.errorBg,
+              borderColor: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
+              color: toast.type === "success" ? BRAND.successText : BRAND.errorText,
+            }}
           >
-            ×
-          </button>
+            {/* top edge bar using brand accent */}
+            <div
+              style={{
+                height: 6,
+                background: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
+              }}
+            />
+
+            <div
+              className="px-4 py-4 sm:px-6 sm:py-6"
+              style={{
+                paddingTop: "max(1rem, env(safe-area-inset-top))",
+                paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
+                paddingLeft: "max(1rem, env(safe-area-inset-left))",
+                paddingRight: "max(1rem, env(safe-area-inset-right))",
+              }}
+            >
+              <div className="flex items-start gap-3 sm:gap-4">
+                <span className="mt-0.5 text-2xl sm:text-3xl md:text-4xl shrink-0">
+                  {toast.type === "success" ? "✅" : "⚠️"}
+                </span>
+
+                {/* message can be string or JSX */}
+                <div className="flex-1 text-base sm:text-lg leading-relaxed">
+                  {toast.message}
+                </div>
+
+                <button
+                  className="shrink-0 text-white/90 hover:text-white text-2xl sm:text-3xl ml-2"
+                  onClick={() => setToast(null)}
+                  aria-label="Dismiss"
+                  title="Dismiss"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
-  </div>
-)}
+      )}
 
       {/* Mobile cart */}
       <div className="max-w-6xl mx-auto px-4 pt-6 lg:hidden">

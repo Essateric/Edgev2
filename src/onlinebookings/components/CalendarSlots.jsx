@@ -1,3 +1,4 @@
+// src/onlinebookings/components/CalendarSlots.jsx
 import React from "react";
 import {
   monthDays,
@@ -32,7 +33,19 @@ export default function CalendarSlots({
   onPickTime,
   staffServiceOverrides = [],
 }) {
+  // All days in the current month
   const monthDaysMemo = React.useMemo(() => monthDays(viewDate), [viewDate]);
+
+  // --- NEW: compute leading blanks so the 1st lands on the correct weekday (Sunday-first header) ---
+  const leadingBlankCount = React.useMemo(() => {
+    const firstOfMonth = new Date(
+      viewDate.getFullYear(),
+      viewDate.getMonth(),
+      1
+    );
+    // Native JS: 0=Sun,1=Mon,...6=Sat. Our header is Sun..Sat, so we can use getDay() directly.
+    return firstOfMonth.getDay(); // number of empty cells before day 1
+  }, [viewDate]);
 
   // Effective (per-stylist) figures purely for display beside each slot.
   const { price, duration } = React.useMemo(
@@ -89,6 +102,15 @@ export default function CalendarSlots({
             {d}
           </div>
         ))}
+
+        {/* --- NEW: render leading blanks so the grid lines up correctly --- */}
+        {Array.from({ length: leadingBlankCount }).map((_, i) => (
+          <div key={`pad-${i}`} className="py-2 rounded-lg text-sm opacity-0">
+            0
+          </div>
+        ))}
+
+        {/* Actual month days */}
         {monthDaysMemo.map((d) => {
           const today = startOfDay(new Date());
           const selectable = d >= today && selectedProvider && selectedService;
