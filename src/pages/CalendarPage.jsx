@@ -46,24 +46,6 @@ const localizer = dateFnsLocalizer({
   locales,
 });
 
-// Keep whatever is there above...
-const toDate = (v) => (v instanceof Date ? v : new Date(v));
-
-const coerceEventForPopup = (ev) => {
-  const rid = ev.resource_id ?? ev.resourceId ?? ev.stylist_id ?? null;
-  const stylist = stylistList.find((s) => s.id === rid);
-  return {
-    ...ev,
-    start: toDate(ev.start),
-    end: toDate(ev.end),
-    resource_id: rid,                 // <-- ensure BookingPopUp can read it
-    resourceId: rid,                  // <-- keep calendar happy too
-    title: ev.title || "No Service Name",
-    stylistName:
-      ev.stylistName || stylist?.name || stylist?.title || "Unknown Stylist",
-  };
-};
-
 
 // keep times as local wall-clock and guarantee at least 1 minute
 const toLocal = (d) => {
@@ -121,6 +103,25 @@ export default function CalendarPage() {
 
   // Local loading state for fetchData
   const [loading, setLoading] = useState(true);
+
+  // Keep whatever is there above...
+const toDate = (v) => (v instanceof Date ? v : new Date(v));
+
+const coerceEventForPopup = (ev) => {
+  const rid = ev.resource_id ?? ev.resourceId ?? ev.stylist_id ?? null;
+  const stylist = stylistList.find((s) => s.id === rid);
+  return {
+    ...ev,
+    start: toDate(ev.start),
+    end: toDate(ev.end),
+    resource_id: rid,                 // <-- ensure BookingPopUp can read it
+    resourceId: rid,                  // <-- keep calendar happy too
+    title: ev.title || "No Service Name",
+    stylistName:
+      ev.stylistName || stylist?.name || stylist?.title || "Unknown Stylist",
+  };
+};
+
 
   const stylist = stylistList.find((s) => s.id === selectedSlot?.resourceId);
 

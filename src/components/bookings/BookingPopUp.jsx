@@ -33,6 +33,7 @@ export default function BookingPopUp({
   stylistList = [],
   clients = [],
 }) {
+  
   const [showActions, setShowActions] = useState(false);
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [isEditingDob, setIsEditingDob] = useState(false);

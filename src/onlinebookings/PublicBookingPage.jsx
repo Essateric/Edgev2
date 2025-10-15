@@ -855,9 +855,77 @@ window.dispatchEvent(
     );
   };
 
+  function SelectionSummary({ provider, start, onClear }) {
+  if (!provider && !start) return null;
+
+  const dateStr = start
+    ? start.toLocaleDateString(undefined, {
+        weekday: "short",
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      })
+    : null;
+
+  const timeStr = start
+    ? start.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : null;
+
+  return (
+    <div className="sticky z-20 top-[72px] md:top-[84px] bg-neutral-900/95 backdrop-blur border-b border-neutral-800">
+      <div className="max-w-6xl mx-auto px-4 py-2 flex flex-wrap items-center gap-2">
+        <span className="text-xs uppercase tracking-wide text-gray-400">Selected:</span>
+
+        {provider && (
+          <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded-full border border-neutral-700 bg-amber-600/40">
+            <span className="opacity-70">Stylist</span>
+            <span className="font-medium">{provider.name || provider.title || "—"}</span>
+          </span>
+        )}
+
+        {start && (
+          <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded-full border border-neutral-700 bg-neutral-800/70">
+            <span className="opacity-70">When</span>
+            <span className="font-medium">{dateStr} • {timeStr}</span>
+          </span>
+        )}
+
+        <button
+          type="button"
+          onClick={onClear}
+          className="ml-auto text-xs px-3 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700"
+          title="Clear selection"
+        >
+          Clear
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const startDateTime = useMemo(() => {
+  if (!selectedDate || !selectedTime) return null;
+  const d = new Date(selectedDate);
+  d.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
+  return d;
+}, [selectedDate, selectedTime]);
+
+
   return (
     <div className="min-h-screen bg-black text-white text-[15px]">
       {header}
+
+
+<SelectionSummary
+  provider={selectedProvider}
+  start={startDateTime}
+  onClear={() => {
+    setSelectedTime(null);
+    setSelectedDate(null);
+    setSelectedProvider(null);
+  }}
+/>
+
 
       {/* Brand-themed toast */}
       {toast && (
