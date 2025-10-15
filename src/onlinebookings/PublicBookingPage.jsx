@@ -497,10 +497,19 @@ export default function PublicBookingPage() {
         end: r.end,
         duration: r.duration,
         price: r.price,
+         source: "public", 
         status: "confirmed",
         service_id: r.service_id,
       }));
       await safeInsertBookings(payloadRows);
+
+      // after successful insert (and logs/emails)
+window.dispatchEvent(
+  new CustomEvent("bookings:changed", {
+    detail: { type: "created", booking_id: bookingId },
+  })
+);
+
 
       // 6) Save client's notes
       try {
