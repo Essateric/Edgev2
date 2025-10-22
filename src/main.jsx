@@ -16,6 +16,9 @@ import {
 import { AuthProvider } from "./contexts/AuthContext.jsx";
 import { BookingProvider } from "./contexts/BookingContext.jsx";
 
+// 🔐 auth audit init (client-side logging of sign-in/out)
+import { initAuthAudit } from "./auth/initAuthAudit.jsx";
+
 // --- optional dev hook (unchanged) ---
 if (import.meta.env.DEV) {
   (function () {
@@ -29,6 +32,12 @@ if (import.meta.env.DEV) {
       return _fetch.call(this, input, init);
     };
   })();
+}
+
+// ✅ Call once at startup (guard against HMR/StrictMode double init)
+if (!window.__authAuditInit) {
+  window.__authAuditInit = true;
+  initAuthAudit();
 }
 
 // ✅ Router that delegates everything to your current <App />

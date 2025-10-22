@@ -190,6 +190,7 @@ export default function ReviewModal({
           start: startISO,
           end: endISO,
           logged_by, // UUID or null
+          reason: "Manual Booking",  
           before_snapshot: null,
           after_snapshot: newBooking,
         });
