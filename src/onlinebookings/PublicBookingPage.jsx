@@ -1,35 +1,34 @@
 // src/onlinebookings/PublicBookingPage.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useMemo, useState } from "react";
+import { v4 as uuidv4 } from "uuid";
 import { supabase } from "../supabaseClient";
+
+/* UI bits */
 import Stepper from "./components/Stepper";
 import ProviderList from "./components/ProviderList";
 import CalendarSlots from "./components/CalendarSlots";
 import ClientForm from "./components/ClientForm";
-import {
-  addMinutes,
-  startOfDay,
-  endOfDay,
-  money,
-  getWindowsForWeekday,
-  buildSlotsFromWindows,
-  rangesOverlap,
-} from "./lib/bookingUtils";
-import { sendBookingEmails } from "./lib/email";
-import { v4 as uuidv4 } from "uuid";
-import SaveBookingsLog from "../components/bookings/SaveBookingsLog";
+import ServiceList from "./components/ServiceList";
 
-/* ---- modular bits ---- */
-import { BRAND } from "../config/brand";
-import { MIN_NOTICE_HOURS, BUSINESS } from "./config";
-import {
-  isValidEmail,
-  uniqById,
-  isChemicalService,
-  minsToLabel,
-} from "./helpers";
+/* Hooks */
+import useToast from "./hooks/useToast";
+import useServicesAndProviders from "./hooks/useServicesAndProviders";
+import useProviderOverrides from "./hooks/useProviderOverrides";
+import useTimeline from "./hooks/useTimeline";
+import useSlots from "./hooks/useSlots";
+
+/* Lib */
+import { sendBookingEmails } from "./lib/email";
+import SaveBookingsLog from "../components/bookings/SaveBookingsLog";
 import { safeInsertBookings } from "./api";
 
-/* ---------- helpers ---------- */
+/* Config + helpers */
+import { BRAND } from "../config/brand";
+import { MIN_NOTICE_HOURS, BUSINESS } from "./config";
+import { money } from "./lib/bookingUtils";
+import { isValidEmail, uniqById, minsToLabel } from "./helpers";
+
+/* ---------- local helpers ---------- */
 const initialClient = {
   first_name: "",
   last_name: "",
@@ -41,45 +40,72 @@ const initialClient = {
 export default function PublicBookingPage() {
   const [step, setStep] = useState(1);
 
-  // All services/providers
-  const [services, setServices] = useState([]);
-  const [providers, setProviders] = useState([]);
-
-  // MULTI service selection
+  // Selection state
   const [selectedServices, setSelectedServices] = useState([]);
-  const lastPickedService = selectedServices[selectedServices.length - 1] || null;
-
-  // Provider & time picking
   const [selectedProvider, setSelectedProvider] = useState(null);
-
-  // 👇 Start calendar at (now + 24h)
-  const [viewDate, setViewDate] = useState(() => {
-    const minStart = new Date(Date.now() + MIN_NOTICE_HOURS * 60 * 60 * 1000);
-    return startOfDay(minStart);
-  });
-
   const [selectedDate, setSelectedDate] = useState(null);
-  const [availableSlots, setAvailableSlots] = useState([]);
-  const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedTime, setSelectedTime] = useState(null);
 
-  // Client & save
+  // Client + save
   const [client, setClient] = useState(initialClient);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(null);
 
-  // Stylist-specific overrides from staff_services
-  const [providerOverrides, setProviderOverrides] = useState([]);
+  // Toast
+  const { toast, showToast, hideToast } = useToast();
 
-  // Inline toast (success / error) shown in-page
-  const [toast, setToast] = useState(null);
-  function showToast(message, { type = "success", ms = 5000 } = {}) {
-    setToast({ message, type, ts: Date.now() });
-    if (ms > 0) {
-      window.clearTimeout(showToast._t);
-      showToast._t = window.setTimeout(() => setToast(null), ms);
-    }
-  }
+  // Data: services + providers
+  const { services, providers } = useServicesAndProviders();
+
+  // Staff overrides when provider changes (ALWAYS normalize to array)
+  const providerOverridesResult = useProviderOverrides(selectedProvider);
+  const providerOverrides = Array.isArray(providerOverridesResult?.overrides)
+    ? providerOverridesResult.overrides
+    : [];
+
+  // Timeline (multi services, chemical gaps, sums & labels)
+  const {
+    timeline,
+    hasChemical,
+    hasUnknownPrice,
+    serviceNameForEmail,
+    sumActiveDuration,
+    sumPrice,
+    // NOTE: older version returned getEffectivePD; current hook does not.
+  } = useTimeline({
+    selectedServices,
+    selectedProvider,
+    providerOverrides, // always an array
+  });
+
+  // Local helper to compute effective price/duration (restores older behavior)
+  const getEffectivePD = (svc) => {
+    if (!selectedProvider || !svc) return { duration: null, price: null };
+    const o = providerOverrides.find((x) => x?.service_id === svc?.id);
+    const baseDuration = Number(svc?.base_duration ?? 0) || 0;
+    return {
+      duration:
+        (o?.duration != null ? Number(o.duration) : baseDuration) || 0,
+      price: o?.price != null ? Number(o.price) : null,
+    };
+  };
+
+  // Slots (windows, min notice, busy spans, per-segment clash check)
+  const {
+    viewDate,
+    setViewDate,
+    availableSlots,
+    slotsLoading,
+    recomputeFor: _,
+  } = useSlots({
+    selectedServices,
+    selectedProvider,
+    selectedDate,
+    timeline,
+  });
+
+  const lastPickedService =
+    selectedServices[selectedServices.length - 1] || null;
 
   const isTBA = (p) =>
     p == null || p === "" || Number(p) === 0 || Number.isNaN(Number(p));
@@ -89,218 +115,12 @@ export default function PublicBookingPage() {
     setSelectedProvider(null);
     setSelectedDate(null);
     setSelectedTime(null);
-    setAvailableSlots([]);
-    setProviderOverrides([]);
     setClient(initialClient);
     setSaved(null);
-    // keep calendar aligned with 24h rule after reset
-    const minStart = new Date(Date.now() + MIN_NOTICE_HOURS * 60 * 60 * 1000);
-    setViewDate(startOfDay(minStart));
     setStep(1);
   }
 
-  // ===== Fetch services + providers + map services to providers (via RPCs) =====
-  useEffect(() => {
-    (async () => {
-      const { data: s } = await supabase.rpc("public_get_services");
-      setServices(s || []);
-
-      const { data: staff } = await supabase.rpc("public_get_staff");
-
-      let links = [];
-      {
-        const { data: l } = await supabase.rpc("public_get_staff_services");
-        links = l || [];
-      }
-
-      const map = new Map();
-      for (const r of links) {
-        if (!map.has(r.staff_id)) map.set(r.staff_id, new Set());
-        map.get(r.staff_id).add(r.service_id);
-      }
-
-      const normalised = (staff || []).map((p) => {
-        const baseServiceIds = Array.from(map.get(p.id) || []);
-        const isMartinByName = String(p.name || p.title || "")
-          .trim()
-          .toLowerCase() === "martin";
-        const isMartinById = p.id === "9cf991b3-2ea5-44c1-b915-615fdd9f993c";
-        const isMartin = isMartinById || isMartinByName;
-
-        return {
-          ...p,
-          service_ids:
-            baseServiceIds.length > 0
-              ? baseServiceIds
-              : isMartin
-              ? (s || []).map((x) => x.id)
-              : baseServiceIds,
-          online_bookings: true,
-          is_active: true,
-          title: isMartin ? "Senior Stylist" : p.title || null,
-          role: isMartin ? "stylist" : p.role,
-        };
-      });
-
-      setProviders(normalised);
-    })();
-  }, []);
-
-  // load overrides when provider changes
-  useEffect(() => {
-    (async () => {
-      if (!selectedProvider) {
-        setProviderOverrides([]);
-        return;
-      }
-      const { data, error } = await supabase
-        .from("staff_services")
-        .select("service_id, staff_id, price, duration")
-        .eq("staff_id", selectedProvider.id);
-      if (!error) setProviderOverrides(data || []);
-    })();
-  }, [selectedProvider]);
-
-  // effective per-item values for display & booking
-  const getEffectivePD = (svc) => {
-    if (!selectedProvider) return { duration: null, price: null };
-    const o = providerOverrides.find((x) => x.service_id === svc.id);
-    return {
-      duration:
-        (o?.duration != null ? Number(o.duration) : svc.base_duration || 0) ||
-        0,
-      price: o?.price != null ? Number(o.price) : null,
-    };
-  };
-
-  // Build service timeline (includes 30m gap after chemical services)
-  const {
-    timeline,
-    hasChemical,
-    serviceNameForEmail,
-    hasUnknownPrice,
-    sumActiveDuration,
-    sumPrice,
-  } = useMemo(() => {
-    if (!selectedServices.length || !selectedProvider) {
-      return {
-        timeline: [],
-        hasChemical: false,
-        serviceNameForEmail: "",
-        hasUnknownPrice: true,
-        sumActiveDuration: 0,
-        sumPrice: 0,
-      };
-    }
-
-    let offset = 0;
-    let anyChem = false;
-    let unknown = false;
-    let priceSum = 0;
-    const items = [];
-
-    for (const svc of selectedServices) {
-      const { duration: d, price: p } = getEffectivePD(svc);
-      const dur = Number(d || 0);
-      items.push({ offsetMin: offset, duration: dur, svc });
-      if (isTBA(p)) unknown = true;
-      else priceSum += Number(p || 0);
-      offset += dur;
-      if (isChemicalService(svc)) {
-        anyChem = true;
-        offset += 30; // processing gap
-      }
-    }
-
-    const nameForEmail =
-      selectedServices.map((s) => s.name).join(", ") +
-      (anyChem ? " (+processing gap)" : "");
-
-    return {
-      timeline: items,
-      hasChemical: anyChem,
-      serviceNameForEmail: nameForEmail,
-      hasUnknownPrice: unknown,
-      sumActiveDuration: items.reduce((acc, it) => acc + it.duration, 0),
-      sumPrice: priceSum,
-    };
-  }, [selectedServices, providerOverrides, selectedProvider]);
-
-  // Compute free slots (respect each segment + gaps)
-  useEffect(() => {
-    if (!selectedServices.length || !selectedProvider || !selectedDate) return;
-
-    let active = true;
-    (async () => {
-      setSlotsLoading(true);
-      try {
-        const dayStart = startOfDay(selectedDate);
-        const dayEnd = endOfDay(selectedDate);
-        const dayStartISO = dayStart.toISOString();
-        const dayEndISO = dayEnd.toISOString();
-
-        const windows = getWindowsForWeekday(
-          selectedProvider.weekly_hours,
-          dayStart.getDay()
-        );
-        if (!windows.length) {
-          setAvailableSlots([]);
-          return;
-        }
-
-        const totalSpan = timeline.length
-          ? timeline[timeline.length - 1].offsetMin +
-            timeline[timeline.length - 1].duration
-          : 30;
-
-        const stepMins = 15;
-        let candidates = buildSlotsFromWindows(
-          dayStart,
-          windows,
-          stepMins,
-          totalSpan
-        );
-
-        // Enforce minimum notice
-        const minStart = new Date(Date.now() + MIN_NOTICE_HOURS * 60 * 60 * 1000);
-        candidates = candidates.filter((t) => t >= minStart);
-
-        if (!candidates.length) {
-          setAvailableSlots([]);
-          return;
-        }
-
-        const { data: spans, error: spansErr } = await supabase.rpc(
-          "public_get_booked_spans",
-          { p_staff: selectedProvider.id, p_start: dayStartISO, p_end: dayEndISO }
-        );
-        if (spansErr) throw spansErr;
-
-        const busy = (spans || []).map((b) => ({
-          start: new Date(b.start),
-          end: new Date(b.end),
-        }));
-
-        const free = candidates.filter((base) =>
-          timeline.every((seg) => {
-            const s = addMinutes(base, seg.offsetMin);
-            const e = addMinutes(s, seg.duration);
-            return busy.every((b) => !rangesOverlap(s, e, b.start, b.end));
-          })
-        );
-
-        if (active) setAvailableSlots(free);
-      } finally {
-        if (active) setSlotsLoading(false);
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, [selectedServices, selectedProvider, selectedDate, timeline]);
-
-  // toggle service
+  // Toggle a service in/out of the cart
   const toggleService = (svc) => {
     setSelectedServices((prev) => {
       const exists = prev.some((x) => x.id === svc.id);
@@ -309,7 +129,7 @@ export default function PublicBookingPage() {
     });
   };
 
-  // ---------- navigation helpers ----------
+  // Continue/back guards
   const canContinue = useMemo(() => {
     if (step === 1) return selectedServices.length > 0;
     if (step === 2) return !!selectedProvider;
@@ -363,13 +183,14 @@ export default function PublicBookingPage() {
         const minStart = new Date(Date.now() + MIN_NOTICE_HOURS * 60 * 60 * 1000);
         if (start < minStart) {
           alert("Bookings must be made at least 24 hours in advance. Please choose a later time.");
+          setSaving(false);
           return;
         }
       }
 
       const rows = timeline.map((seg) => {
-        const sStart = addMinutes(start, seg.offsetMin);
-        const sEnd = addMinutes(sStart, seg.duration);
+        const sStart = new Date(start.getTime() + seg.offsetMin * 60000);
+        const sEnd = new Date(sStart.getTime() + seg.duration * 60000);
         const { price: p } = getEffectivePD(seg.svc);
         return {
           title: seg.svc.name,
@@ -386,7 +207,7 @@ export default function PublicBookingPage() {
       const totalEndISO = rows[rows.length - 1].end;
       const bookingId = uuidv4();
 
-      // 3) Find-or-create client
+      // 3) Find-or-create client (email-first, else mobile/name)
       let clientId = null;
       if (email) {
         const { data: byEmail, error: findEmailErr } = await supabase
@@ -412,14 +233,7 @@ export default function PublicBookingPage() {
         } else {
           const { data: created, error: insErr } = await supabase
             .from("clients")
-            .insert([
-              {
-                first_name: first,
-                last_name: last || null,
-                email,
-                mobile: mobileN || null,
-              },
-            ])
+            .insert([{ first_name: first, last_name: last || null, email, mobile: mobileN || null }])
             .select("id")
             .single();
           if (insErr) throw insErr;
@@ -436,10 +250,8 @@ export default function PublicBookingPage() {
         const existing = (candidates || []).find(
           (r) =>
             String((r.mobile || "").replace(/[^\d]/g, "")) === mobileN &&
-            String(r.first_name || "").trim().toLowerCase() ===
-              first.toLowerCase() &&
-            String(r.last_name || "").trim().toLowerCase() ===
-              last.toLowerCase()
+            String(r.first_name || "").trim().toLowerCase() === first.toLowerCase() &&
+            String(r.last_name || "").trim().toLowerCase() === last.toLowerCase()
         );
 
         if (existing) {
@@ -447,14 +259,7 @@ export default function PublicBookingPage() {
         } else {
           const { data: created, error: insErr } = await supabase
             .from("clients")
-            .insert([
-              {
-                first_name: first,
-                last_name: last || null,
-                email: null,
-                mobile: mobileN,
-              },
-            ])
+            .insert([{ first_name: first, last_name: last || null, email: null, mobile: mobileN }])
             .select("id")
             .single();
           if (insErr) throw insErr;
@@ -462,14 +267,18 @@ export default function PublicBookingPage() {
         }
       }
 
-      // 4) Clash check
-      const dayStartISO = startOfDay(selectedDate).toISOString();
-      const dayEndISO = endOfDay(selectedDate).toISOString();
-      const { data: dayBookings, error: dayErr } = await supabase.rpc(
-        "public_get_booked_spans",
-        { p_staff: selectedProvider.id, p_start: dayStartISO, p_end: dayEndISO }
-      );
+      // 4) Same-day clash check (per segment)
+      const dayStartISO = new Date(new Date(selectedDate).setHours(0, 0, 0, 0)).toISOString();
+      const dayEndISO = new Date(new Date(selectedDate).setHours(23, 59, 59, 999)).toISOString();
+      const { data: dayBookings, error: dayErr } = await supabase.rpc("public_get_booked_spans", {
+        p_staff: selectedProvider.id,
+        p_start: dayStartISO,
+        p_end: dayEndISO,
+      });
       if (dayErr) throw dayErr;
+
+      const rangesOverlap = (aStart, aEnd, bStart, bEnd) =>
+        aStart < bEnd && aEnd > bStart;
 
       for (const r of rows) {
         const s = new Date(r.start);
@@ -478,14 +287,13 @@ export default function PublicBookingPage() {
           rangesOverlap(s, e, new Date(b.start), new Date(b.end))
         );
         if (clash) {
-          alert(
-            "Sorry, one of those times was just taken. Please pick another slot."
-          );
+          alert("Sorry, one of those times was just taken. Please pick another slot.");
+          setSaving(false);
           return;
         }
       }
 
-      // 5) Insert bookings (grouped)
+      // 5) Insert grouped rows
       const payloadRows = rows.map((r) => ({
         booking_id: bookingId,
         title: r.title,
@@ -497,36 +305,30 @@ export default function PublicBookingPage() {
         end: r.end,
         duration: r.duration,
         price: r.price,
-         source: "public", 
+        source: "public",
         status: "confirmed",
         service_id: r.service_id,
       }));
       await safeInsertBookings(payloadRows);
 
-      // after successful insert (and logs/emails)
-window.dispatchEvent(
-  new CustomEvent("bookings:changed", {
-    detail: { type: "created", booking_id: bookingId },
-  })
-);
+      // notify listeners
+      window.dispatchEvent(
+        new CustomEvent("bookings:changed", {
+          detail: { type: "created", booking_id: bookingId },
+        })
+      );
 
-
-      // 6) Save client's notes
+      // 6) Client notes (RPC → fallback single row attach)
       try {
         const rawNotes = String(client.notes || "").trim();
         if (rawNotes) {
           const { error: rpcErr } = await supabase.rpc(
             "public_add_client_note_for_group",
-            {
-              p_booking_id: bookingId,
-              p_client_id: clientId,
-              p_note: rawNotes,
-            }
+            { p_booking_id: bookingId, p_client_id: clientId, p_note: rawNotes }
           );
           if (rpcErr) throw rpcErr;
         }
       } catch (e) {
-        console.warn("[client_notes] group RPC failed, falling back:", e?.message);
         try {
           const rawNotes = String(client.notes || "").trim();
           if (rawNotes) {
@@ -548,8 +350,8 @@ window.dispatchEvent(
               },
             ]);
           }
-        } catch (e2) {
-          console.warn("[client_notes] fallback insert failed:", e2?.message);
+        } catch {
+          /* best-effort */
         }
       }
 
@@ -561,13 +363,9 @@ window.dispatchEvent(
           client_id: clientId,
           client_name: `${first} ${last}`.trim(),
           stylist_id: selectedProvider.id,
-          stylist_name:
-            selectedProvider.name || selectedProvider.title || "Unknown",
+          stylist_name: selectedProvider.name || selectedProvider.title || "Unknown",
           service: {
-            name:
-              serviceNameForEmail ||
-              selectedServices[0]?.name ||
-              "Multiple services",
+            name: serviceNameForEmail || selectedServices[0]?.name || "Multiple services",
             category: "Multi",
             price: sumPrice,
             duration: sumActiveDuration,
@@ -580,21 +378,17 @@ window.dispatchEvent(
           after_snapshot: null,
           skipStaffLookup: true,
         });
-      } catch (e) {
-        console.warn("Booking saved, but log write failed:", e?.message);
+      } catch {
+        /* non-fatal */
       }
 
       // 8) Emails
       try {
         const customerEmailToUse = isValidEmail(email) ? email : undefined;
-        const resp = await sendBookingEmails({
+        await sendBookingEmails({
           businessEmail: BUSINESS.notifyEmail,
           business: BUSINESS,
-          booking: {
-            start: totalStartISO,
-            end: totalEndISO,
-            client_name: `${first} ${last}`.trim(),
-          },
+          booking: { start: totalStartISO, end: totalEndISO, client_name: `${first} ${last}`.trim() },
           service: { name: serviceNameForEmail },
           provider: selectedProvider,
           notes: (client.notes || "").trim(),
@@ -604,15 +398,11 @@ window.dispatchEvent(
           client: { first_name: first, last_name: last },
           bookingClientName: `${first} ${last}`.trim(),
         });
-
-        if (!resp?.ok && resp !== undefined) {
-          console.warn("[email] server responded not ok:", resp);
-        }
-      } catch (e) {
-        console.error("[email] failed:", e);
+      } catch {
+        /* non-fatal */
       }
 
-      // 9) Success toast (sticky)
+      // 9) Success toast (sticky) + reset AFTER showing toast
       showToast(
         <>
           <div className="font-semibold text-xl md:text-2xl mb-2">
@@ -636,7 +426,6 @@ window.dispatchEvent(
         { type: "success", ms: 0 }
       );
 
-      // Reset AFTER showing toast
       resetBookingFlow();
     } catch (e) {
       console.error("saveBooking failed", e);
@@ -646,7 +435,7 @@ window.dispatchEvent(
     }
   }
 
-  // HEADER (outside saveBooking)
+  // ----- Header -----
   const header = (
     <div className="sticky top-0 z-10 bg-black/90 backdrop-blur border-b border-neutral-800">
       <div className="max-w-6xl mx-auto px-4 py-4 flex items-center gap-4">
@@ -666,266 +455,144 @@ window.dispatchEvent(
     </div>
   );
 
-  // ---------- Accordion Services ----------
-  const AccordionServices = () => {
-    const grouped = useMemo(() => {
-      const map = new Map();
-      for (const s of services) {
-        const cat = s.category || "Other";
-        if (!map.has(cat)) map.set(cat, []);
-        map.get(cat).push(s);
-      }
-      return Array.from(map.entries()).sort(([a], [b]) =>
-        String(a).localeCompare(String(b))
-      );
-    }, [services]);
-
-    const [openCat, setOpenCat] = useState(() =>
-      grouped.length ? grouped[0][0] : null
-    );
-    const catRefs = useRef({});
-
-    const toggleCat = (cat) => {
-      setOpenCat((curr) => {
-        const next = curr === cat ? null : cat;
-        requestAnimationFrame(() => {
-          const el = catRefs.current[cat];
-          if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
-        });
-        return next;
-      });
-    };
-
-    return (
-      <div className="space-y-3">
-        {grouped.map(([cat, list]) => (
-          <div
-            key={cat}
-            ref={(el) => (catRefs.current[cat] = el)}
-            className="rounded-xl border border-neutral-800"
-          >
-            <button
-              type="button"
-              onClick={() => toggleCat(cat)}
-              className="w-full flex items-center justify-between px-4 py-3 bg-neutral-900/70 hover:bg-neutral-900 text-left"
-            >
-              <span className="font-medium">
-                {cat}
-                {cat.toLowerCase().includes("treat") && (
-                  <span className="ml-2 text-[11px] px-2 py-0.5 rounded bg-amber-600/30 text-amber-300 align-middle">
-                    chemical
-                  </span>
-                )}
-              </span>
-              <span className="text-sm text-gray-400">
-                {openCat === cat ? "Hide" : "Show"}
-              </span>
-            </button>
-
-            {openCat === cat && (
-              <div className="relative z-10 px-3 pb-3 bg-neutral-950/40">
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 w-full">
-                  {list.map((svc) => {
-                    const { duration, price } = getEffectivePD(svc);
-                    const selected = selectedServices.some(
-                      (x) => x.id === svc.id
-                    );
-                    const dLabel = selectedProvider
-                      ? minsToLabel(duration)
-                      : "—";
-                    const pLabel =
-                      selectedProvider && !isTBA(price)
-                        ? money(price)
-                        : "TBA";
-                    return (
-                      <button
-                        key={svc.id}
-                        onClick={() => toggleService(svc)}
-                        className={`text-left rounded-xl border px-4 py-3 hover:bg-neutral-800/60 transition w-full ${
-                          selected
-                            ? "border-amber-500 bg-neutral-800/70"
-                            : "border-neutral-800 bg-neutral-900/40"
-                        }`}
-                      >
-                        <div className="min-w-0">
-                          <p className="font-medium break-words">
-                            {svc.name}
-                            {isChemicalService(svc) && (
-                              <span className="ml-2 text-[11px] px-2 py-0.5 rounded bg-amber-600/30 text-amber-300">
-                                chemical
-                              </span>
-                            )}
-                          </p>
-                          <p className="text-xs text-gray-400">
-                            {dLabel} • {pLabel}
-                          </p>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    );
-  };
-
-  // CART SECTION
-  const CartSection = () => {
-    if (!selectedServices.length) return null;
-
-    return (
-      <section className="w-full min-w-0 bg-neutral-900/90 rounded-2xl shadow p-5 border-2 border-amber-600/40">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xl font-semibold text-white">Your services</h3>
-        </div>
-
-        {!selectedProvider && (
-          <p className="mb-3 text-xs text-amber-300">
-            Select a stylist to see exact time and price.
-          </p>
-        )}
-
-        <ul className="space-y-3">
-          {selectedServices.map((svc) => {
-            const { duration, price } = getEffectivePD(svc);
-            const dLabel = selectedProvider ? minsToLabel(duration) : "—";
-            const pLabel =
-              selectedProvider && !isTBA(price) ? money(price) : "TBA";
-            return (
-              <li
-                key={svc.id}
-                className="flex items-start justify-between gap-3 bg-neutral-800/70 rounded-xl px-4 py-3"
-              >
-                <div className="min-w-0">
-                  <p className="text-base font-medium text-white break-words">
-                    {svc.name}
-                    {isChemicalService(svc) && (
-                      <span className="ml-2 text-xs px-2 py-0.5 rounded bg-amber-600/30 text-amber-300">
-                        chemical
-                      </span>
-                    )}
-                  </p>
-                  <p className="text-sm text-gray-300">
-                    {dLabel} {pLabel !== "TBA" ? "• " + pLabel : "• TBA"}
-                  </p>
-                </div>
-                <button
-                  aria-label={`Remove ${svc.name}`}
-                  className="text-white/80 hover:text-white text-lg leading-none shrink-0"
-                  onClick={() => toggleService(svc)}
-                  title="Remove"
-                >
-                  Remove
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-
-        {hasChemical && selectedProvider && (
-          <div className="mt-3 text-sm text-amber-300">
-            Processing time for chemical treatments applied.
-          </div>
-        )}
-
-        <div className="mt-5 border-t border-neutral-700 pt-4">
-          <div className="flex items-center justify-between text-base">
-            <span className="text-gray-300 whitespace-nowrap">Total time</span>
-            <span className="text-white font-medium text-right">
-              {selectedProvider ? minsToLabel(sumActiveDuration) : "—"}
-            </span>
-          </div>
-          <div className="flex items-center justify-between text-lg mt-2">
-            <span className="text-gray-300 whitespace-nowrap">Total price</span>
-            <span className="text-white font-semibold text-right">
-              {hasUnknownPrice ? "TBA" : money(sumPrice)}
-            </span>
-          </div>
-        </div>
-
-        {hasUnknownPrice && (
-          <p className="mt-3 text-xs text-gray-400">
-            Please select a stylist for price.
-          </p>
-        )}
-      </section>
-    );
-  };
+  // ----- Selection summary chip bar -----
+  const startDateTime = useMemo(() => {
+    if (!selectedDate || !selectedTime) return null;
+    const d = new Date(selectedDate);
+    d.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
+    return d;
+  }, [selectedDate, selectedTime]);
 
   function SelectionSummary({ provider, start, onClear }) {
-  if (!provider && !start) return null;
+    if (!provider && !start) return null;
 
-  const dateStr = start
-    ? start.toLocaleDateString(undefined, {
-        weekday: "short",
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      })
-    : null;
+    const dateStr = start
+      ? start.toLocaleDateString(undefined, {
+          weekday: "short",
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        })
+      : null;
 
-  const timeStr = start
-    ? start.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
-    : null;
+    const timeStr = start
+      ? start.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+      : null;
+  }
+
+  // ----- Cart (right column / mobile card) -----
+// --- replace the whole CartSection in PublicBookingPage.jsx with this ---
+const CartSection = () => {
+  if (!selectedServices.length) return null;
 
   return (
-    <div className="sticky z-20 top-[72px] md:top-[84px] bg-neutral-900/95 backdrop-blur border-b border-neutral-800">
-      <div className="max-w-6xl mx-auto px-4 py-2 flex flex-wrap items-center gap-2">
-        <span className="text-xs uppercase tracking-wide text-gray-400">Selected:</span>
-
-        {provider && (
-          <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded-full border border-neutral-700 bg-amber-600/40">
-            <span className="opacity-70">Stylist</span>
-            <span className="font-medium">{provider.name || provider.title || "—"}</span>
-          </span>
-        )}
-
-        {start && (
-          <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded-full border border-neutral-700 bg-neutral-800/70">
-            <span className="opacity-70">When</span>
-            <span className="font-medium">{dateStr} • {timeStr}</span>
-          </span>
-        )}
-
-        <button
-          type="button"
-          onClick={onClear}
-          className="ml-auto text-xs px-3 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700"
-          title="Clear selection"
-        >
-          Clear
-        </button>
+    <section className="w-full min-w-0 bg-neutral-900/90 rounded-2xl shadow p-5 border-2 border-amber-600/40">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xl font-semibold text-white">Your services</h3>
       </div>
-    </div>
+
+      {/* NEW: selected stylist chip */}
+      {selectedProvider && (
+        <div className="mb-4">
+          <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded-full border border-neutral-700 bg-amber-600/30 text-amber-100">
+            <span className="opacity-80">Stylist</span>
+            <span className="font-semibold">
+              {selectedProvider.name || selectedProvider.title || "—"}
+            </span>
+          </span>
+        </div>
+      )}
+
+      {!selectedProvider && (
+        <p className="mb-3 text-xs text-amber-300">
+          Select a stylist to see exact time and price.
+        </p>
+      )}
+
+      <ul className="space-y-3">
+        {selectedServices.map((svc) => {
+          const { duration, price } =
+            typeof getEffectivePD === "function"
+              ? getEffectivePD(svc)
+              : { duration: null, price: null };
+
+          const dLabel = selectedProvider ? minsToLabel(duration) : "—";
+          const pLabel = selectedProvider && !(price == null || price === "" || Number(price) === 0 || Number.isNaN(Number(price)))
+            ? money(price)
+            : "TBA";
+
+          return (
+            <li
+              key={svc.id}
+              className="flex items-start justify-between gap-3 bg-neutral-800/70 rounded-xl px-4 py-3"
+            >
+              <div className="min-w-0">
+                <p className="text-base font-medium text-white break-words">
+                  {svc.name}
+                  {svc.is_chemical && (
+                    <span className="ml-2 text-xs px-2 py-0.5 rounded bg-amber-600/30 text-amber-300">
+                      chemical
+                    </span>
+                  )}
+                </p>
+                <p className="text-sm text-gray-300">
+                  {dLabel} {pLabel !== "TBA" ? "• " + pLabel : "• TBA"}
+                </p>
+              </div>
+              <button
+                aria-label={`Remove ${svc.name}`}
+                className="text-white/80 hover:text-white text-lg leading-none shrink-0"
+                onClick={() => toggleService(svc)}
+                title="Remove"
+              >
+                Remove
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+
+      {hasChemical && selectedProvider && (
+        <div className="mt-3 text-sm text-amber-300">
+          Processing time for chemical treatments applied.
+        </div>
+      )}
+
+      <div className="mt-5 border-t border-neutral-700 pt-4">
+        <div className="flex items-center justify-between text-base">
+          <span className="text-gray-300 whitespace-nowrap">Total time</span>
+          <span className="text-white font-medium text-right">
+            {selectedProvider ? minsToLabel(sumActiveDuration) : "—"}
+          </span>
+        </div>
+        <div className="flex items-center justify-between text-lg mt-2">
+          <span className="text-gray-300 whitespace-nowrap">Total price</span>
+          <span className="text-white font-semibold text-right">
+            {hasUnknownPrice ? "TBA" : money(sumPrice)}
+          </span>
+        </div>
+      </div>
+
+      {hasUnknownPrice && (
+        <p className="mt-3 text-xs text-gray-400">Please select a stylist for price.</p>
+      )}
+    </section>
   );
-}
-
-const startDateTime = useMemo(() => {
-  if (!selectedDate || !selectedTime) return null;
-  const d = new Date(selectedDate);
-  d.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
-  return d;
-}, [selectedDate, selectedTime]);
-
+};
 
   return (
     <div className="min-h-screen bg-black text-white text-[15px]">
       {header}
 
-
-<SelectionSummary
-  provider={selectedProvider}
-  start={startDateTime}
-  onClear={() => {
-    setSelectedTime(null);
-    setSelectedDate(null);
-    setSelectedProvider(null);
-  }}
-/>
-
+      <SelectionSummary
+        provider={selectedProvider}
+        start={startDateTime}
+        onClear={() => {
+          setSelectedTime(null);
+          setSelectedDate(null);
+          setSelectedProvider(null);
+        }}
+      />
 
       {/* Brand-themed toast */}
       {toast && (
@@ -966,7 +633,7 @@ const startDateTime = useMemo(() => {
                 </div>
                 <button
                   className="shrink-0 text-white/90 hover:text-white text-2xl sm:text-3xl ml-2"
-                  onClick={() => setToast(null)}
+                  onClick={hideToast}
                   aria-label="Dismiss"
                   title="Dismiss"
                 >
@@ -999,17 +666,22 @@ const startDateTime = useMemo(() => {
         <main className="space-y-6">
           {step === 1 && (
             <section className="bg-neutral-900/80 rounded-2xl shadow p-5 border border-neutral-800">
-              <h2 className="font-semibold mb-4 text-xl text-white">
-                Select services
-              </h2>
-              <AccordionServices />
+              <h2 className="font-semibold mb-4 text-xl text-white">Select services</h2>
+
+              {/* Modular service list (grouped, override-aware) */}
+              <ServiceList
+                services={services}
+                selectedService={lastPickedService}
+                onSelect={toggleService}
+                selectedProvider={selectedProvider}
+                staffServiceOverrides={providerOverrides}
+              />
+
               <div className="mt-5 flex items-center justify-between">
                 <span className="text-sm text-gray-300">
                   {selectedServices.length > 0
                     ? selectedProvider
-                      ? `${minsToLabel(sumActiveDuration)} • ${
-                          hasUnknownPrice ? "TBA" : money(sumPrice)
-                        }`
+                      ? `${minsToLabel(sumActiveDuration)} • ${hasUnknownPrice ? "TBA" : money(sumPrice)}`
                       : "Pick a stylist to see time & price"
                     : "Choose one or more services"}
                 </span>
@@ -1023,13 +695,12 @@ const startDateTime = useMemo(() => {
                   </button>
                 </div>
               </div>
-              {(hasUnknownPrice || !selectedProvider) &&
-                selectedServices.length > 0 && (
-                  <p className="mt-2 text-xs text-gray-400">
-                    Prices for TBA services will be discussed during the
-                    appointment.
-                  </p>
-                )}
+
+              {(hasUnknownPrice || !selectedProvider) && selectedServices.length > 0 && (
+                <p className="mt-2 text-xs text-gray-400">
+                  Prices for TBA services will be discussed during the appointment.
+                </p>
+              )}
             </section>
           )}
 

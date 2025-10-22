@@ -49,87 +49,61 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
   const isValidEmail = (s) =>
     !s || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s).trim());
 
-  const getCurrentStaffIdentity = async () => {
-    try {
-      const { data: { user } = {} } = await supabase.auth.getUser();
-      if (!user) {
-        return { staffId: null, authId: null, name: staffName || "Stylist", email: null, permission: null };
-      }
+// in ClientNotesModal (getCurrentStaffIdentity)
+const getCurrentStaffIdentity = async () => {
+  try {
+    const { data: { user } = {} } = await supabase.auth.getUser();
+    if (!user) {
+      return { staffId: null, authId: null, name: "Stylist", email: null, permission: null };
+    }
 
-      const byUid = await supabase
+    if (user.email) {
+      const { data } = await supabase
         .from("staff")
         .select("id, name, email, permission")
-        .eq("uid", user.id)
+        .eq("email", user.email)
         .maybeSingle();
 
-      if (byUid?.data) {
-        const r = byUid.data;
+      if (data) {
         return {
-          staffId: r.id || null,
+          staffId: data.id || null,
           authId: user.id,
-          name: r.name || r.email || (user.email ? user.email.split("@")[0] : "Stylist"),
-          email: r.email || user.email || null,
-          permission: r.permission || null,
+          name: data.name || data.email || (user.email ? user.email.split("@")[0] : "Stylist"),
+          email: data.email || user.email || null,
+          permission: data.permission || null,
         };
       }
-
-      if (user.email) {
-        const byEmail = await supabase
-          .from("staff")
-          .select("id, name, email, permission")
-          .eq("email", user.email)
-          .maybeSingle();
-
-        if (byEmail?.data) {
-          const r = byEmail.data;
-          return {
-            staffId: r.id || null,
-            authId: user.id,
-            name: r.name || r.email || (user.email ? user.email.split("@")[0] : "Stylist"),
-            email: r.email || user.email || null,
-            permission: r.permission || null,
-          };
-        }
-      }
-
-      return {
-        staffId: null,
-        authId: user.id,
-        name: user.user_metadata?.name || (user.email ? user.email.split("@")[0] : "Stylist"),
-        email: user.email || null,
-        permission: null,
-      };
-    } catch {
-      return { staffId: null, authId: null, name: staffName || "Stylist", email: null, permission: null };
     }
-  };
+
+    return {
+      staffId: null,
+      authId: user.id,
+      name: user.user_metadata?.name || (user.email ? user.email.split("@")[0] : "Stylist"),
+      email: user.email || null,
+      permission: null,
+    };
+  } catch {
+    return { staffId: null, authId: null, name: "Stylist", email: null, permission: null };
+  }
+};
+
 
   const resolveCurrentStaffName = async () => {
     const who = await getCurrentStaffIdentity();
     return who.name || "Stylist";
   };
 
-  // Load notes; try to include booking_group_id if the column exists
-  const loadNotes = async () => {
-    // First try with booking_group_id
-    let res = await supabase
-      .from("client_notes")
-      .select("id, client_id, note_content, created_by, created_at, booking_id, booking_group_id")
-      .eq("client_id", clientId)
-      .order("created_at", { ascending: false });
+const loadNotes = async () => {
+  const res = await supabase
+    .from("client_notes")
+    .select("id, client_id, note_content, created_by, created_at, booking_id") // ⬅️ no booking_group_id
+    .eq("client_id", clientId)
+    .order("created_at", { ascending: false });
 
-    if (res.error && /column .*booking_group_id/i.test(res.error.message)) {
-      // Fallback for schemas without booking_group_id
-      res = await supabase
-        .from("client_notes")
-        .select("id, client_id, note_content, created_by, created_at, booking_id")
-        .eq("client_id", clientId)
-        .order("created_at", { ascending: false });
-    }
+  if (!res.error) setNotes(res.data || []);
+  else console.error("Error fetching notes:", res.error.message);
+};
 
-    if (!res.error) setNotes(res.data || []);
-    else console.error("Error fetching notes:", res.error.message);
-  };
 
   // -------- data loads --------
   // Client + stylist name on open
@@ -470,10 +444,8 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
 
           <div className="space-y-2 max-h=[300px] overflow-auto bg-white p-1 rounded">
             {paginatedNotes.map((note) => {
-              const meta =
-                (note.booking_id && bookingMetaByRowId[note.booking_id]) ||
-                (note.booking_group_id && bookingMetaByGroupId[note.booking_group_id]) ||
-                null;
+           const meta = note.booking_id ? bookingMetaByRowId[note.booking_id] : null;
+
 
               return (
                 <div key={note.id} className="border rounded p-2 text-sm bg-white text-gray-900">

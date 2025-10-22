@@ -6,8 +6,8 @@ import { useEffect, useMemo, useState } from "react";
  *  1) If caller passed a clients[] list, use that by exact id.
  *  2) If booking.client_id exists -> select from clients by id.
  *  3) Fallbacks for online bookings:
- *     - Try exact email (if present on booking).
- *     - Try exact mobile (if present on booking).
+ *     - Try exact email (case-insensitive).
+ *     - Try mobile (normalized digits: exact and fuzzy).
  *     - Try name match (first + last) if we can split booking.client_name.
  *
  * While loading/fallbacking, returns a "displayClient" built from booking so the UI never shows a hard error.
@@ -30,7 +30,6 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
     if (base) return base;
 
     // Fallback: synthesize from booking so the header shows *something*
-    // (These fields exist in many schemas; if some are missing they’ll be undefined, which is fine.)
     const name = booking?.client_name || "";
     let first_name = "";
     let last_name = "";
@@ -44,7 +43,8 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
       first_name,
       last_name,
       email: booking?.client_email ?? booking?.email ?? null,
-      mobile: booking?.client_mobile ?? booking?.mobile ?? booking?.phone ?? null,
+      mobile:
+        booking?.client_mobile ?? booking?.mobile ?? booking?.phone ?? null,
       dob: null,
     };
   }, [row, fromList, booking]);
@@ -69,6 +69,13 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
         setRow(fromList);
         return;
       }
+
+      const normEmail = (booking?.client_email || booking?.email || "")
+        .trim()
+        .toLowerCase();
+      const rawMobile =
+        booking?.client_mobile ?? booking?.mobile ?? booking?.phone ?? "";
+      const normDigits = String(rawMobile).replace(/[^\d+]/g, "");
 
       // If there is a client_id, fetch by id first.
       if (booking.client_id) {
@@ -98,17 +105,16 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
       }
 
       // No row yet — try fallbacks that help with online/public bookings.
-      // 1) by email
-      const email =
-        booking?.client_email ?? booking?.email ?? displayClient?.email ?? null;
-      if (email) {
+
+      // 1) by email (case-insensitive)
+      if (normEmail) {
         try {
           setLoading(true);
-          console.log("[useDisplayClient] fallback by email:", email);
+          console.log("[useDisplayClient] fallback by email:", normEmail);
           const { data, error } = await supabase
             .from("clients")
             .select("id, first_name, last_name, email, mobile, dob")
-            .eq("email", email)
+            .ilike("email", normEmail) // case-insensitive exact match
             .maybeSingle();
 
           if (!alive) return;
@@ -125,27 +131,36 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
         }
       }
 
-      // 2) by mobile / phone (exact)
-      const mobile =
-        booking?.client_mobile ??
-        booking?.mobile ??
-        booking?.phone ??
-        displayClient?.mobile ??
-        null;
-      if (mobile) {
+      // 2) by mobile / phone (normalized)
+      if (normDigits) {
         try {
           setLoading(true);
-          console.log("[useDisplayClient] fallback by mobile:", mobile);
-          const { data, error } = await supabase
+          console.log("[useDisplayClient] fallback by mobile:", normDigits);
+
+          // Try exact first
+          let q = supabase
             .from("clients")
             .select("id, first_name, last_name, email, mobile, dob")
-            .eq("mobile", mobile)
+            .eq("mobile", rawMobile)
             .maybeSingle();
 
+          let { data, error } = await q;
           if (!alive) return;
-          if (error) throw error;
-          if (data) {
+          if (!error && data) {
             setRow(data);
+            return;
+          }
+
+          // Then fuzzy (contains digits)
+          const fuzzy = await supabase
+            .from("clients")
+            .select("id, first_name, last_name, email, mobile, dob")
+            .ilike("mobile", `%${normDigits}%`)
+            .limit(1);
+
+          if (!alive) return;
+          if (!fuzzy.error && fuzzy.data && fuzzy.data[0]) {
+            setRow(fuzzy.data[0]);
             return;
           }
         } catch (e) {
@@ -189,13 +204,16 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
       }
 
       // If we’re here, we didn’t find a DB row. Not a hard error — UI will use displayClient.
-      console.log("[useDisplayClient] no DB client row found. Using booking fallback.");
+      console.log(
+        "[useDisplayClient] no DB client row found. Using booking fallback."
+      );
     })();
 
     return () => {
       alive = false;
     };
-  }, [isOpen, supabase, booking, fromList, displayClient]);
+    // NOTE: do NOT depend on `displayClient` here to avoid re-run loops.
+  }, [isOpen, supabase, booking, fromList]);
 
   return {
     client: row,

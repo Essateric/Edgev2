@@ -1,5 +1,5 @@
 // src/onlinebookings/components/CalendarSlots.jsx
-import React from "react";
+import React, { useMemo } from "react";
 import {
   monthDays,
   startOfDay,
@@ -33,22 +33,32 @@ export default function CalendarSlots({
   onPickTime,
   staffServiceOverrides = [],
 }) {
-  // All days in the current month
-  const monthDaysMemo = React.useMemo(() => monthDays(viewDate), [viewDate]);
+  // Always work with a real Date for rendering
+  const safeViewDate =
+    viewDate instanceof Date
+      ? viewDate
+      : viewDate
+      ? new Date(viewDate)
+      : new Date();
 
-  // --- NEW: compute leading blanks so the 1st lands on the correct weekday (Sunday-first header) ---
-  const leadingBlankCount = React.useMemo(() => {
+  // Days in the visible month
+  const monthDaysMemo = useMemo(
+    () => monthDays(safeViewDate),
+    [safeViewDate]
+  );
+
+  // How many blanks before the 1st (Sun-first header)
+  const leadingBlankCount = useMemo(() => {
     const firstOfMonth = new Date(
-      viewDate.getFullYear(),
-      viewDate.getMonth(),
+      safeViewDate.getFullYear(),
+      safeViewDate.getMonth(),
       1
     );
-    // Native JS: 0=Sun,1=Mon,...6=Sat. Our header is Sun..Sat, so we can use getDay() directly.
-    return firstOfMonth.getDay(); // number of empty cells before day 1
-  }, [viewDate]);
+    return firstOfMonth.getDay(); // 0..6
+  }, [safeViewDate]);
 
-  // Effective (per-stylist) figures purely for display beside each slot.
-  const { price, duration } = React.useMemo(
+  // Effective display figures for the selected service/provider
+  const { price, duration } = useMemo(
     () =>
       getEffectivePriceAndDuration(
         selectedService,
@@ -66,7 +76,7 @@ export default function CalendarSlots({
           <button
             onClick={() =>
               setViewDate((prev) => {
-                const d = new Date(prev);
+                const d = new Date(prev || safeViewDate);
                 d.setMonth(d.getMonth() - 1);
                 return d;
               })
@@ -76,7 +86,7 @@ export default function CalendarSlots({
             ←
           </button>
           <div className="text-base font-medium">
-            {new Date(viewDate).toLocaleString(undefined, {
+            {safeViewDate.toLocaleString(undefined, {
               month: "long",
               year: "numeric",
             })}
@@ -84,7 +94,7 @@ export default function CalendarSlots({
           <button
             onClick={() =>
               setViewDate((prev) => {
-                const d = new Date(prev);
+                const d = new Date(prev || safeViewDate);
                 d.setMonth(d.getMonth() + 1);
                 return d;
               })
@@ -103,7 +113,7 @@ export default function CalendarSlots({
           </div>
         ))}
 
-        {/* --- NEW: render leading blanks so the grid lines up correctly --- */}
+        {/* Leading blanks so the 1st aligns to weekday */}
         {Array.from({ length: leadingBlankCount }).map((_, i) => (
           <div key={`pad-${i}`} className="py-2 rounded-lg text-sm opacity-0">
             0
@@ -115,16 +125,18 @@ export default function CalendarSlots({
           const today = startOfDay(new Date());
           const selectable = d >= today && selectedProvider && selectedService;
           const selected =
-            selectedDate && d.toDateString() === selectedDate.toDateString();
+            selectedDate &&
+            new Date(selectedDate).toDateString() === d.toDateString();
+
           return (
             <button
               key={d.toISOString()}
               disabled={!selectable}
-              onClick={() => {
-                setSelectedDate(new Date(d));
-              }}
+              onClick={() => setSelectedDate(new Date(d))}
               className={`py-2 rounded-lg border text-sm ${
-                selected ? "border-amber-400 bg-neutral-800" : "border-neutral-700"
+                selected
+                  ? "border-amber-400 bg-neutral-800"
+                  : "border-neutral-700"
               } ${selectable ? "hover:shadow" : "opacity-30 cursor-not-allowed"}`}
             >
               {d.getDate()}
@@ -142,13 +154,15 @@ export default function CalendarSlots({
           <div className="flex flex-wrap gap-2">
             {availableSlots.length ? (
               availableSlots.map((t) => {
+                const tDate = t instanceof Date ? t : new Date(t);
                 const active =
-                  selectedTime && t.getTime() === selectedTime.getTime();
+                  selectedTime && tDate.getTime() === new Date(selectedTime).getTime();
+
                 return (
                   <button
-                    key={t.toISOString()}
+                    key={tDate.toISOString()}
                     onClick={() => {
-                      setSelectedTime(new Date(t));
+                      setSelectedTime(new Date(tDate));
                       onPickTime?.();
                     }}
                     className={`px-3 py-2 rounded-lg border text-sm ${
@@ -157,7 +171,7 @@ export default function CalendarSlots({
                         : "border-neutral-700 hover:shadow"
                     }`}
                   >
-                    {fmtTime(t)}{" "}
+                    {fmtTime(tDate)}{" "}
                     <span className="text-gray-400">
                       (
                       {(Number(duration) || 0) > 0 ? `${duration}m` : "—"} •{" "}
@@ -168,9 +182,7 @@ export default function CalendarSlots({
                 );
               })
             ) : (
-              <p className="text-base text-gray-300">
-                No free slots for this day.
-              </p>
+              <p className="text-base text-gray-300">No free slots for this day.</p>
             )}
           </div>
         )}

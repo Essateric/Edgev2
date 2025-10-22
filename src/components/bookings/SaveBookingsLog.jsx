@@ -1,6 +1,5 @@
+// src/components/bookings/SaveBookingsLog.jsx
 import { supabase } from "../../supabaseClient.js";
-
-// ...imports unchanged...
 
 export default async function SaveBookingsLog({
   action,
@@ -12,13 +11,12 @@ export default async function SaveBookingsLog({
   service,
   start,
   end,
-  logged_by,          // pass staff UUID if available
+  logged_by,                 // pass staff UUID if available
   reason,
-  skipStaffLookup = false, // <-- NEW: let callers disable staff table lookups
+  skipStaffLookup = false,   // public site should pass true
 }) {
   try {
     const { name: service_name, category, price, duration } = service || {};
-
     const snapshot = {
       service_name,
       category,
@@ -40,34 +38,27 @@ export default async function SaveBookingsLog({
       staffLogger = null;
     }
 
-    // ⛔ Skip staff lookups when requested (public site)
+    // If we are allowed to try resolving a staff logger, do it WITHOUT the UID column.
     if (!skipStaffLookup && !staffLogger) {
       const { data: { user } = {} } = await supabase.auth.getUser();
 
-      if (user?.id) {
-        // ✅ FIX: don't quote the column name; use plain 'UID'
-        const byUid = await supabase
-          .from("staff")
-          .select("id")
-          .eq("UID", user.id)
-          .maybeSingle();
-
-        if (!byUid.error && byUid.data?.id) {
-          staffLogger = byUid.data.id;
-        } else if (user.email) {
-          const byEmail = await supabase
+      if (user) {
+        // 1) Try by staff.email if we have a user email
+        if (user.email) {
+          const { data: byEmail, error: emailErr } = await supabase
             .from("staff")
             .select("id")
             .eq("email", user.email)
             .maybeSingle();
 
-          if (!byEmail.error && byEmail.data?.id) {
-            staffLogger = byEmail.data.id;
+          if (!emailErr && byEmail?.id) {
+            staffLogger = byEmail.id;
           } else {
-            // last resort: auth UID itself
+            // 2) Fall back to storing the auth user.id (no extra select)
             staffLogger = user.id;
           }
         } else {
+          // No email? just use the auth user.id
           staffLogger = user.id;
         }
       }

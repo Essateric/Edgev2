@@ -31,33 +31,32 @@ export default function ManageClients() {
   const debouncedSearch = useDebouncedValue(search, 300);
 
   // figure out if current user is an admin (based on staff.permission)
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const { data } = await supabase.auth.getUser();
-        const uid = data?.user?.id;
-        if (!uid) {
-          if (mounted) setIsAdmin(false);
-          return;
-        }
-        const { data: staffRow } = await supabase
-          .from("staff")
-          .select("permission,uid")
-          .eq("uid", uid)
-          .maybeSingle();
-
-        const ok =
-          staffRow && ["admin", "owner", "manager"].includes(staffRow.permission);
-        if (mounted) setIsAdmin(!!ok);
-      } catch {
+useEffect(() => {
+  let mounted = true;
+  (async () => {
+    try {
+      const { data } = await supabase.auth.getUser();
+      const email = data?.user?.email;
+      if (!email) {
         if (mounted) setIsAdmin(false);
+        return;
       }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+      const { data: staffRow, error } = await supabase
+        .from("staff")
+        .select("permission")
+        .eq("email", email)
+        .maybeSingle();
+
+      const ok =
+        !error && staffRow && ["admin", "owner", "manager"].includes(staffRow.permission);
+      if (mounted) setIsAdmin(!!ok);
+    } catch {
+      if (mounted) setIsAdmin(false);
+    }
+  })();
+  return () => { mounted = false; };
+}, []);
+
 
   const fetchClients = useCallback(async () => {
     setLoading(true);

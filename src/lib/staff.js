@@ -1,18 +1,16 @@
 // src/lib/staff.js
 export async function fetchStaffForCurrentUser(supabase) {
   try {
-    const { data: authData, error: uErr } = await supabase.auth.getUser();
-    if (uErr) return null;
+    const { data: authData } = await supabase.auth.getUser();
     const user = authData?.user;
     if (!user?.email) return null;
 
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("staff")
-      .select("id, name, email, permission, title, role")
+      .select("id, name, email, permission")
       .eq("email", user.email)
       .maybeSingle();
 
-    if (error) return null;
     return data || null;
   } catch {
     return null;

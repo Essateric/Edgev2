@@ -1,5 +1,4 @@
 // src/components/bookings/BookingPopUp.jsx
-import { useEffect, useMemo, useState } from "react";
 import Modal from "../Modal";
 import Button from "../Button";
 import { format } from "date-fns";
@@ -23,8 +22,23 @@ import { fetchStaffForCurrentUser } from "../../lib/staff";
 import useRelatedBookings from "../hooks/useRelatedBookings";
 import { useDisplayClient } from "../hooks/useDisplayClient";
 import { useClientNotes } from "../hooks/useClientNotes";
+import { useEffect, useMemo, useState } from "react";
 
-export default function BookingPopUp({
+/** ------------------------------------------------------------------------
+ *  Thin wrapper: no hooks here. Only mounts the hook-heavy Body
+ *  when the popup should actually be visible.
+ *  ----------------------------------------------------------------------*/
+export default function BookingPopUp(props) {
+  const { isOpen, booking } = props;
+  if (!isOpen || !booking) return null;
+  return <BookingPopUpBody {...props} />;
+}
+
+/** ------------------------------------------------------------------------
+ *  The real popup (all hooks live here). Hook order is stable because
+ *  we declare ALL hooks before any early return.
+ *  ----------------------------------------------------------------------*/
+function BookingPopUpBody({
   isOpen,
   booking,
   onClose,
@@ -33,7 +47,6 @@ export default function BookingPopUp({
   stylistList = [],
   clients = [],
 }) {
-  
   const [showActions, setShowActions] = useState(false);
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [isEditingDob, setIsEditingDob] = useState(false);
@@ -76,7 +89,7 @@ export default function BookingPopUp({
   const groupRowIds = (relatedBookings || []).map((r) => r.id);
   const { notes, loading: notesLoading, setNotes } = useClientNotes({
     isOpen,
-    clientId: displayClient.id,
+    clientId: displayClient?.id, // safe on first render
     groupRowIds,
     supabase: supabaseClient,
   });
@@ -94,8 +107,33 @@ export default function BookingPopUp({
     }
   }, [displayClient, setDobInput]);
 
-  /* ---------- Render guards ---------- */
-  if (!isOpen || !booking) return null;
+  /* ---------- Derived state (hooks first, then any early returns) ---------- */
+
+  const serviceTotal = useMemo(
+    () =>
+      (displayServices || []).reduce(
+        (sum, s) => sum + (Number.isFinite(+s.price) ? +s.price : 0),
+        0
+      ),
+    [displayServices]
+  );
+
+  const clientName =
+    `${displayClient?.first_name ?? ""} ${displayClient?.last_name ?? ""}`.trim() ||
+    "Client";
+  const clientPhone = displayClient?.mobile || "N/A";
+  const displayDob = dobInput
+    ? format(new Date(`${dobInput}T00:00:00`), "do MMM")
+    : "DOB not set";
+
+  const stylist = stylistList.find((s) => s.id === booking.resource_id);
+
+  const isOnline =
+    booking?.source === "public" ||
+    (Array.isArray(relatedBookings) &&
+      relatedBookings.some((r) => r.source === "public"));
+
+  /* ---------- Render guards (AFTER hooks are declared) ---------- */
 
   if (!displayClient && clientLoading) {
     return (
@@ -120,31 +158,6 @@ export default function BookingPopUp({
       </Modal>
     );
   }
-
-  /* ---------- Derived UI state ---------- */
-  const clientName =
-    `${displayClient.first_name ?? ""} ${displayClient.last_name ?? ""}`.trim() ||
-    "Client";
-  const clientPhone = displayClient.mobile || "N/A";
-  const displayDob = dobInput
-    ? format(new Date(`${dobInput}T00:00:00`), "do MMM")
-    : "DOB not set";
-
-  const serviceTotal = useMemo(
-    () =>
-      (displayServices || []).reduce(
-        (sum, s) => sum + (Number.isFinite(+s.price) ? +s.price : 0),
-        0
-      ),
-    [displayServices]
-  );
-
-  const stylist = stylistList.find((s) => s.id === booking.resource_id);
-
-  const isOnline =
-    booking?.source === "public" ||
-    (Array.isArray(relatedBookings) &&
-      relatedBookings.some((r) => r.source === "public"));
 
   /* ---------- Actions ---------- */
   const handleCancelBooking = async () => {
@@ -492,7 +505,7 @@ export default function BookingPopUp({
       {/* NOTES MODAL */}
       {showNotesModal && (
         <ClientNotesModal
-          clientId={displayClient.id}
+          clientId={displayClient?.id || booking?.client_id || null}
           bookingId={booking?.id}
           isOpen={showNotesModal}
           onClose={() => setShowNotesModal(false)}
