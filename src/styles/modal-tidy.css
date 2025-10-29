@@ -1,0 +1,172 @@
+/* modal-tidy.css */
+
+:root {
+  --modal-max-w: 1100px;
+  --modal-pad: 20px;
+  --modal-gap: 16px;
+  --radius-xl: 14px;
+
+  --fg: #1c1c1c;
+  --muted: #6b6b6b;
+  --border: #e6e6e6;
+  --row: #f7f4f1;      /* your warm brown-ish row tone */
+  --row-edge: #9a6a36; /* darker header strip */
+}
+
+.modal-panel {
+  width: min(var(--modal-max-w), 94vw);
+  max-height: min(82vh, 1000px);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background: #fff;
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  box-shadow: 0 20px 20px rgba(0,0,0,.32);
+  margin-top: 500px;
+}
+
+.modal-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--modal-gap);
+  padding: clamp(16px, 2vw, 24px);
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-title {
+  font-weight: 700;
+  color: var(--fg);
+  font-size: clamp(58px, 3.2vw, 64px);
+  line-height: 1.2;
+}
+
+.modal-subtle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: clamp(32px, 2.6vw, 24px);
+}
+
+.modal-panel__body {
+  padding: clamp(16px, 2vw, 24px);
+  overflow: auto;
+}
+
+/* Services “table” */
+.services {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.services__head {
+  background: linear-gradient(0deg, var(--row) 0%, var(--row) 100%);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: 80px 1fr 110px;
+  gap: 10px;
+  color: #3b2a17;
+  font-weight: 600;
+  font-size: clamp(23px, 2.6vw, 24px);
+}
+
+.services__row {
+  display: grid;
+  grid-template-columns: 80px 1fr 110px;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: clamp(24px, 2.9vw, 26px);
+}
+.services__row:last-child { border-bottom: 0; }
+
+.services__total {
+  display: grid;
+  grid-template-columns: 80px 1fr 110px;
+  gap: 10px;
+  padding: 12px 14px;
+  border-top: 2px solid var(--border);
+  font-weight: 700;
+}
+
+/* Action row */
+.modal-panel__actions {
+  padding: clamp(14px, 2vw, 18px);
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Buttons baseline */
+.btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: clamp(8px, 1.2vw, 12px) clamp(12px, 1.8vw, 16px);
+  font-size: clamp(23px, 2.8vw, 25px);
+  font-weight: 600;
+  line-height: 1.1;
+  cursor: pointer;
+  transition: transform .04s ease, box-shadow .12s ease, background-color .12s ease;
+  white-space: nowrap;
+}
+.btn:active { transform: translateY(1px); }
+
+/* Color variants (adjust to your palette) */
+.btn--primary  { background:#8a5a22; color:#fff; }
+.btn--primary:hover { background:#7c511f; }
+
+.btn--ok       { background:#22a06b; color:#fff; }
+.btn--ok:hover { background:#1d8c5e; }
+
+.btn--muted    { background:#eef1f4; color:#28303a; border-color:#dde2e8; }
+.btn--muted:hover { background:#e6eaee; }
+
+.btn--warn     { background:#ff8a00; color:#1f1405; }
+.btn--warn:hover { background:#f07f00; }
+
+.btn--ghost    { background:transparent; border-color:var(--border); color:#333; }
+.btn--ghost:hover { background:#f6f6f6; }
+
+/* Make important buttons grow to fill extra space nicely on wide dialogs */
+.modal-panel__actions .btn--grow { flex: 1 1 180px; }
+
+@media (max-width: 720px) {
+  .services__head,
+  .services__row,
+  .services__total {
+    grid-template-columns: 70px 1fr 90px;
+  }
+}
+
+/* === Modal visibility hard-override === */
+/* Make sure the modal overlay and panel sit above the calendar/grid */
+.modal-overlay,
+.modal-backdrop,
+.modal-root,
+.modal-large,
+.modal-content {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 9999 !important; /* higher than your calendar cells */
+}
+
+/* If ModalLarge uses an inner content wrapper, boost it too */
+.modal-panel {
+  z-index: 100000 !important;
+  max-width: min(1100px, 92vw);
+  margin: 4vh auto;
+}
+
+/* Safety: any third-party calendar layers */
+.fc,
+.fc .fc-scroller,
+.fc .fc-view-harness,
+.fc .fc-view-harness-active {
+  z-index: auto !important;
+}
