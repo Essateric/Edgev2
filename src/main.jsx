@@ -1,5 +1,9 @@
 // main.jsx or index.jsx
 
+console.log('ENV URL =', import.meta.env.VITE_SUPABASE_URL);
+console.log('ENV KEY =', Boolean(import.meta.env.VITE_SUPABASE_ANON_KEY) ? 'HAS_KEY' : 'MISSING');
+initAuthAudit()
+
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.jsx";

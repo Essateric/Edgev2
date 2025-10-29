@@ -1,23 +1,31 @@
-// src/auth/initAuthAudit.ts
+// src/auth/initAuthAudit.js
 import { supabase } from "../supabaseClient";
+import { logAuditIfAuthed } from "../lib/audit";
 
 export function initAuthAudit() {
   supabase.auth.onAuthStateChange(async (event, session) => {
-    // SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED, USER_UPDATED, PASSWORD_RECOVERY, etc.
+    // Avoid synthetic initial event
+    if (event === "INITIAL_SESSION") return;
+
     try {
-      const user = session?.user || null; // Note: for SIGNED_OUT, this is null
-      await supabase.from("audit_events").insert([{
+      const user = session?.user || null;
+
+      // On SIGNED_OUT there is no session/JWT, so skip here.
+      // We'll log sign-out proactively inside logout() before signOut().
+      if (event === "SIGNED_OUT") return;
+
+      await logAuditIfAuthed({
         entity_type: "auth",
         entity_id: user?.id ?? null,
-        action: event.toLowerCase(),       // "signed_in" | "signed_out" | ...
+        action: String(event || "").toLowerCase(),
         source: "auth",
         details: {
           email: user?.email ?? null,
           ua: typeof navigator !== "undefined" ? navigator.userAgent : null,
         },
-      }]);
-    } catch (_) {
-      // best-effort; don't block UX
+      });
+    } catch {
+      /* no-op */
     }
   });
 }

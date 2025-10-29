@@ -3,6 +3,7 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 import bcrypt from "bcryptjs";
 import { supabase } from "../supabaseClient";
 import { getStaffPins, cacheStaffPins } from "../utils/PinCache.jsx";
+import { logAuditIfAuthed } from "../lib/audit";
 
 const AuthContext = createContext();
 export const useAuth = () => useContext(AuthContext);
@@ -185,11 +186,24 @@ if (error) throw error;
   };
 
   const logout = async () => {
-    setCurrentUser(null);
-    localStorage.removeItem("offlineUser");
-    localStorage.removeItem("currentUser");
-    await supabase.auth.signOut();
-  };
+ try {
+     // Log while we still have a session/JWT
+     await logAuditIfAuthed({
+       entity_type: "auth",
+       entity_id: currentUser?.id ?? null,
+       action: "signed_out",
+       source: "auth",
+       details: {
+         email: currentUser?.email ?? null,
+         ua: typeof navigator !== "undefined" ? navigator.userAgent : null,
+       },
+     });
+   } finally {
+     setCurrentUser(null);
+     localStorage.removeItem("offlineUser");
+     localStorage.removeItem("currentUser");
+     await supabase.auth.signOut();
+   }};
 
   return (
     <AuthContext.Provider

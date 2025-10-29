@@ -2,7 +2,17 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
-export default defineConfig({
+const DEV_CSP =
+  "default-src 'self'; " +
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'; " +
+  "connect-src 'self' http://localhost:* ws://localhost:* https://vmtcofezozrblfxudauk.supabase.co https://vmtcofezozrblfxudauk.functions.supabase.co; " +
+  "img-src 'self' data: blob: https:; " +
+  "style-src 'self' 'unsafe-inline'; " +
+  "font-src 'self' data:; " +
+  "worker-src 'self' blob:; " +
+  "frame-src https://vmtcofezozrblfxudauk.supabase.co;";
+
+export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     VitePWA({
@@ -24,16 +34,8 @@ export default defineConfig({
         theme_color: "#cd7f32",
         orientation: "portrait",
         icons: [
-          {
-            src: "/essateric_white_192.png",
-            sizes: "192x192",
-            type: "image/png",
-          },
-          {
-            src: "/essateric_white_512.png",
-            sizes: "512x512",
-            type: "image/png",
-          },
+          { src: "/essateric_white_192.png", sizes: "192x192", type: "image/png" },
+          { src: "/essateric_white_512.png", sizes: "512x512", type: "image/png" },
         ],
       },
       workbox: {
@@ -44,14 +46,20 @@ export default defineConfig({
             handler: "CacheFirst",
             options: {
               cacheName: "asset-cache",
-              expiration: {
-                maxEntries: 100,
-                maxAgeSeconds: 60 * 60 * 24 * 30, // 30 Days
-              },
+              expiration: { maxEntries: 100, maxAgeSeconds: 60 * 60 * 24 * 30 },
             },
           },
         ],
       },
     }),
   ],
-});
+
+  // --- DEV-ONLY server settings ---
+  server: {
+    // These headers fix your CSP during development
+    headers: mode === "development" ? { "Content-Security-Policy": DEV_CSP } : {},
+    // When running `netlify dev`, the page is on 8888 but HMR still runs on 5173.
+    // Telling the client to connect back through 8888 avoids blocked WS in some setups.
+    hmr: { clientPort: 8888 },
+  },
+}));
