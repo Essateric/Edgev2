@@ -19,7 +19,20 @@ import PageLoader from "./components/PageLoader.jsx";
 
 function App() {
   const { currentUser, pageLoading, authLoading } = useAuth();
-  if (pageLoading || authLoading) return <PageLoader />;
+  console.log("[APPDBG]", { pageLoading, authLoading, currentUser });
+ if (pageLoading || (authLoading && currentUser))  {
+   return (
+     <div className="p-6">
+       <PageLoader />
+       <pre className="mt-4 p-3 bg-gray-100 text-xs rounded">
+         {JSON.stringify({ pageLoading, authLoading, hasUser: !!currentUser }, null, 2)}
+       </pre>
+     </div>
+   );
+ }
+
+  
+
 
   return (
     <>
@@ -44,6 +57,9 @@ function App() {
             <Route element={<StaffLayout />}>
               <Route path="/" element={<CalendarPage />} />
               <Route path="/dashboard" element={<Dashboard />} />
+
+<Route path="/calendar" element={<CalendarPage />} />
+
 
               <Route
                 path="/manage-clients"

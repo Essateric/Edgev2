@@ -1,55 +1,75 @@
-import React, { useEffect, useState } from 'react';
-import { Delete, Check } from 'lucide-react';
+import React, { useEffect, useState } from "react";
+import { Delete, Check } from "lucide-react";
 
-
-export default function PinPad({ value = '', onChange, onEnter, disabled = false }) {
+/**
+ * Props
+ * - value: string (PIN value)
+ * - onChange: (next: string) => void
+ * - onEnter: () => void
+ * - disabled: boolean           // disables digits/clear/delete
+ * - enterDisabled: boolean      // disables ENTER only (separate gate)
+ */
+export default function PinPad({
+  value = "",
+  onChange,
+  onEnter,
+  disabled = false,
+  enterDisabled = false,
+}) {
   const [isShaking, setIsShaking] = useState(false);
 
   const handleNumberClick = (number) => {
     if (disabled) return;
-    if (value.length < 6) {
-      onChange(value + number);
-    }
+    if (value.length < 6) onChange(value + number);
   };
 
   const handleClear = () => {
-    if (!disabled) onChange('');
+    if (!disabled) onChange("");
   };
 
   const handleDelete = () => {
     if (!disabled) onChange(value.slice(0, -1));
   };
 
-  const handleEnter = () => {
-  if (disabled) return;
-  if (!disabled && value.length === 4) {
-    onEnter?.();
-  } else {
-    setIsShaking(true);
-    setTimeout(() => setIsShaking(false), 500); // Stop shaking after 500ms
-  }
-};
+  const doEnter = () => {
+    if (enterDisabled) return;
+    if (value.length === 4) {
+      console.log("[PINPAD] ENTER pressed, calling onEnter()");
+      onEnter?.();
+    } else {
+      setIsShaking(true);
+      setTimeout(() => setIsShaking(false), 500);
+    }
+  };
 
   // Keyboard Support
   useEffect(() => {
-    if (disabled) return;
+    // if both interactions are fully disabled, skip listener
+    if (disabled && enterDisabled) return;
+
     const handleKeyDown = (e) => {
-      if (e.key >= '0' && e.key <= '9' && value.length < 6) {
+      // digits
+      if (!disabled && e.key >= "0" && e.key <= "9" && value.length < 6) {
         onChange(value + e.key);
       }
-      if (e.key === 'Enter') {
-        handleEnter();
+      // enter
+      if (e.key === "Enter") {
+        doEnter();
       }
-      if (e.key === 'Backspace') {
+      // backspace
+      if (!disabled && e.key === "Backspace") {
         handleDelete();
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [value, disabled]);
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // dependencies include enterDisabled so ENTER state reacts immediately
+  }, [value, disabled, enterDisabled, onChange]);
 
   const PinButton = ({ children, onClick }) => (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       className={`
@@ -71,17 +91,21 @@ export default function PinPad({ value = '', onChange, onEnter, disabled = false
     </button>
   );
 
-  const ActionButton = ({ children, onClick, variant = 'secondary' }) => {
-    const styles = {
-      primary: 'from-emerald-600 via-emerald-700 to-emerald-900 border-emerald-500/30',
-      danger: 'from-red-600 via-red-700 to-red-900 border-red-500/30',
-      secondary: 'from-gray-600 via-gray-700 to-gray-900 border-gray-500/30',
-    }[variant];
+  const ActionButton = ({ children, onClick, variant = "secondary", forcedDisabled }) => {
+    const styles =
+      {
+        primary: "from-emerald-600 via-emerald-700 to-emerald-900 border-emerald-500/30",
+        danger: "from-red-600 via-red-700 to-red-900 border-red-500/30",
+        secondary: "from-gray-600 via-gray-700 to-gray-900 border-gray-500/30",
+      }[variant] || "";
+
+    const isDisabled = typeof forcedDisabled === "boolean" ? forcedDisabled : disabled;
 
     return (
       <button
+        type="button"
         onClick={onClick}
-        disabled={disabled}
+        disabled={isDisabled}
         className={`
           relative h-16 rounded-xl
           bg-gradient-to-br ${styles}
@@ -92,6 +116,7 @@ export default function PinPad({ value = '', onChange, onEnter, disabled = false
           before:bg-gradient-to-br before:from-white/20 before:to-transparent
           before:opacity-0 hover:before:opacity-100 before:transition-opacity
           w-full flex items-center justify-center
+          disabled:opacity-50 disabled:cursor-not-allowed
         `}
       >
         <span className="relative z-10 flex items-center justify-center text-5x1 font-bold bg-gradient-to-b from-gray-100 via-gray-300 to-gray-600 bg-clip-text text-transparent drop-shadow-sm">
@@ -103,17 +128,16 @@ export default function PinPad({ value = '', onChange, onEnter, disabled = false
 
   return (
     <div className="w-full max-w-[420px]">
-      <div className={`mb-6 ${isShaking ? 'animate-shake' : ''}`}>
+      <div className={`mb-6 ${isShaking ? "animate-shake" : ""}`}>
         <div className="flex justify-center space-x-3 mb-3">
           {[...Array(4)].map((_, i) => (
             <div
               key={i}
               className={`
                 w-4 h-4 rounded-full border-2 transition-all duration-300
-                ${i < value.length 
-                  ? 'bg-gradient-to-r from-gray-400 to-amber-600 border-amber-400 shadow-lg shadow-amber-400/50' 
-                  : 'border-gray-600 bg-gray-800'
-                }
+                ${i < value.length
+                  ? "bg-gradient-to-r from-gray-400 to-amber-600 border-amber-400 shadow-lg shadow-amber-400/50"
+                  : "border-gray-600 bg-gray-800"}
               `}
             />
           ))}
@@ -134,11 +158,10 @@ export default function PinPad({ value = '', onChange, onEnter, disabled = false
         <ActionButton onClick={handleClear} variant="danger">
           CLEAR
         </ActionButton>
-        <PinButton onClick={() => handleNumberClick('0')}>
-          0
-        </PinButton>
-        <ActionButton onClick={handleEnter} variant="primary">
-          <Check size={18} className="mr-2  text-white" /> ENTER
+        <PinButton onClick={() => handleNumberClick("0")}>0</PinButton>
+        {/* ENTER is gated by enterDisabled only */}
+        <ActionButton onClick={doEnter} variant="primary" forcedDisabled={enterDisabled}>
+          <Check size={18} className="mr-2 text-white" /> ENTER
         </ActionButton>
       </div>
 

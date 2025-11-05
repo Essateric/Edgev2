@@ -111,3 +111,4 @@ if (import.meta.env.DEV && !client.__fromPatched) {
 /* ------------------ END DEBUG + SAFETY NET ------------------ */
 
 export const supabase = client;
+export default client; 
