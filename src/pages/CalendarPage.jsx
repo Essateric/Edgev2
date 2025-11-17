@@ -131,8 +131,7 @@ const [errText, setErrText] = useState("");
   }, [loading]);
 
 
-// derive simple admin check (use your own user/roles if different)
-const isAdmin = !!(currentUser?.user_metadata?.role === "admin");
+const isAdmin = currentUser?.permission?.toLowerCase() === "admin";
 
 const coerceEventForPopup = (ev) => {
   const rid = ev.resource_id ?? ev.resourceId ?? ev.stylist_id ?? null;
@@ -167,42 +166,72 @@ const coerceEventForPopup = (ev) => {
   AddGridTimeLabels(9, 20, 15);
 
   useEffect(() => {
-    dbgLog("effect:mount");
+    // Wait until auth has finished restoring
+    dbgLog("effect:mount", { hasUser: !!currentUser, authLoading });
+
+    if (authLoading) return;         // still restoring
+    if (!currentUser) {
+      // no user at all → show a friendly message instead of throwing
+      setErrText("You must be logged in to view the calendar.");
+      setLoading(false);
+      return;
+    }
+
     const fetchData = async () => {
       setLoading(true);
       setErrText("");
       try {
+        // 🔍 Optional: log Supabase session, but DO NOT block on it
         dbgLog("getSession:start");
-          // ensure session is ready (prevents race on fast route changes)
-      const { data: sessionData, error: sessErr } = await supabase.auth.getSession();
-      dbgLog("getSession:done", { hasSession: !!sessionData?.session, sessErr: !!sessErr });
-      if (sessErr) throw sessErr;
-      if (!sessionData?.session) throw new Error("No active session");
-      dbgLog("queries:start");
+        try {
+          const { data: sessionData, error: sessErr } =
+            await supabase.auth.getSession();
+          dbgLog("getSession:done", {
+            hasSession: !!sessionData?.session,
+            sessErr: !!sessErr,
+          });
+        } catch (e) {
+          dbgLog("getSession:error", e?.message || String(e));
+        }
 
-      const [
-        { data: clientsData,  error: cErr },
-        { data: staffData,    error: sErr },
-        { data: bookingsData, error: bErr },
-      ] = await Promise.all([
-        supabase.from("clients").select("*"),
-        supabase.from("staff").select("*").order("created_at", { ascending: true }),
-        supabase.from("bookings").select("*"),
-      ]);
-      dbgLog("queries:done", { cErr: !!cErr, sErr: !!sErr, bErr: !!bErr });
-      if (cErr) throw cErr;
-      if (sErr) throw sErr;
-      if (bErr) throw bErr;
+        dbgLog("queries:start");
+
+        const [
+          { data: clientsData,  error: cErr },
+          { data: staffData,    error: sErr },
+          { data: bookingsData, error: bErr },
+        ] = await Promise.all([
+          supabase.from("clients").select("*"),
+          supabase
+            .from("staff")
+            .select("*")
+            .order("created_at", { ascending: true }),
+          supabase.from("bookings").select("*"),
+        ]);
+
+        dbgLog("queries:done", {
+          cErr: !!cErr,
+          sErr: !!sErr,
+          bErr: !!bErr,
+        });
+
+        if (cErr) throw cErr;
+        if (sErr) throw sErr;
+        if (bErr) throw bErr;
 
         const staff = staffData || [];
-
         console.log("✅ Staff fetched:", staff);
-        dbgLog("map:setState:start", { staffCount: staff.length, clients: (clientsData||[]).length, bookings: (bookingsData||[]).length });
+
+        dbgLog("map:setState:start", {
+          staffCount: staff.length,
+          clients: (clientsData || []).length,
+          bookings: (bookingsData || []).length,
+        });
 
         setClients(clientsData || []);
         setStylistList(
           staff.map((s) => ({
-            id: s.id, // ✅ Make sure this matches resourceId in bookings
+            id: s.id,
             title: s.name,
             weeklyHours: s.weekly_hours || {},
           }))
@@ -211,19 +240,19 @@ const coerceEventForPopup = (ev) => {
         setEvents(
           (bookingsData || []).map((b) => {
             const stylist = staff.find((s) => s.id === b.resource_id);
-            // Support either start/end or start_time/end_time
-          const start = b.start ?? b.start_time;
-          const end   = b.end   ?? b.end_time;
+            const start = b.start ?? b.start_time;
+            const end   = b.end   ?? b.end_time;
             return {
               ...b,
               start: new Date(start),
-            end: new Date(end),
+              end: new Date(end),
               resourceId: b.resource_id,
               stylistName: stylist?.name || "Unknown Stylist",
-              title: b.title || "No Service Name", // 🔥 Fix service name display
+              title: b.title || "No Service Name",
             };
           })
         );
+
         dbgLog("map:setState:done");
       } catch (error) {
         console.error("❌ Error fetching calendar data:", error);
@@ -236,7 +265,8 @@ const coerceEventForPopup = (ev) => {
     };
 
     fetchData();
-  }, []);
+  }, [currentUser, authLoading]);
+
 
   const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);

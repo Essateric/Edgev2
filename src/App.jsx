@@ -1,4 +1,4 @@
-// App.jsx (top)
+// src/App.jsx
 import PublicBookingPage from "./onlinebookings/PublicBookingPage.jsx";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useAuth } from "./contexts/AuthContext.jsx";
@@ -15,24 +15,31 @@ import ProtectedRoute from "./components/ProtectedRoute.jsx";
 import SetPin from "./pages/SetPin.jsx";
 import PageLoader from "./components/PageLoader.jsx";
 
-
-
 function App() {
   const { currentUser, pageLoading, authLoading } = useAuth();
+
+  // ✅ Only block when:
+  // - page is loading; OR
+  // - we're refreshing/re-hydrating an *existing* user's session
+  const shouldBlock =
+    pageLoading || (authLoading && !!currentUser);
+
   console.log("[APPDBG]", { pageLoading, authLoading, currentUser });
- if (pageLoading || (authLoading && currentUser))  {
-   return (
-     <div className="p-6">
-       <PageLoader />
-       <pre className="mt-4 p-3 bg-gray-100 text-xs rounded">
-         {JSON.stringify({ pageLoading, authLoading, hasUser: !!currentUser }, null, 2)}
-       </pre>
-     </div>
-   );
- }
 
-  
-
+  if (shouldBlock) {
+    return (
+      <div className="p-6">
+        <PageLoader />
+        <pre className="mt-4 p-3 bg-gray-100 text-xs rounded">
+          {JSON.stringify(
+            { pageLoading, authLoading, hasUser: !!currentUser },
+            null,
+            2
+          )}
+        </pre>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -57,9 +64,7 @@ function App() {
             <Route element={<StaffLayout />}>
               <Route path="/" element={<CalendarPage />} />
               <Route path="/dashboard" element={<Dashboard />} />
-
-<Route path="/calendar" element={<CalendarPage />} />
-
+              <Route path="/calendar" element={<CalendarPage />} />
 
               <Route
                 path="/manage-clients"
@@ -101,6 +106,5 @@ function App() {
     </>
   );
 }
-
 
 export default App;

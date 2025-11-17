@@ -1,13 +1,19 @@
 // src/pages/Login.jsx
-import React, { useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import Button from "../components/Button.jsx";
 import PinPad from "../components/PinPad.jsx";
 import { toast } from "react-hot-toast";
 import logo from "../assets/EdgeLogo.png";
+import supabase from "../supabaseClient";
 
 export default function Login() {
-  const { login, loginWithPin, authLoading } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const from = location.state?.from || "/";
+
+  const { login, loginWithPin, currentUser, authLoading } = useAuth();
 
   const [pin, setPin] = useState("");
   const [email, setEmail] = useState("");
@@ -15,58 +21,69 @@ export default function Login() {
   const [error, setError] = useState("");
   const [mode, setMode] = useState("pin"); // "pin" | "email" | "forgotPin"
   const [magicEmail, setMagicEmail] = useState("");
-  const [sending, setSending] = useState(false);
 
-  // Local submit flags (so ENTER isn't blocked by global authLoading during session-restore)
-  const [pinSubmitting, setPinSubmitting] = useState(false);
-  const [emailSubmitting, setEmailSubmitting] = useState(false);
+  const [sending, setSending] = useState(false);       // magic link
+  const [submitting, setSubmitting] = useState(false); // doing a login attempt
 
-  // Digits/CLEAR/DELETE disabled only while sending a magic link or we are actively submitting a PIN
-  const keypadDisabled = sending || pinSubmitting;
+  // Keep your existing gating
+  const keypadDisabled = sending || submitting;
+  const enterDisabled = sending || submitting || pin.length !== 4;
 
-  // ENTER (and other submit-ish actions) disabled only while we are actively submitting or sending a magic link
-  // NOTE: do NOT include authLoading here or you will block ENTER during session restore.
-  const enterDisabled = pinSubmitting || emailSubmitting || sending;
 
-  const handlePinLogin = async () => {
-    if (enterDisabled) return; // prevent double submits
+  // Belt & braces: if the auth state flips to an authenticated user,
+  // route to the intended page.
+  useEffect(() => {
+    if (!authLoading && currentUser) {
+      navigate(from, { replace: true });
+    }
+  }, [authLoading, currentUser, navigate, from]);
+
+  // PIN login: keep your logic, but *await* loginWithPin and navigate immediately.
+  const handlePinLogin = useCallback(async () => {
+    if (enterDisabled || submitting) return;
+
     try {
       if (pin.length !== 4) {
         toast.error("Enter 4-digit PIN");
         return;
       }
-      setPinSubmitting(true);
-      await loginWithPin(pin);
-      // If AuthContext sets currentUser, routing should switch automatically,
-      // but we mirror your email flow for consistency:
-      window.location.href = "/";
+      setSubmitting(true);
+
+      await loginWithPin(pin);            // <- await the async auth
+      toast.success("Welcome back!");
+      navigate(from, { replace: true });  // <- deterministic navigation now
+
     } catch (err) {
       const msg = err?.message || "PIN login failed";
       setError(msg);
       toast.error(msg);
     } finally {
-      setPinSubmitting(false);
+      setSubmitting(false);
     }
-  };
+  }, [enterDisabled, submitting, pin, loginWithPin, navigate, from]);
 
   const handleEmailLogin = async (e) => {
     e.preventDefault();
-    if (enterDisabled) return;
+    if (enterDisabled || submitting) return;
+
     try {
-      setEmailSubmitting(true);
+      setSubmitting(true);
       await login(email, password);
-      window.location.href = "/";
-    } catch {
-      setError("Email login failed");
-      toast.error("Email login failed");
+      toast.success("Welcome back!");
+      // navigation handled by the effect above when currentUser becomes truthy
+    } catch (err) {
+      const msg = err?.message || "Email login failed";
+      setError(msg);
+      toast.error(msg);
     } finally {
-      setEmailSubmitting(false);
+      setSubmitting(false);
     }
   };
 
   const handleMagicLink = async (e) => {
     e.preventDefault();
     if (sending) return;
+
     setSending(true);
     setError("");
     try {
@@ -83,10 +100,13 @@ export default function Login() {
         toast.success("Magic link sent! Check your email.");
         setMode("pin");
       } else {
-        setError(result?.error || "Error sending magic link.");
+        const msg = result?.error || "Error sending magic link.";
+        setError(msg);
+        toast.error(msg);
       }
-    } catch {
+    } catch (err) {
       setError("Network error. Please try again.");
+      toast.error("Network error. Please try again.");
     } finally {
       setSending(false);
     }
@@ -97,7 +117,6 @@ export default function Login() {
       <div className="absolute inset-0 bg-black bg-opacity-60 z-0" />
 
       <div className="w-full max-w-md z-10 bg-black bg-opacity-80 shadow-xl rounded-3xl flex flex-col items-center p-8 relative">
-        {/* Logo */}
         <img
           src={logo}
           alt="Edge HD Logo"
@@ -105,7 +124,6 @@ export default function Login() {
           style={{ filter: "brightness(1.2)" }}
         />
 
-        {/* Heading */}
         <h2 className="text-2xl font-bold text-center mb-4 metallic-text drop-shadow">
           {mode === "pin"
             ? "PIN Login"
@@ -128,15 +146,14 @@ export default function Login() {
 
         {error && <div className="text-red-500 mb-3 text-center">{error}</div>}
 
-        {/* PIN Login */}
         {mode === "pin" && (
           <div className="flex flex-col space-y-4 w-full">
             <PinPad
               value={pin}
               onChange={setPin}
               onEnter={handlePinLogin}
-              disabled={keypadDisabled}        // digits/clear/delete disabled while sending or pinSubmitting
-              enterDisabled={enterDisabled}     // ENTER disabled while pinSubmitting or sending
+              disabled={keypadDisabled}
+              enterDisabled={enterDisabled}
             />
             <input type="hidden" name="pin" value={pin} />
             <button
@@ -154,7 +171,6 @@ export default function Login() {
           </div>
         )}
 
-        {/* Email Login */}
         {mode === "email" && (
           <form onSubmit={handleEmailLogin} className="flex flex-col space-y-4 w-full">
             <input
@@ -180,7 +196,7 @@ export default function Login() {
               disabled={enterDisabled}
             />
             <Button type="submit" disabled={enterDisabled}>
-              {(emailSubmitting || authLoading) ? "Logging in..." : "Login"}
+              {submitting ? "Logging in..." : "Login"}
             </Button>
             <button
               type="button"
@@ -197,7 +213,6 @@ export default function Login() {
           </form>
         )}
 
-        {/* Forgot PIN */}
         {mode === "forgotPin" && (
           <form onSubmit={handleMagicLink} className="flex flex-col space-y-4 w-full">
             <input
@@ -223,7 +238,6 @@ export default function Login() {
           </form>
         )}
 
-        {/* Mode Switch */}
         <button
           onClick={() => {
             if (mode === "pin") {
@@ -245,14 +259,9 @@ export default function Login() {
           disabled={enterDisabled}
           type="button"
         >
-          {mode === "pin"
-            ? "Switch to Email Login"
-            : mode === "email"
-            ? "Switch to PIN Login"
-            : ""}
+          {mode === "pin" ? "Switch to Email Login" : mode === "email" ? "Switch to PIN Login" : ""}
         </button>
 
-        {/* Footer */}
         <div className="mt-8 text-xs text-gray-500 text-center w-full">
           &copy; {new Date().getFullYear()} Essateric Solutions
         </div>

@@ -1,29 +1,24 @@
-// main.jsx or index.jsx
-
-console.log('ENV URL =', import.meta.env.VITE_SUPABASE_URL);
-console.log('ENV KEY =', Boolean(import.meta.env.VITE_SUPABASE_ANON_KEY) ? 'HAS_KEY' : 'MISSING');
-initAuthAudit()
+// src/main.jsx (or index.jsx)
 
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+
 import App from "./App.jsx";
 import "./index.css";
 
-// ⬇️ New imports from react-router-dom
-import {
-  createBrowserRouter,
-  createRoutesFromElements,
-  Route,
-  RouterProvider,
-} from "react-router-dom";
-
 import { AuthProvider } from "./contexts/AuthContext.jsx";
 import { BookingProvider } from "./contexts/BookingContext.jsx";
-
-// 🔐 auth audit init (client-side logging of sign-in/out)
 import { initAuthAudit } from "./auth/initAuthAudit.jsx";
 
-// --- optional dev hook (unchanged) ---
+// Dev logs
+console.log("ENV URL =", import.meta.env.VITE_SUPABASE_URL);
+console.log(
+  "ENV KEY =",
+  Boolean(import.meta.env.VITE_SUPABASE_ANON_KEY) ? "HAS_KEY" : "MISSING"
+);
+
+// OPTIONAL: request tracing hook (unchanged)
 if (import.meta.env.DEV) {
   (function () {
     const _fetch = window.fetch;
@@ -44,27 +39,15 @@ if (!window.__authAuditInit) {
   initAuthAudit();
 }
 
-// ✅ Router that delegates everything to your current <App />
-// Your <App /> can continue to render <Routes> and your existing pages.
-const router = createBrowserRouter(
-  createRoutesFromElements(
-    <Route path="/*" element={<App />} />
-  )
-);
-
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    {/* Keep providers exactly as before */}
-    <AuthProvider>
-      <BookingProvider>
-        <RouterProvider
-          router={router}
-          future={{
-            v7_startTransition: true,
-            v7_relativeSplatPath: true,
-          }}
-        />
-      </BookingProvider>
-    </AuthProvider>
+    {/* ✅ Router OUTSIDE, providers INSIDE → useNavigate works in AuthContext */}
+    <BrowserRouter>
+      <AuthProvider>
+        <BookingProvider>
+          <App />
+        </BookingProvider>
+      </AuthProvider>
+    </BrowserRouter>
   </React.StrictMode>
 );

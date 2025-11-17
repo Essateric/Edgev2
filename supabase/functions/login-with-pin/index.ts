@@ -5,6 +5,24 @@ import { corsHeaders } from "../_shared/cors.ts";
 
 console.log("🚀 Login-with-PIN Function Loaded");
 
+
+
+// Helper: derive a strong password from PIN using a server-only secret (pepper)
+async function derivePassword(pepper: string, email: string, staffId: string, pin: string) {
+  
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(pepper),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const data = enc.encode(`${email}|${staffId}|${pin}`);
+  const sig = await crypto.subtle.sign("HMAC", key, data);
+  return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 serve(async (req) => {
   const logs: string[] = [];
 
@@ -18,16 +36,20 @@ serve(async (req) => {
 
     // ✅ Env
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-    const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
-      logs.push("❌ Missing SUPABASE_URL or SERVICE_ROLE_KEY");
+    const SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY")!;
+    const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;     // ✅ added
+    const PIN_PEPPER = Deno.env.get("PIN_PEPPER")!;          // ✅ added
+    if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !ANON_KEY || !PIN_PEPPER) {
+      logs.push("❌ Missing one or more env vars: SUPABASE_URL / SERVICE_ROLE_KEY / ANON_KEY / PIN_PEPPER");
       return new Response(JSON.stringify({ error: "Server misconfigured", logs }), {
         status: 500,
         headers: { ...corsHeaders, "Cache-Control": "no-store" },
       });
     }
     logs.push(`🔑 Env SUPABASE_URL: ${SUPABASE_URL}`);
-    logs.push("🔑 Env SERVICE_ROLE_KEY: ✅ Loaded");
+    logs.push("🔑 Env SERVICE_ROLE_KEY: ✅");
+    logs.push("🔑 Env ANON_KEY: ✅");
+    logs.push("🔑 Env PIN_PEPPER: ✅");
 
     // ✅ Body & basic validation
     const body = await req.json().catch(() => ({}));
@@ -43,13 +65,13 @@ serve(async (req) => {
     logs.push(`🔢 PIN received: ${pin}`);
 
     // ✅ Admin client
-    const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-    logs.push("🗄️ Supabase client initialized");
+    const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+    logs.push("🗄️ Supabase admin client initialized");
 
-    // ✅ Load staff
-    const { data: staffData, error: staffError } = await supabase
+    // ✅ Load staff (select only what we need)
+    const { data: staffData, error: staffError } = await admin
       .from("staff")
-      .select("*");
+      .select("id,name,email,permission,pin_hash");
     if (staffError || !staffData) {
       logs.push(`❌ Failed to fetch staff: ${staffError?.message}`);
       return new Response(JSON.stringify({ error: "Failed to fetch staff", logs }), {
@@ -82,8 +104,7 @@ serve(async (req) => {
     }
 
     // ✅ Ensure Auth user exists (auto-create if missing)
-    const { data: userList, error: authError } =
-      await supabase.auth.admin.listUsers();
+    const { data: userList, error: authError } = await admin.auth.admin.listUsers();
     if (authError || !userList) {
       logs.push(`❌ Error fetching auth users: ${authError?.message}`);
       return new Response(JSON.stringify({ error: "Error fetching auth users", logs }), {
@@ -98,7 +119,7 @@ serve(async (req) => {
 
     if (!authUser) {
       logs.push(`ℹ️ Auth user not found for ${matchedStaff.email} — creating…`);
-      const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+      const { data: created, error: createErr } = await admin.auth.admin.createUser({
         email: matchedStaff.email!,
         email_confirm: true, // ✅ no email confirmation needed
       });
@@ -119,54 +140,60 @@ serve(async (req) => {
     const name = matchedStaff.name ?? matchedStaff.email!;
     logs.push(`🔑 Permission: ${permission}`);
 
-    // ✅ Generate login token (no email is sent)
-    const { data: linkData, error: linkErr } = await supabase.auth.admin.generateLink({
-      type: "magiclink",
-      email: matchedStaff.email!,
-      options: {
-        // Must be in Auth → URL Configuration → Redirect URLs (ok if unused in programmatic flow)
-        redirectTo: "https://theedge.essateric.com/auth/callback",
-      },
+    // 🔁 PREVIOUSLY: generate magic link and return token_hash/email_otp
+    // ❌ REMOVE THAT. INSTEAD:
+
+    // ✅ 1) Derive a strong password from PIN (deterministic, server-side secret)
+    const derivedPassword = await derivePassword(
+      PIN_PEPPER,
+      matchedStaff.email!,
+      String(matchedStaff.id),
+      pin,
+    );
+
+    // ✅ 2) Set/update password via admin (service role)
+    const { error: updErr } = await admin.auth.admin.updateUserById(authUser.id, {
+      password: derivedPassword,
     });
-
-    if (linkErr) {
-      logs.push(`❌ generateLink error: ${linkErr.message}`);
-      return new Response(
-        JSON.stringify({ error: "Failed to generate login token", logs }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, "Cache-Control": "no-store" },
-        }
-      );
-    }
-
-    // We return both forms. Client will use whichever is present.
-    const token_hash = linkData?.properties?.hashed_token ?? null; // for verifyOtp type:"magiclink" (no email param)
-    const email_otp = linkData?.properties?.email_otp ?? null; // for verifyOtp type:"email" (needs email+token)
-
-    if (!token_hash && !email_otp) {
-      logs.push("❌ generateLink returned neither token_hash nor email_otp");
-      return new Response(JSON.stringify({ error: "Login token not generated", logs }), {
+    if (updErr) {
+      logs.push(`❌ updateUserById error: ${updErr.message}`);
+      return new Response(JSON.stringify({ error: "Failed to set password", logs }), {
         status: 500,
         headers: { ...corsHeaders, "Cache-Control": "no-store" },
       });
     }
+    logs.push("🔐 Auth user password updated from PIN-derived secret");
 
-    logs.push(
-      `✅ Token generated (${token_hash ? "token_hash" : ""}${
-        token_hash && email_otp ? " + " : ""
-      }${email_otp ? "email_otp" : ""})`
-    );
+    // ✅ 3) Sign in with anon client to mint a real session (JWTs)
+    const anon = createClient(SUPABASE_URL, ANON_KEY);
+    const { data: signInData, error: signInErr } = await anon.auth.signInWithPassword({
+      email: matchedStaff.email!,
+      password: derivedPassword,
+    });
+    if (signInErr || !signInData?.session) {
+      logs.push(`❌ signInWithPassword error: ${signInErr?.message}`);
+      return new Response(JSON.stringify({ error: "Auth failed", logs }), {
+        status: 401,
+        headers: { ...corsHeaders, "Cache-Control": "no-store" },
+      });
+    }
+    logs.push("✅ Session minted via signInWithPassword");
 
-    // ✅ Return details for frontend verifyOtp
+    const { session } = signInData;
+
+    // ✅ 4) Return flat tokens for the client
     return new Response(
       JSON.stringify({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+        expires_in: session.expires_in,
+        token_type: session.token_type,
+        user: session.user,
+        // UI passthrough fields:
         email: matchedStaff.email,
-        staff_id: matchedStaff.id,     // small extra: handy on client
+        staff_id: matchedStaff.id,
         name,
         permission,
-        token_hash,
-        email_otp,
         logs,
       }),
       {
