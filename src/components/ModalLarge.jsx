@@ -6,13 +6,19 @@ export default function ModalLarge({
   onClose,
   hideCloseIcon = false,
   children,
+  zIndex = 50,
   contentClassName = "",
 }) {
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true">
-      <div className={`modal-panel modal-panel--xl ${contentClassName}`}>
+     <div
+      className="fixed inset-0 flex items-center justify-center bg-black/40"
+      style={{ zIndex }}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className={`relative modal-panel modal-panel--xl ${contentClassName}`}>
         {!hideCloseIcon && (
           <button
             type="button"

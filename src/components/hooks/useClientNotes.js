@@ -27,7 +27,7 @@ export function useClientNotes({ isOpen, clientId, groupRowIds, supabase }) {
       }
     })();
     return () => { on = false; };
-  }, [isOpen, clientId, supabase, groupRowIds]);
+  }, [isOpen, clientId, supabase, JSON.stringify(groupRowIds || []), ]);
 
   return { notes, loading, setNotes };
 }

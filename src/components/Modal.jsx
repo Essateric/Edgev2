@@ -5,11 +5,12 @@ export default function Modal({
   title,
   className = "",
   hideCloseIcon = false,
+  zIndex = 60,  
 }) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 overflow-y-auto" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-50 bg-black/50 overflow-y-auto" role="dialog" aria-modal="true" style={{ zIndex }} >
       <div className="min-h-full flex items-center justify-center p-4">
         {/* ⬇️ add text-gray-800 here */}
         <div className={`relative bg-white text-gray-800 rounded shadow-lg w-full max-w-[440px] ${className}`}>

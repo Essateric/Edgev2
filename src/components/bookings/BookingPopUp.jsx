@@ -70,7 +70,11 @@ function BookingPopUpBody({
   });
 
   // notes
-  const groupRowIds = (relatedBookings || []).map((r) => r.id);
+  const groupRowIds = useMemo(
+  () => (relatedBookings || []).map((r) => r.id),
+  [relatedBookings]
+);
+
   const { notes, loading: notesLoading, setNotes } = useClientNotes({
     isOpen,
     clientId: displayClient?.id,
@@ -171,18 +175,18 @@ function BookingPopUpBody({
     return { ok: true, data };
   };
 
-  // loading guards — keep the same wrapper
-  if (!displayClient && clientLoading) {
-    return (
-      <ModalLarge isOpen={isOpen} onClose={onClose}>
-        <div className="p-4 text-sm text-gray-700">Loading client…</div>
-      </ModalLarge>
-    );
-  }
+if (!displayClient && clientLoading) {
+  return (
+    <ModalLarge isOpen={isOpen} onClose={onClose} zIndex={50}>
+      <div className="p-4 text-sm text-gray-700">Loading client…</div>
+    </ModalLarge>
+  );
+}
+
 
   if (!displayClient && !clientLoading) {
     return (
-      <ModalLarge isOpen={isOpen} onClose={onClose}>
+      <ModalLarge isOpen={isOpen} onClose={onClose} zIndex={50}>
         <div className="p-4">
           <h2 className="text-lg font-bold text-rose-600">Client not found</h2>
           {clientError && (
@@ -201,8 +205,8 @@ function BookingPopUpBody({
     );
   }
 
-  return (
-    <ModalLarge isOpen={isOpen} onClose={onClose} hideCloseIcon>
+  return  (
+    <ModalLarge isOpen={isOpen} onClose={onClose} hideCloseIcon zIndex={50}>
       {/* === New layout wrapper that lets the popup breathe === */}
       <div className="modal-panel">
         {/* Header region */}
@@ -251,6 +255,7 @@ function BookingPopUpBody({
       {/* Notes modal */}
       {showNotesModal && (
         <ClientNotesModal
+         modalZIndex={60} 
           clientId={displayClient?.id || booking?.client_id || null}
           bookingId={booking?.id}
           isOpen={showNotesModal}

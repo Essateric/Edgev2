@@ -84,11 +84,11 @@ export default function RemindersDialog({
     setError("");
     setLoading(true);
     try {
-      // IMPORTANT: no explicit phone column here
       const { data, error } = await supabase
         .from("bookings")
         .select(`
           id,
+          booking_id,
           start,
           end,
           client_id,
@@ -101,12 +101,18 @@ export default function RemindersDialog({
 
       if (error) throw error;
 
-      const mapped = (data ?? []).map((b) => {
+      // Group rows by booking_id (one reminder per appointment).
+      // If booking_id is null (older/manual bookings), fall back to row id.
+      const byBooking = new Map();
+
+      for (const b of data ?? []) {
         const c = b.clients || {};
         const phone = getClientPhone(c);
+        const groupKey = b.booking_id || b.id;
 
-        return {
-          id: b.id,
+        const baseRow = {
+          id: groupKey, // used for selection
+          booking_id: b.booking_id || null,
           start_time: b.start,
           end_time: b.end,
           title: b.title || "Appointment",
@@ -120,7 +126,24 @@ export default function RemindersDialog({
             whatsapp_opt_in: !!phone,
           },
         };
-      });
+
+        const existing = byBooking.get(groupKey);
+
+        if (!existing) {
+          byBooking.set(groupKey, baseRow);
+        } else {
+          // Keep the earliest start and latest end for that booking
+          if (new Date(baseRow.start_time) < new Date(existing.start_time)) {
+            existing.start_time = baseRow.start_time;
+          }
+          if (new Date(baseRow.end_time) > new Date(existing.end_time)) {
+            existing.end_time = baseRow.end_time;
+          }
+          byBooking.set(groupKey, existing);
+        }
+      }
+
+      const mapped = Array.from(byBooking.values());
 
       setRows(mapped);
       setSelectedIds(new Set(mapped.map((x) => x.id))); // preselect all
@@ -149,13 +172,6 @@ export default function RemindersDialog({
       );
     });
   }, [rows, search]);
-
-  const renderTemplate = (tpl, b) =>
-    tpl
-      .replaceAll("{{first_name}}", b.client.first_name || "")
-      .replaceAll("{{last_name}}", b.client.last_name || "")
-      .replaceAll("{{date}}", fmtDateUK(b.start_time))
-      .replaceAll("{{time}}", fmtTimeUK(b.start_time));
 
   const toggleAll = (checked) => {
     if (checked) setSelectedIds(new Set(filtered.map((r) => r.id)));
@@ -186,7 +202,7 @@ export default function RemindersDialog({
           template,
           timezone: "Europe/London",
           bookings: selected.map((b) => ({
-            booking_id: b.id,
+            booking_id: b.booking_id || b.id,
             start_time: b.start_time,
             end_time: b.end_time,
             client: b.client,
@@ -353,7 +369,7 @@ export default function RemindersDialog({
               checked={filtered.length && selectedIds.size === filtered.length}
               onChange={(e) => toggleAll(e.target.checked)}
             />
-          <span>Select all ({filtered.length})</span>
+            <span>Select all ({filtered.length})</span>
           </label>
           <button
             className="ml-auto bg-black text-white rounded px-4 py-2 text-sm"
@@ -391,13 +407,11 @@ export default function RemindersDialog({
                 <th className="p-2 text-left">Client</th>
                 <th className="p-2 text-left">Contact</th>
                 <th className="p-2 text-left">Appointment</th>
-                <th className="p-2 text-left">Preview</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((b) => {
                 const checked = selectedIds.has(b.id);
-                const preview = renderTemplate(template, b);
                 return (
                   <tr key={b.id} className="border-t align-top">
                     <td className="p-2">
@@ -425,15 +439,12 @@ export default function RemindersDialog({
                       <div>{fmtDateUK(b.start_time)}</div>
                       <div className="text-gray-500">{fmtTimeUK(b.start_time)}</div>
                     </td>
-                    <td className="p-2 text-gray-700 whitespace-pre-wrap max-w-xs sm:max-w-md">
-                      {preview}
-                    </td>
                   </tr>
                 );
               })}
               {!filtered.length && (
                 <tr>
-                  <td colSpan={5} className="p-6 text-center text-gray-500 text-sm">
+                  <td colSpan={4} className="p-6 text-center text-gray-500 text-sm">
                     No bookings in range.
                   </td>
                 </tr>

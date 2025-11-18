@@ -12,7 +12,7 @@ import { useAuth } from "../../contexts/AuthContext";
  * - clientId (required)
  * - bookingId (optional, the specific booking row this modal is opened from)
  */
-export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId = null }) {
+export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId = null, modalZIndex = 60, }) {
   const [client, setClient] = useState(null);
 
   // Email editing
@@ -304,7 +304,7 @@ const loadNotes = async () => {
   }, [client]);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Client Details" className="w-full max-w-[640px]">
+    <Modal isOpen={isOpen} onClose={onClose} title="Client Details" className="w-full max-w-[640px]" zIndex={modalZIndex} >
       <div className="space-y-4 text-gray-800">
         <h3 className="text-lg font-semibold">{fullName}</h3>
 

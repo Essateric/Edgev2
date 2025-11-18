@@ -6,7 +6,7 @@ export default function RightDrawer({
 }) {
   return (
     <div
-      className={`fixed top-0 right-0 h-full bg-white shadow-lg z-50 transition-transform transform ${
+      className={`fixed top-0 right-0 h-full bg-white shadow-lg z-30 transition-transform transform ${
         isOpen ? "translate-x-0" : "translate-x-full"
       } ${widthClass} overflow-y-auto`}
     >

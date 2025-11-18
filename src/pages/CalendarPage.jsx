@@ -209,6 +209,11 @@ const coerceEventForPopup = (ev) => {
           supabase.from("bookings").select("*"),
         ]);
 
+        console.log("[CALDBG] bookingsData length:", bookingsData?.length, {
+  bookingsSample: bookingsData?.slice(0, 3),
+});
+
+
         dbgLog("queries:done", {
           cErr: !!cErr,
           sErr: !!sErr,
@@ -322,6 +327,11 @@ if (!currentUser) {
    console.log("[CALDBG] no currentUser yet");
    return <div>Loading...</div>;
  }
+
+ if (!currentUser && !authLoading) {
+  return <div className="p-6">You must be logged in to view the calendar.</div>;
+}
+
  
 if (pageLoading || authLoading || loading) {
   return (
