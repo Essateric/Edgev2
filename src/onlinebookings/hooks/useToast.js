@@ -1,5 +1,5 @@
 // src/onlinebookings/hooks/useToast.js
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 export default function useToast() {
   const [toast, setToast] = useState(null);
@@ -12,25 +12,37 @@ export default function useToast() {
     }
   }, []);
 
-  const showToast = useCallback((message, { type = "success", ms = 5000 } = {}) => {
-    setToast({ message, type, ts: Date.now() });
+  const hideToast = useCallback(() => {
+    console.log("[useToast] hideToast called");
+    clearTimer();
+    setToast(null); // this removes the popup
+  }, [clearTimer]);
+
+  const showToast = useCallback((message, options = {}) => {
+    const { type = "success", ms = 4000 } = options;
+
+    // clear any previous timer
     clearTimer();
 
-    if (ms > 0) {
+    const next = {
+      id: Date.now(),
+      message,
+      type,
+    };
+
+    setToast(next);
+
+    // auto-hide unless ms === 0
+    if (ms && ms > 0) {
       timeoutRef.current = setTimeout(() => {
-        setToast(null);
+        setToast((current) =>
+          current && current.id === next.id ? null : current
+        );
         timeoutRef.current = null;
       }, ms);
     }
   }, [clearTimer]);
 
-  const dismiss = useCallback(() => {
-    clearTimer();
-    setToast(null);
-  }, [clearTimer]);
-
-  // Clean up on unmount (and avoids duplicate timers under React Strict Mode)
-  useEffect(() => clearTimer, [clearTimer]);
-
-  return { toast, showToast, dismiss, setToast };
+  // 👇 this object is what PublicBookingPage will destructure
+  return { toast, showToast, hideToast };
 }

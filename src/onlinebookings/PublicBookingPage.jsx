@@ -53,6 +53,7 @@ export default function PublicBookingPage() {
 
   // Toast
   const { toast, showToast, hideToast } = useToast();
+    console.log("PublicBookingPage render – toast =", toast);
 
   // Data: services + providers
   const { services, providers } = useServicesAndProviders();
@@ -318,42 +319,32 @@ export default function PublicBookingPage() {
         })
       );
 
-      // 6) Client notes (RPC → fallback single row attach)
-      try {
-        const rawNotes = String(client.notes || "").trim();
-        if (rawNotes) {
-          const { error: rpcErr } = await supabase.rpc(
-            "public_add_client_note_for_group",
-            { p_booking_id: bookingId, p_client_id: clientId, p_note: rawNotes }
-          );
-          if (rpcErr) throw rpcErr;
-        }
-      } catch (e) {
-        try {
-          const rawNotes = String(client.notes || "").trim();
-          if (rawNotes) {
-            const { data: rowIds, error: rowsErr } = await supabase
-              .from("bookings")
-              .select("id")
-              .eq("booking_id", bookingId)
-              .order("start", { ascending: true })
-              .limit(1);
-            if (rowsErr) throw rowsErr;
-            const bookingRowId = rowIds?.[0]?.id || null;
+// 6) Client notes – simple direct insert, no RPC
+try {
+  const rawNotes = String(client.notes || "").trim();
+  if (rawNotes) {
+    const { data: rowIds, error: rowsErr } = await supabase
+      .from("bookings")
+      .select("id")
+      .eq("booking_id", bookingId)
+      .order("start", { ascending: true })
+      .limit(1);
+    if (rowsErr) throw rowsErr;
 
-            await supabase.from("client_notes").insert([
-              {
-                client_id: clientId,
-                note_content: `Notes added by client: ${rawNotes}`,
-                created_by: "client",
-                booking_id: bookingRowId,
-              },
-            ]);
-          }
-        } catch {
-          /* best-effort */
-        }
-      }
+    const bookingRowId = rowIds?.[0]?.id || null;
+
+    await supabase.from("client_notes").insert([
+      {
+        client_id: clientId,
+        note_content: `Notes added by client: ${rawNotes}`,
+        created_by: "client",
+        booking_id: bookingRowId,
+      },
+    ]);
+  }
+} catch {
+  /* best-effort */
+}
 
       // 7) Log
       try {
@@ -595,55 +586,69 @@ const CartSection = () => {
       />
 
       {/* Brand-themed toast */}
-      {toast && (
-        <div className="fixed inset-0 z-[9999] px-3 sm:px-4 flex items-center justify-center pointer-events-none">
-          <div className="absolute inset-0 bg-black/50" aria-hidden="true" />
-          <div
-            className="pointer-events-auto relative w-full max-w-full sm:max-w-[520px] md:max-w-[620px] lg:max-w-[680px]
+{toast && (
+  <div className="fixed inset-0 z-[9999] px-3 sm:px-4 flex items-center justify-center">
+    {/* Backdrop – also closes on click */}
+    <div
+      className="absolute inset-0 bg-black/50"
+      aria-hidden="true"
+      onClick={hideToast}
+    />
+
+    <div
+      className="relative w-full max-w-full sm:max-w-[520px] md:max-w-[620px] lg:max-w-[680px]
                  rounded-2xl border shadow-2xl overflow-hidden"
-            role="status"
-            aria-live="polite"
-            style={{
-              background: toast.type === "success" ? BRAND.successBg : BRAND.errorBg,
-              borderColor: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
-              color: toast.type === "success" ? BRAND.successText : BRAND.errorText,
-            }}
-          >
-            <div
-              style={{
-                height: 6,
-                background: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
-              }}
-            />
-            <div
-              className="px-4 py-4 sm:px-6 sm:py-6"
-              style={{
-                paddingTop: "max(1rem, env(safe-area-inset-top))",
-                paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
-                paddingLeft: "max(1rem, env(safe-area-inset-left))",
-                paddingRight: "max(1rem, env(safe-area-inset-right))",
-              }}
-            >
-              <div className="flex items-start gap-3 sm:gap-4">
-                <span className="mt-0.5 text-2xl sm:text-3xl md:text-4xl shrink-0">
-                  {toast.type === "success" ? "✅" : "⚠️"}
-                </span>
-                <div className="flex-1 text-base sm:text-lg leading-relaxed">
-                  {toast.message}
-                </div>
-                <button
-                  className="shrink-0 text-white/90 hover:text-white text-2xl sm:text-3xl ml-2"
-                  onClick={hideToast}
-                  aria-label="Dismiss"
-                  title="Dismiss"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
+      role="status"
+      aria-live="polite"
+      style={{
+        background: toast.type === "success" ? BRAND.successBg : BRAND.errorBg,
+        borderColor: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
+        color: toast.type === "success" ? BRAND.successText : BRAND.errorText,
+      }}
+    >
+      <div
+        style={{
+          height: 6,
+          background: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
+        }}
+      />
+      <div
+        className="px-4 py-4 sm:px-6 sm:py-6"
+        style={{
+          paddingTop: "max(1rem, env(safe-area-inset-top))",
+          paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
+          paddingLeft: "max(1rem, env(safe-area-inset-left))",
+          paddingRight: "max(1rem, env(safe-area-inset-right))",
+        }}
+      >
+        <div className="flex items-start gap-3 sm:gap-4">
+          <span className="mt-0.5 text-2xl sm:text-3xl md:text-4xl shrink-0">
+            {toast.type === "success" ? "✅" : "⚠️"}
+          </span>
+          <div className="flex-1 text-base sm:text-lg leading-relaxed">
+            {toast.message}
           </div>
+
+          {/* Close button */}
+          <button
+            type="button"
+            className="shrink-0 text-white/90 hover:text-white text-2xl sm:text-3xl ml-2"
+            onClick={() => {
+              console.log("X button clicked");
+              hideToast();          // ✅ this is now definitely a function
+            }}
+            aria-label="Dismiss"
+            title="Dismiss"
+          >
+            ×
+          </button>
         </div>
-      )}
+      </div>
+    </div>
+  </div>
+)}
+
+
 
       {/* Mobile cart */}
       <div className="max-w-6xl mx-auto px-4 pt-6 lg:hidden">
