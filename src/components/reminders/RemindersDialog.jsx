@@ -387,16 +387,29 @@ export default function RemindersDialog({
           </div>
         )}
         {result && (
-          <div className="px-4 pb-2">
-            <div className="p-3 bg-green-50 text-green-700 rounded text-sm">
-              <div className="font-semibold">Sent</div>
-              <div className="mt-1">
-                Total: {result.total} | Success: {result.success} | Failed:{" "}
-                {result.failed}
-              </div>
-            </div>
+  <div className="px-4 pb-2 space-y-2">
+    <div className="p-3 bg-green-50 text-green-700 rounded text-sm">
+      <div className="font-semibold">Sent</div>
+      <div className="mt-1">
+        Total: {result.total} | Success: {result.success} | Failed:{" "}
+        {result.failed}
+      </div>
+    </div>
+
+    {/* NEW: list each booking result with error if it failed */}
+    {result.results && result.results.length > 0 && (
+      <div className="p-3 bg-gray-50 text-gray-800 rounded text-xs max-h-40 overflow-auto">
+        {result.results.map((r, idx) => (
+          <div key={idx} className="mb-1">
+            Booking {r.booking_id}:{" "}
+            {r.ok ? "✅ sent" : `❌ failed – ${r.error || "Unknown error"}`}
           </div>
-        )}
+        ))}
+      </div>
+    )}
+  </div>
+)}
+
 
         {/* Table */}
         <div className="p-4 overflow-auto border-t">
