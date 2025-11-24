@@ -84,32 +84,43 @@ export const handler = async (event) => {
 
         return true;
       },
+whatsapp: async (b, text) => {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const messagingSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
 
-      whatsapp: async (b, text) => {
-        const sid = process.env.TWILIO_ACCOUNT_SID;
-        const token = process.env.TWILIO_AUTH_TOKEN;
-        const messagingSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+  if (!sid || !token || !messagingSid) throw new Error('Twilio env vars not set');
+  if (!b?.client?.phone) throw new Error('Missing client phone');
 
-        if (!sid || !token || !messagingSid) throw new Error('Twilio env vars not set');
-        if (!b?.client?.phone) throw new Error('Missing client phone');
+  // --- NEW: normalise UK mobiles to E.164 and add whatsapp: prefix ---
+  const normalizeUkMobileToE164 = (raw) => {
+    const digits = String(raw || '').replace(/[^\d]/g, '');
+    if (!digits) throw new Error('Invalid client phone');
 
-        // WhatsApp requires the "whatsapp:" prefix on the 'to' number.
-        const to = b.client.phone.startsWith('whatsapp:')
-          ? b.client.phone
-          : `whatsapp:${b.client.phone}`;
+    if (digits.startsWith('0')) return `+44${digits.slice(1)}`;
+    if (digits.startsWith('44')) return `+${digits}`;
+    if (digits.startsWith('7')) return `+44${digits}`; // just in case
+    if (raw.startsWith('+')) return raw;
 
-        const { default: twilio } = await import('twilio');
-        const client = twilio(sid, token);
+    return `+${digits}`;
+  };
 
-        // Use messagingServiceSid with WhatsApp-enabled Messaging Service.
-        await client.messages.create({
-          body: text,
-          to,
-          messagingServiceSid: messagingSid,
-        });
+  const e164 = normalizeUkMobileToE164(b.client.phone);
+  const to = `whatsapp:${e164}`;
+  // --- END NEW ---
 
-        return true;
-      },
+  const { default: twilio } = await import('twilio');
+  const client = twilio(sid, token);
+
+  await client.messages.create({
+    body: text,
+    to,
+    messagingServiceSid: messagingSid,
+  });
+
+  return true;
+},
+
     };
 
     let ok = 0;
