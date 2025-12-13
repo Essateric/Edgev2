@@ -1,9 +1,6 @@
-import React, { useEffect, useState, useCallback } from "react";
-import {
-  Calendar,
-  dateFnsLocalizer,
-  Views,
-} from "react-big-calendar";
+// src/pages/CalendarPage.jsx
+import React, { useEffect, useState, useCallback, useRef } from "react";
+import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
 import withDragAndDrop from "react-big-calendar/lib/addons/dragAndDrop";
 import { format, parse, startOfWeek, getDay } from "date-fns";
 import enGB from "date-fns/locale/en-GB";
@@ -26,15 +23,13 @@ import UseSalonClosedBlocks from "../components/UseSalonClosedBlocks";
 import UseTimeSlotLabel from "../utils/UseTimeSlotLabel";
 import AddGridTimeLabels from "../utils/AddGridTimeLabels";
 
-import supabase from "../supabaseClient";
-
-import { useAuth } from "../contexts/AuthContext"; // <-- Add this import!
+import baseSupabase from "../supabaseClient";
+import { useAuth } from "../contexts/AuthContext";
 
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "react-big-calendar/lib/addons/dragAndDrop/styles.css";
 import "../styles/CalendarStyles.css";
 import PageLoader from "../components/PageLoader.jsx";
-import { addMinutes } from "date-fns";
 import RemindersDialog from "../components/reminders/RemindersDialog.jsx";
 
 const DnDCalendar = withDragAndDrop(Calendar);
@@ -48,11 +43,20 @@ const localizer = dateFnsLocalizer({
   locales,
 });
 
+/* ----------------- small date helpers ----------------- */
 
 // keep times as local wall-clock and guarantee at least 1 minute
 const toLocal = (d) => {
   const x = new Date(d);
-  return new Date(x.getFullYear(), x.getMonth(), x.getDate(), x.getHours(), x.getMinutes(), 0, 0);
+  return new Date(
+    x.getFullYear(),
+    x.getMonth(),
+    x.getDate(),
+    x.getHours(),
+    x.getMinutes(),
+    0,
+    0
+  );
 };
 
 const clampRange = (start, end) => {
@@ -62,39 +66,29 @@ const clampRange = (start, end) => {
   return { start: s, end: e };
 };
 
-// Snap a date to nearest step (floor by default)
-const snapToStep = (d, step = 15) => {
-  const x = new Date(d);
-  x.setSeconds(0, 0);
-  const mins = x.getMinutes();
-  const snapped = Math.floor(mins / step) * step;
-  x.setMinutes(snapped);
-  return x;
-};
-
-
-// Clamp within your business hours for *that date*
-const clampWithinDay = (d, minH = 9, maxH = 20) => {
-  const base = new Date(d);
-  const min = new Date(base.getFullYear(), base.getMonth(), base.getDate(), minH, 0, 0, 0);
-  const max = new Date(base.getFullYear(), base.getMonth(), base.getDate(), maxH, 0, 0, 0);
-  if (base < min) return min;
-  if (base > max) return max;
-  return base;
-};
-
+const toDate = (v) => (v instanceof Date ? v : new Date(v));
 
 export default function CalendarPage() {
-  const { currentUser, pageLoading, authLoading } = useAuth();
+  const auth = useAuth();
+  const { currentUser, pageLoading, authLoading } = auth;
+
+  // ✅ FIX: use the context client (token-backed), fallback to base client
+  const supabase = auth?.supabaseClient || baseSupabase;
+
+  const hasUser = !!currentUser;
 
   const [clients, setClients] = useState([]);
   const [stylistList, setStylistList] = useState([]);
   const [events, setEvents] = useState([]);
-  const [dbg, setDbg] = useState({});         // 👈 debug dictionary
+
+  const [dbg, setDbg] = useState({});
   const dbgLog = (k, v = true) => {
-    setDbg(prev => ({ ...prev, [k]: v, t: new Date().toISOString() }));
-    // also to console so you don't need UI
-    console.log("[CALDBG]", k, v);
+    const payload = {
+      ...(typeof v === "object" ? v : {}),
+      t: new Date().toISOString(),
+    };
+    setDbg((prev) => ({ ...prev, [k]: payload }));
+    console.log("[CALDBG]", k, payload);
   };
 
   const [selectedSlot, setSelectedSlot] = useState(null);
@@ -109,45 +103,27 @@ export default function CalendarPage() {
   const [visibleDate, setVisibleDate] = useState(new Date());
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
-  // Local loading state for fetchData
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true); // data fetch in progress
+  const [ready, setReady] = useState(false); // calendar is allowed to render
+  const [showReminders, setShowReminders] = useState(false);
+  const [errText, setErrText] = useState("");
 
-  // Keep whatever is there above...
-const toDate = (v) => (v instanceof Date ? v : new Date(v));
+  const isAdmin = currentUser?.permission?.toLowerCase() === "admin";
 
-// inside CalendarPage component:
-const [showReminders, setShowReminders] = useState(false);
-const [errText, setErrText] = useState("");
-
- // Watchdog: if loading > 7s, show what we know
-  useEffect(() => {
-    if (!loading) return;
-    const id = setTimeout(() => {
-      dbgLog("watchdogTimeout", true);
-      setErrText(prev => prev || "Loading took too long (7s watchdog). Check console for [CALDBG] logs.");
-      setLoading(false); // force the loader to exit so you can see the message
-    }, 7000);
-    return () => clearTimeout(id);
-  }, [loading]);
-
-
-const isAdmin = currentUser?.permission?.toLowerCase() === "admin";
-
-const coerceEventForPopup = (ev) => {
-  const rid = ev.resource_id ?? ev.resourceId ?? ev.stylist_id ?? null;
-  const stylist = stylistList.find((s) => s.id === rid);
-  return {
-    ...ev,
-    start: toDate(ev.start),
-    end: toDate(ev.end),
-    resource_id: rid,                 // <-- ensure BookingPopUp can read it
-    resourceId: rid,                  // <-- keep calendar happy too
-    title: ev.title || "No Service Name",
-    stylistName:
-      ev.stylistName || stylist?.name || stylist?.title || "Unknown Stylist",
+  const coerceEventForPopup = (ev) => {
+    const rid = ev.resource_id ?? ev.resourceId ?? ev.stylist_id ?? null;
+    const stylist = stylistList.find((s) => s.id === rid);
+    return {
+      ...ev,
+      start: toDate(ev.start),
+      end: toDate(ev.end),
+      resource_id: rid,
+      resourceId: rid,
+      title: ev.title || "No Service Name",
+      stylistName:
+        ev.stylistName || stylist?.name || stylist?.title || "Unknown Stylist",
+    };
   };
-};
-
 
   const stylist = stylistList.find((s) => s.id === selectedSlot?.resourceId);
 
@@ -159,79 +135,91 @@ const coerceEventForPopup = (ev) => {
       } • ${format(selectedSlot.start, "eeee dd MMM yyyy")} ${format(
         selectedSlot.start,
         "HH:mm"
-      )} - ${format(selectedSlot.end, "HH:mm")} • Stylist: ${stylist?.title ?? ""}`
+      )} - ${format(selectedSlot.end, "HH:mm")} • Stylist: ${
+        stylist?.title ?? ""
+      }`
     : "Booking";
 
   UseTimeSlotLabel(9, 20, 15);
   AddGridTimeLabels(9, 20, 15);
 
-  useEffect(() => {
-    // Wait until auth has finished restoring
-    dbgLog("effect:mount", { hasUser: !!currentUser, authLoading });
+  /* --------- fetch clients, staff, bookings once user is ready --------- */
 
-    if (authLoading) return;         // still restoring
-    if (!currentUser) {
-      // no user at all → show a friendly message instead of throwing
-      setErrText("You must be logged in to view the calendar.");
+  // ✅ StrictMode-safe: only the latest run is allowed to set state
+  const runIdRef = useRef(0);
+
+  useEffect(() => {
+    const hasUserLocal = !!currentUser;
+
+    dbgLog("effect:mount/update", {
+      hasUser: hasUserLocal,
+      authLoading,
+      userId: currentUser?.id ?? null,
+      hasToken: !!currentUser?.token,
+    });
+
+    if (!hasUserLocal) {
+      dbgLog("effect: early exit", { hasUserLocal });
       setLoading(false);
+      setReady(false);
       return;
     }
 
+    const runId = ++runIdRef.current;
+
     const fetchData = async () => {
+      dbgLog("effect: will run fetchData", { runId });
+
       setLoading(true);
       setErrText("");
+      setReady(false);
+      dbgLog("fetchData: start", { runId });
+
       try {
-        // 🔍 Optional: log Supabase session, but DO NOT block on it
-        dbgLog("getSession:start");
-        try {
-          const { data: sessionData, error: sessErr } =
-            await supabase.auth.getSession();
-          dbgLog("getSession:done", {
-            hasSession: !!sessionData?.session,
-            sessErr: !!sessErr,
-          });
-        } catch (e) {
-          dbgLog("getSession:error", e?.message || String(e));
-        }
-
-        dbgLog("queries:start");
-
-        const [
-          { data: clientsData,  error: cErr },
-          { data: staffData,    error: sErr },
-          { data: bookingsData, error: bErr },
-        ] = await Promise.all([
-          supabase.from("clients").select("*"),
-          supabase
-            .from("staff")
-            .select("*")
-            .order("created_at", { ascending: true }),
-          supabase.from("bookings").select("*"),
-        ]);
-
-        console.log("[CALDBG] bookingsData length:", bookingsData?.length, {
-  bookingsSample: bookingsData?.slice(0, 3),
-});
-
-
-        dbgLog("queries:done", {
-          cErr: !!cErr,
-          sErr: !!sErr,
-          bErr: !!bErr,
+        // ---------- STAFF ----------
+        dbgLog("staff query: BEFORE", { runId });
+        const { data: staffData, error: sErr } = await supabase
+          .from("staff")
+          .select("*")
+          .order("created_at", { ascending: true });
+        dbgLog("staff query: AFTER", {
+          runId,
+          error: sErr ? sErr.message : null,
+          count: staffData?.length ?? 0,
         });
-
-        if (cErr) throw cErr;
         if (sErr) throw sErr;
+
+        // ---------- CLIENTS ----------
+        dbgLog("clients query: BEFORE", { runId });
+        const { data: clientsData, error: cErr } = await supabase
+          .from("clients")
+          .select("*");
+        dbgLog("clients query: AFTER", {
+          runId,
+          error: cErr ? cErr.message : null,
+          count: clientsData?.length ?? 0,
+        });
+        if (cErr) throw cErr;
+
+        // ---------- BOOKINGS ----------
+        dbgLog("bookings query: BEFORE", { runId });
+        const { data: bookingsData, error: bErr } = await supabase
+          .from("bookings")
+          .select("*");
+        dbgLog("bookings query: AFTER", {
+          runId,
+          error: bErr ? bErr.message : null,
+          count: bookingsData?.length ?? 0,
+        });
         if (bErr) throw bErr;
 
-        const staff = staffData || [];
-        console.log("✅ Staff fetched:", staff);
+        // ✅ If a newer fetch started, ignore this one
+        if (runId !== runIdRef.current) {
+          dbgLog("fetchData: stale run -> skipping setState", { runId });
+          return;
+        }
 
-        dbgLog("map:setState:start", {
-          staffCount: staff.length,
-          clients: (clientsData || []).length,
-          bookings: (bookingsData || []).length,
-        });
+        const staff = staffData || [];
 
         setClients(clientsData || []);
         setStylistList(
@@ -244,75 +232,90 @@ const coerceEventForPopup = (ev) => {
 
         setEvents(
           (bookingsData || []).map((b) => {
-            const stylist = staff.find((s) => s.id === b.resource_id);
+            const stylistRow = staff.find((s) => s.id === b.resource_id);
             const start = b.start ?? b.start_time;
-            const end   = b.end   ?? b.end_time;
+            const end = b.end ?? b.end_time;
             return {
               ...b,
               start: new Date(start),
               end: new Date(end),
               resourceId: b.resource_id,
-              stylistName: stylist?.name || "Unknown Stylist",
+              stylistName: stylistRow?.name || "Unknown Stylist",
               title: b.title || "No Service Name",
             };
           })
         );
 
-        dbgLog("map:setState:done");
+        dbgLog("fetchData: end of try block", { runId });
       } catch (error) {
-        console.error("❌ Error fetching calendar data:", error);
-        dbgLog("error", error?.message || String(error));
-        setErrText(error?.message || "Failed to load calendar data");
+        console.error("[CALDBG] fetchData: ERROR", error);
+
+        if (runId === runIdRef.current) {
+          setErrText(error?.message || "Failed to load calendar data");
+        }
       } finally {
-        dbgLog("effect:finally:setLoadingFalse");
-        setLoading(false);
+        if (runId === runIdRef.current) {
+          dbgLog("fetchData: finally → setLoading(false), setReady(true)", {
+            runId,
+          });
+          setLoading(false);
+          setReady(true);
+        } else {
+          dbgLog("fetchData: finally but stale run", { runId });
+        }
       }
     };
 
     fetchData();
-  }, [currentUser, authLoading]);
 
+    return () => {
+      dbgLog("effect cleanup", { runId });
+      // no cancelled flag — runIdRef handles staleness
+    };
+  }, [currentUser?.id, supabase]);
 
   const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
 
-const moveEvent = useCallback(
-  async ({ event, start, end, resourceId }) => {
-    const { start: s, end: e } = clampRange(start, end);
-    const rid = resourceId ?? event.resourceId;
+  const moveEvent = useCallback(
+    async ({ event, start, end, resourceId }) => {
+      const { start: s, end: e } = clampRange(start, end);
+      const rid = resourceId ?? event.resourceId;
 
-    const newDuration = (e.getTime() - s.getTime()) / 60000;
+      const newDuration = (e.getTime() - s.getTime()) / 60000;
 
-    const updated = {
-      ...event,
-      start: s,
-      end: e,
-      resourceId: rid,
-      resource_id: rid,
-      duration: newDuration,
-      stylistName: stylistList.find((s1) => s1.id === rid)?.title || "Unknown",
-      allDay: false, // <- belt & braces
-    };
+      const updated = {
+        ...event,
+        start: s,
+        end: e,
+        resourceId: rid,
+        resource_id: rid,
+        duration: newDuration,
+        stylistName:
+          stylistList.find((s1) => s1.id === rid)?.title || "Unknown",
+        allDay: false,
+      };
 
-    setEvents((prev) => prev.map((ev) => (ev.id === event.id ? updated : ev)));
+      setEvents((prev) =>
+        prev.map((ev) => (ev.id === event.id ? updated : ev))
+      );
 
-    try {
-      await supabase
-        .from("bookings")
-        .update({
-          start: s,        // OK to pass Date; supabase-js serializes
-          end: e,
-          resource_id: rid,
-          duration: newDuration,
-        })
-        .eq("id", event.id);
-    } catch (error) {
-      console.error("❌ Failed to move booking:", error);
-    }
-  },
-  [stylistList]
-);
-
+      try {
+        await supabase
+          .from("bookings")
+          .update({
+            start: s,
+            end: e,
+            resource_id: rid,
+            duration: newDuration,
+          })
+          .eq("id", event.id);
+      } catch (error) {
+        console.error("❌ Failed to move booking:", error);
+      }
+    },
+    [stylistList, supabase]
+  );
 
   const handleCancelBookingFlow = () => {
     setIsModalOpen(false);
@@ -323,34 +326,63 @@ const moveEvent = useCallback(
     setStep(1);
   };
 
-if (!currentUser) {
-   console.log("[CALDBG] no currentUser yet");
-   return <div>Loading...</div>;
- }
+  /* ---------- simple auth gate ---------- */
 
- if (!currentUser && !authLoading) {
-  return <div className="p-6">You must be logged in to view the calendar.</div>;
-}
+  // 1) still bootstrapping auth & no user yet → global loader
+  if (authLoading && !hasUser) {
+    return (
+      <div className="p-6">
+        <PageLoader />
+        <pre className="mt-4 p-3 bg-gray-100 text-xs rounded overflow-auto">
+          {JSON.stringify(
+            { stage: "authBoot", pageLoading, authLoading, hasUser },
+            null,
+            2
+          )}
+        </pre>
+      </div>
+    );
+  }
 
- 
-if (pageLoading || authLoading || loading) {
-  return (
-    <div className="p-6">
-      <PageLoader />
-      {errText && (
-        <div className="mt-4 p-3 bg-red-50 text-red-700 rounded">{errText}</div>
-      )}
-      <pre className="mt-4 p-3 bg-gray-100 text-xs rounded overflow-auto">
-        {JSON.stringify({ pageLoading, authLoading, loading, dbg }, null, 2)}
-      </pre>
-    </div>
-  );
-}
+  // 2) auth finished and no user → send them to login
+  if (!hasUser && !authLoading) {
+    return <div className="p-6">You must be logged in to view the calendar.</div>;
+  }
+
+  // 3) user exists, but calendar data not ready yet
+  if (!ready) {
+    return (
+      <div className="p-6">
+        <PageLoader />
+        {errText && (
+          <div className="mt-4 p-3 bg-red-50 text-red-700 rounded">{errText}</div>
+        )}
+        <pre className="mt-4 p-3 bg-gray-100 text-xs rounded overflow-auto">
+          {JSON.stringify(
+            {
+              loading,
+              ready,
+              hasUser,
+              pageLoading,
+              authLoading,
+              dbg,
+            },
+            null,
+            2
+          )}
+        </pre>
+      </div>
+    );
+  }
+
+  /* ----------------- render calendar ----------------- */
 
   return (
     <div className="p-4">
       <div>
-        <h1 className="text-5xl font-bold metallic-text p-5">The Edge HD Salon</h1>
+        <h1 className="text-5xl font-bold metallic-text p-5">
+          The Edge HD Salon
+        </h1>
       </div>
 
       <div className="flex justify-between items-center mb-4">
@@ -416,7 +448,6 @@ if (pageLoading || authLoading || loading) {
         resources={stylistList}
         resourceIdAccessor="id"
         resourceTitleAccessor="title"
-        // resourceAccessor={(e) => e.resourceId}
         date={visibleDate}
         onNavigate={(newDate) => setVisibleDate(newDate)}
         defaultView={Views.DAY}
@@ -440,10 +471,10 @@ if (pageLoading || authLoading || loading) {
           setIsModalOpen(true);
           setStep(1);
         }}
-   onSelectEvent={(event) => {
-   if (event.isUnavailable || event.isSalonClosed) return;
-   setSelectedBooking(coerceEventForPopup(event));
- }}
+        onSelectEvent={(event) => {
+          if (event.isUnavailable || event.isSalonClosed) return;
+          setSelectedBooking(coerceEventForPopup(event));
+        }}
         onEventDrop={moveEvent}
         resizable
         onEventResize={moveEvent}
@@ -474,8 +505,7 @@ if (pageLoading || authLoading || loading) {
           toolbar: () => null,
         }}
         showAllDay={false}
-allDayAccessor={() => false}
-
+        allDayAccessor={() => false}
       />
 
       <BookingPopUp
@@ -513,12 +543,11 @@ allDayAccessor={() => false}
           setClientObj(clients.find((c) => c.id === id));
         }}
         onNext={() => setStep(2)}
-         onClientCreated={(c) => {
-   // Add to local state if not already present
-   setClients((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c]));
-   setSelectedClient(c.id);
-   setClientObj(c);
- }}
+        onClientCreated={(c) => {
+          setClients((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c]));
+          setSelectedClient(c.id);
+          setClientObj(c);
+        }}
       />
 
       <RightDrawer
@@ -547,18 +576,14 @@ allDayAccessor={() => false}
         onClose={handleCancelBookingFlow}
         onBack={() => setStep(2)}
         onConfirm={(newEvents) => {
-   setEvents((prev) => [
-     ...prev,
-     ...newEvents.map(coerceEventForPopup),
-   ]);
-   handleCancelBookingFlow();
- }}
+          setEvents((prev) => [...prev, ...newEvents.map(coerceEventForPopup)]);
+          handleCancelBookingFlow();
+        }}
         clients={clients}
         stylistList={stylistList}
         selectedClient={selectedClient}
         selectedSlot={selectedSlot}
         basket={basket}
-        // Pass currentUser here if needed by child component!
       />
 
       <CalendarModal
@@ -569,25 +594,24 @@ allDayAccessor={() => false}
           setIsCalendarOpen(false);
         }}
       />
+
       {isAdmin && (
-  <>
-    <button
-      onClick={() => setShowReminders(true)}
-      className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 bg-black text-white rounded-full shadow-lg px-5 py-3"
-      title="Send Reminders"
-    >
-      Send Reminders
-    </button>
+        <>
+          <button
+            onClick={() => setShowReminders(true)}
+            className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 bg-black text-white rounded-full shadow-lg px-5 py-3"
+            title="Send Reminders"
+          >
+            Send Reminders
+          </button>
 
-    <RemindersDialog
-      isOpen={showReminders}
-      onClose={() => setShowReminders(false)}
-      // default the dialog's range to the visible week on the calendar:
-      defaultWeekFromDate={visibleDate}
-    />
-  </>
-)}
-
+          <RemindersDialog
+            isOpen={showReminders}
+            onClose={() => setShowReminders(false)}
+            defaultWeekFromDate={visibleDate}
+          />
+        </>
+      )}
     </div>
   );
 }

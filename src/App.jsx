@@ -1,6 +1,6 @@
 // src/App.jsx
 import PublicBookingPage from "./onlinebookings/PublicBookingPage.jsx";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "./contexts/AuthContext.jsx";
 import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
@@ -17,14 +17,30 @@ import PageLoader from "./components/PageLoader.jsx";
 
 function App() {
   const { currentUser, pageLoading, authLoading } = useAuth();
+  const location = useLocation();
 
-  // ✅ Only block when:
-  // - page is loading; OR
-  // - we're refreshing/re-hydrating an *existing* user's session
+  const path = location.pathname;
+
+  // ✅ Public routes should never be blocked by auth restore
+  const isPublicRoute = path === "/book" || path === "/onlinebookings";
+
+  // ✅ Treat "/" as part of the login flow when logged out
+  // (because your unauth catch-all was rendering <Login /> at "/")
+  const isAuthRoute =
+    path === "/login" || path === "/set-pin" || (!currentUser && path === "/");
+
   const shouldBlock =
-    pageLoading || (authLoading && !!currentUser);
+    pageLoading || (authLoading && !currentUser && !isAuthRoute && !isPublicRoute);
 
-  console.log("[APPDBG]", { pageLoading, authLoading, currentUser });
+  console.log("[APPDBG]", {
+    pageLoading,
+    authLoading,
+    currentUser,
+    path,
+    isAuthRoute,
+    isPublicRoute,
+    shouldBlock,
+  });
 
   if (shouldBlock) {
     return (
@@ -32,7 +48,7 @@ function App() {
         <PageLoader />
         <pre className="mt-4 p-3 bg-gray-100 text-xs rounded">
           {JSON.stringify(
-            { pageLoading, authLoading, hasUser: !!currentUser },
+            { pageLoading, authLoading, hasUser: !!currentUser, path },
             null,
             2
           )}
@@ -46,21 +62,24 @@ function App() {
       <Toaster position="top-right" reverseOrder={false} />
 
       <Routes>
-        {/* ✅ Public routes (accessible with or without login) */}
+        {/* ✅ Public routes */}
         <Route path="/book" element={<PublicBookingPage />} />
         <Route path="/onlinebookings" element={<PublicBookingPage />} />
 
         {/* 🔒 Auth-gated routes */}
         {!currentUser ? (
           <>
+            {/* ✅ Make "/" explicitly go to /login so pathname is correct */}
+            <Route path="/" element={<Navigate to="/login" replace />} />
+
             <Route path="/login" element={<Login />} />
             <Route path="/set-pin" element={<SetPin />} />
+
             {/* keep this catch-all AFTER the public routes */}
-            <Route path="*" element={<Login />} />
+            <Route path="*" element={<Navigate to="/login" replace />} />
           </>
         ) : (
           <>
-            {/* Put staff layout ONLY around private pages */}
             <Route element={<StaffLayout />}>
               <Route path="/" element={<CalendarPage />} />
               <Route path="/dashboard" element={<Dashboard />} />

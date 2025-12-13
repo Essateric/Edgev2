@@ -1,6 +1,6 @@
 // src/utils/fetchAndCachePins.js
 import { supabase } from '../supabaseClient';
-import { saveStaffPins } from './pinCache';
+import { saveStaffPins } from '.PinCache';
 
 export async function syncPinsFromSupabase() {
   const { data, error } = await supabase
