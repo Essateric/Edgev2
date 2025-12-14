@@ -15,6 +15,7 @@ import BookingPopUp from "../components/bookings/BookingPopUp";
 import RightDrawer from "../components/RightDrawer";
 import CustomCalendarEvent from "../components/CustomCalendarEvent";
 import SelectClientModal from "../components/clients/SelectClientModal.jsx";
+import SelectClientModalStaff from "../components/clients/SelectClientModalStaff.jsx";
 import ReviewModal from "../components/ReviewModal";
 import NewBooking from "../components/bookings/NewBooking";
 
@@ -140,8 +141,8 @@ export default function CalendarPage() {
       }`
     : "Booking";
 
-  UseTimeSlotLabel(9, 20, 15);
-  AddGridTimeLabels(9, 20, 15);
+  // UseTimeSlotLabel(9, 20, 15);
+  // AddGridTimeLabels(9, 20, 15);
 
   /* --------- fetch clients, staff, bookings once user is ready --------- */
 
@@ -549,6 +550,40 @@ export default function CalendarPage() {
           setClientObj(c);
         }}
       />
+
+<SelectClientModalStaff
+  supabaseClient={supabase}
+  isOpen={isModalOpen && step === 1}
+  onClose={handleCancelBookingFlow}
+  clients={clients}
+  selectedSlot={selectedSlot}
+  selectedClient={selectedClient}
+  setSelectedClient={async (id) => {
+    setSelectedClient(id);
+
+    const local = clients.find((c) => c.id === id);
+    if (local) {
+      setClientObj(local);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("clients")
+      .select("id, first_name, last_name, mobile, email, notes, dob, created_at")
+      .eq("id", id)
+      .single();
+
+    if (error) console.error("[CalendarPage] fetch selected client failed:", error);
+    if (data) setClientObj(data);
+  }}
+  onNext={() => setStep(2)}
+  onClientCreated={(c) => {
+    setClients((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c]));
+    setSelectedClient(c.id);
+    setClientObj(c);
+  }}
+/>
+
 
       <RightDrawer
         isOpen={step === 2}

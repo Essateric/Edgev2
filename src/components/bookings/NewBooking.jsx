@@ -37,16 +37,71 @@ export default function NewBooking({
 
   const [staffServiceOverrides, setStaffServiceOverrides] = useState([]);
 
-  useEffect(() => {
-    async function fetchServices() {
-      const { data } = await supabase.from("services").select("*");
-      setServices(data || []);
-      const cats = [...new Set((data || []).map((s) => s.category))].filter(Boolean);
+const cleanCat = (v) => String(v ?? "").trim();
+
+useEffect(() => {
+  let cancelled = false;
+
+  async function fetchStaffLinkedServices() {
+    // If we have a stylist, only show services linked to them
+    if (stylistId) {
+      const { data, error } = await supabase
+        .from("staff_services")
+        .select(`
+          service_id,
+          price,
+          duration,
+          active,
+          services (
+            id,
+            category,
+            name,
+            is_chemical,
+            base_price,
+            base_duration
+          )
+        `)
+        .eq("staff_id", stylistId)
+        .eq("active", true);
+
+      if (error) console.error("[NewBooking] staff_services join error:", error.message);
+
+      const rows = data || [];
+      const linkedServices = rows.map((r) => r.services).filter(Boolean);
+
+      if (cancelled) return;
+
+      setStaffServiceOverrides(rows);
+      setServices(linkedServices);
+
+      const cats = [...new Set(linkedServices.map((s) => String(s.category || "").trim()))]
+        .filter(Boolean);
+
       setCategories(cats);
       setSelectedCategory(cats[0] || "");
+      return;
     }
-    fetchServices();
-  }, []);
+
+    // Fallback: no stylist selected -> show all services
+    const { data, error } = await supabase.from("services").select("*");
+    if (error) console.error("[NewBooking] services error:", error.message);
+
+    const all = data || [];
+    if (cancelled) return;
+
+    setServices(all);
+    const cats = [...new Set(all.map((s) => String(s.category || "").trim()))].filter(Boolean);
+    setCategories(cats);
+    setSelectedCategory(cats[0] || "");
+  }
+
+  fetchStaffLinkedServices();
+  return () => {
+    cancelled = true;
+  };
+}, [stylistId]);
+
+
 
   useEffect(() => {
     if (!stylistId) return;
@@ -63,21 +118,18 @@ export default function NewBooking({
     return () => { cancelled = true; };
   }, [stylistId]);
 
-  const filteredServices = useMemo(() => {
-    return services.filter(
-      (s) =>
-        s.category === selectedCategory &&
-        (!s.stylist || s.stylist.includes(stylistName))
-    );
-  }, [services, selectedCategory, stylistName]);
+const filteredServices = useMemo(() => {
+  const cat = String(selectedCategory || "").trim();
+  return services.filter((s) => String(s.category || "").trim() === cat);
+}, [services, selectedCategory]);
 
-  const getPriceAndDuration = (service) => {
-    const override = staffServiceOverrides.find((o) => o.service_id === service.id);
-    return {
-      price: override?.price ?? service.base_price,
-      duration: override?.duration ?? service.base_duration,
-    };
+const getPriceAndDuration = (service) => {
+  const row = staffServiceOverrides.find((o) => o.service_id === service.id);
+  return {
+    price: Number(row?.price ?? service.base_price ?? 0),
+    duration: Number(row?.duration ?? service.base_duration ?? 0),
   };
+};
 
   const addToBasket = (service) => {
     const { price, duration } = getPriceAndDuration(service);
