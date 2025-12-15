@@ -8,3 +8,5 @@ dist/
 .history/
 **/.history/
 
+project-tree.txt
+schema.sql

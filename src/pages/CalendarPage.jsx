@@ -379,7 +379,7 @@ export default function CalendarPage() {
   /* ----------------- render calendar ----------------- */
 
   return (
-    <div className="p-4">
+    <div className="p-4 metallic-bg">
       <div>
         <h1 className="text-5xl font-bold metallic-text p-5">
           The Edge HD Salon
