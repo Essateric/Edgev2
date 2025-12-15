@@ -42,7 +42,7 @@ body {
   }
 }
 
-.overflow-auto {
+.metallic-bg {
   background: linear-gradient(135deg, #391f04, #d0a36c, #9b611e);
   background-size: 400% 400%;
   animation: metallicSheen 10s ease infinite;
@@ -102,12 +102,13 @@ body {
   overflow-y: hidden !important;
 }
 
-.p-6{
-  background-color:white;
-  color:gray;
+.panel-white {
+  background-color: white;
+  color: gray;
   padding: .5rem;
   border-radius: 5px;
 }
+
 
 .rbc-time-gutter .rbc-time-slot {
   justify-content: center;
@@ -360,3 +361,9 @@ body {
   visibility: hidden !important;
   pointer-events: none !important;
 }
+
+.modal-panel,
+.modal-panel--xl {
+  overflow: visible !important;
+}
+

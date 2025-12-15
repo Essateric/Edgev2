@@ -1,14 +1,16 @@
-import React, { useEffect, useState } from "react";
+import React, { useMemo, useState } from "react";
 import Modal from "./Modal";
 import Button from "./Button";
 import { format } from "date-fns";
-import { supabase } from "../supabaseClient.js";
 import SaveBookingsLog from "./bookings/SaveBookingsLog";
 import { v4 as uuidv4 } from "uuid";
 
+// ✅ Use token-backed client
+import { useAuth } from "../contexts/AuthContext.jsx";
+
 /* ===== Gap after chemical services ===== */
 const CHEMICAL_GAP_MIN = 30;
-// Extend this list any time
+
 const isChemical = (service) => {
   const text = [service?.name, service?.title, service?.category]
     .filter(Boolean)
@@ -35,6 +37,15 @@ const isChemical = (service) => {
   return keywords.some((k) => text.includes(k));
 };
 
+// Prevent “Booking…” hanging forever if log call stalls
+const withTimeout = (promise, ms, label = "Operation") =>
+  Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    ),
+  ]);
+
 export default function ReviewModal({
   isOpen,
   onClose,
@@ -46,13 +57,24 @@ export default function ReviewModal({
   selectedSlot,
   basket,
 }) {
-  const [loading, setLoading] = useState(false);
+  const { supabaseClient, currentUser } = useAuth();
+  const db = supabaseClient;
 
-  const client = clients.find((c) => c.id === selectedClient);
-  const stylist = stylistList.find((s) => s.id === selectedSlot?.resourceId);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const client = useMemo(
+    () => clients?.find((c) => c.id === selectedClient),
+    [clients, selectedClient]
+  );
+
+  const stylist = useMemo(
+    () => stylistList?.find((s) => s.id === selectedSlot?.resourceId),
+    [stylistList, selectedSlot?.resourceId]
+  );
 
   const clientName = client
-    ? `${client.first_name} ${client.last_name}`
+    ? `${client.first_name} ${client.last_name}`.trim()
     : "Unknown Client";
 
   const timeLabel = selectedSlot
@@ -62,87 +84,62 @@ export default function ReviewModal({
       )} - ${format(selectedSlot.end, "HH:mm")}`
     : "No time selected";
 
-  const mins = basket.reduce((sum, s) => sum + (s.displayDuration || 0), 0);
+  const mins = basket.reduce((sum, s) => sum + (Number(s.displayDuration) || 0), 0);
   const hrs = Math.floor(mins / 60);
   const remainingMins = mins % 60;
+
   const totalPrice = basket.reduce(
     (sum, s) => sum + (Number(s.displayPrice) || 0),
     0
   );
 
-  useEffect(() => {
-    const checkSession = async () => {
-      const { data } = await supabase.auth.getSession();
-      console.log("🔥 Current session:", data?.session);
-    };
-    checkSession();
-  }, []);
-
   const handleConfirm = async () => {
+    setErrorMsg("");
+
+    if (!db) {
+      setErrorMsg("No Supabase client available.");
+      return;
+    }
+    if (!selectedSlot?.start) {
+      setErrorMsg("No start time selected.");
+      return;
+    }
+    if (!basket?.length) {
+      setErrorMsg("Please add at least one service.");
+      return;
+    }
+
+    setLoading(true);
+
     try {
-      setLoading(true);
+      const pathname =
+        (typeof window !== "undefined" && window.location?.pathname) || "";
 
-      const client_id = client?.id;
-      const client_name = `${client?.first_name ?? ""} ${client?.last_name ?? ""}`.trim();
-      const resource_id = stylist?.id;
-      const resource_name = stylist?.title ?? "Unknown";
-      const booking_id = uuidv4();
-
-      // --------- IMPORTANT: avoid staff lookup on public booking routes ----------
-      // If the page path looks like a public booking page, don't try to map a staff.id.
-      // This prevents /rest/v1/staff?uid=... calls (which cause your 400s).
-      const pathname = (typeof window !== "undefined" && window.location?.pathname) || "";
       const isPublicBooking =
         /\/(book|booking|online)/i.test(pathname) ||
-        pathname === "/" /* if your public form is at root */;
+        pathname === "/";
 
-      let logged_by = null;
+      // For your PIN system, currentUser.id is typically staff.id
+      const logged_by = isPublicBooking ? null : currentUser?.id ?? null;
 
-      if (!isPublicBooking) {
-        // Staff/admin context: resolve staff.id (preferred), fallback to auth user.id only in staff context
-        const { data: userData } = await supabase.auth.getUser();
-        const user = userData?.user;
+      const client_id = client?.id ?? null;
+      const client_name = clientName; // always non-empty if client exists
 
-        if (user?.id) {
-          // 1) Prefer staff.uid === auth user.id
-          const { data: byUid, error: byUidErr } = await supabase
-            .from("staff")
-            .select("id")
-            .eq('"UID"', user.id) 
-            .maybeSingle();
+      const resource_id = stylist?.id ?? selectedSlot?.resourceId ?? null;
+      const resource_name = stylist?.title ?? "Unknown";
 
-          if (!byUidErr && byUid?.id) {
-            logged_by = byUid.id;
-          } else if (user.email) {
-            // 2) Fallback by email
-            const { data: byEmail, error: byEmailErr } = await supabase
-              .from("staff")
-              .select("id")
-              .eq("email", user.email)
-              .maybeSingle();
-            if (!byEmailErr && byEmail?.id) {
-              logged_by = byEmail.id;
-            } else {
-              // 3) Last resort: ONLY in staff context, use auth UID
-              logged_by = user.id;
-            }
-          } else {
-            logged_by = user.id;
-          }
-        } else {
-          logged_by = null;
-        }
-      } else {
-        // Public flow: never query staff table; keep null
-        logged_by = null;
-      }
-      // ---------------------------------------------------------------------------
+      const booking_id = uuidv4();
+
+      // Public policy expects client_id null + source='public' + status pending/confirmed
+      const client_id_for_booking = isPublicBooking ? null : client_id;
+      const source = isPublicBooking ? "public" : "staff";
+      const status = "pending";
 
       const newBookings = [];
       let currentStart = new Date(selectedSlot.start);
 
       for (const service of basket) {
-        const durationMins = service.displayDuration || 0;
+        const durationMins = Math.max(1, Number(service.displayDuration || 0));
 
         const startISO = currentStart.toISOString();
         const currentEnd = new Date(currentStart.getTime() + durationMins * 60000);
@@ -150,27 +147,30 @@ export default function ReviewModal({
 
         const newBooking = {
           booking_id,
-          client_id,
+          client_id: client_id_for_booking,
           client_name,
           resource_id,
           start: startISO,
           end: endISO,
           title: service.name,
-          price: service.displayPrice,
-          duration: service.displayDuration,
+          price: Number(service.displayPrice) || 0,
+          duration: durationMins,
           category: service.category || "Uncategorised",
+          source,
+          status,
         };
 
-        const { data: bookingData, error: bookingError } = await supabase
+        console.log("[ReviewModal] inserting booking", newBooking);
+
+        const { data: bookingData, error: bookingError } = await db
           .from("bookings")
           .insert([newBooking])
-          .select()
+          .select("*")
           .single();
 
-        if (bookingError) {
-          console.error("❌ Booking failed:", bookingError.message);
-          return;
-        }
+        console.log("[ReviewModal] insert result", { bookingData, bookingError });
+
+        if (bookingError) throw bookingError;
 
         newBookings.push({
           ...bookingData,
@@ -179,23 +179,30 @@ export default function ReviewModal({
           resourceId: bookingData.resource_id,
         });
 
-        await SaveBookingsLog({
-          action: "created",
-          booking_id,
-          client_id,
-          client_name,
-          stylist_id: resource_id,
-          stylist_name: resource_name,
-          service,
-          start: startISO,
-          end: endISO,
-          logged_by, // UUID or null
-          reason: "Manual Booking",  
-          before_snapshot: null,
-          after_snapshot: newBooking,
+        // Don’t let logs block the booking flow forever
+        withTimeout(
+          SaveBookingsLog({
+            action: "created",
+            booking_id,
+            client_id: client_id_for_booking,
+            client_name,
+            stylist_id: resource_id,
+            stylist_name: resource_name,
+            service,
+            start: startISO,
+            end: endISO,
+            logged_by,
+            reason: isPublicBooking ? "Public Booking" : "Manual Booking",
+            before_snapshot: null,
+            after_snapshot: newBooking,
+          }),
+          8000,
+          "SaveBookingsLog"
+        ).catch((e) => {
+          console.warn("[ReviewModal] log failed (non-blocking):", e?.message || e);
         });
 
-        // ⬇️ Add 30-minute gap AFTER chemical services
+        // Add chemical gap
         if (isChemical(service)) {
           currentStart = new Date(currentEnd.getTime() + CHEMICAL_GAP_MIN * 60000);
         } else {
@@ -203,10 +210,11 @@ export default function ReviewModal({
         }
       }
 
-      console.log("✅ All bookings and logs saved");
-      onConfirm(newBookings);
+      console.log("✅ All bookings saved");
+      if (typeof onConfirm === "function") onConfirm(newBookings);
     } catch (err) {
-      console.error("🔥 Something went wrong:", err.message);
+      console.error("🔥 Booking error:", err);
+      setErrorMsg(err?.message || "Something went wrong while booking.");
     } finally {
       setLoading(false);
     }
@@ -216,6 +224,10 @@ export default function ReviewModal({
     <Modal isOpen={isOpen} onClose={onClose}>
       <div className="bg-white rounded-md shadow p-4 max-w-md w-full">
         <h2 className="text-lg font-bold text-bronze mb-2">Review Booking</h2>
+
+        {!!errorMsg && (
+          <div className="mb-3 text-sm text-red-600">{errorMsg}</div>
+        )}
 
         <div className="mb-2">
           <p className="font-semibold text-gray-700">{clientName}</p>
@@ -227,15 +239,18 @@ export default function ReviewModal({
 
         <div className="border rounded p-2 mb-3">
           <h4 className="font-semibold text-bronze mb-1">Services</h4>
+
           {basket.map((b, i) => (
             <div key={i} className="flex justify-between text-sm text-gray-700">
               <span>{b.name}</span>
-              <span>£{b.displayPrice}</span>
+              <span>£{Number(b.displayPrice || 0)}</span>
               <span>
-                {Math.floor(b.displayDuration / 60)}h {b.displayDuration % 60}m
+                {Math.floor((Number(b.displayDuration || 0)) / 60)}h{" "}
+                {(Number(b.displayDuration || 0)) % 60}m
               </span>
             </div>
           ))}
+
           <div className="mt-2 border-t pt-1 flex justify-between font-semibold">
             <span>Total</span>
             <span>£{totalPrice.toFixed(2)}</span>
@@ -246,8 +261,12 @@ export default function ReviewModal({
         </div>
 
         <div className="flex justify-between mt-4">
-          <Button onClick={onBack}>Back</Button>
+          <Button type="button" onClick={onBack} disabled={loading}>
+            Back
+          </Button>
+
           <Button
+            type="button"
             onClick={handleConfirm}
             className="bg-green-600 text-white hover:bg-green-700"
             disabled={loading}
