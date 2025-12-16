@@ -108,6 +108,8 @@ export default function CalendarPage() {
   const [ready, setReady] = useState(false); // calendar is allowed to render
   const [showReminders, setShowReminders] = useState(false);
   const [errText, setErrText] = useState("");
+  const [reviewData, setReviewData] = useState(null);
+
 
   const isAdmin = currentUser?.permission?.toLowerCase() === "admin";
 
@@ -324,6 +326,7 @@ export default function CalendarPage() {
     setSelectedClient("");
     setClientObj(null);
     setBasket([]);
+    setReviewData(null); 
     setStep(1);
   };
 
@@ -602,7 +605,11 @@ export default function CalendarPage() {
           setBasket={setBasket}
           onBack={() => setStep(1)}
           onCancel={handleCancelBookingFlow}
-          onNext={() => setStep(3)}
+onNext={(payload) => {
+  setReviewData(payload || null);
+  setStep(3);
+}}
+
         />
       </RightDrawer>
 
@@ -615,6 +622,8 @@ export default function CalendarPage() {
           handleCancelBookingFlow();
         }}
         clients={clients}
+          clientObj={clientObj}       // ✅ add
+  reviewData={reviewData} 
         stylistList={stylistList}
         selectedClient={selectedClient}
         selectedSlot={selectedSlot}

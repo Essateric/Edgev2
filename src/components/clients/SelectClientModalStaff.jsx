@@ -238,13 +238,14 @@ export default function SelectClientModalStaff({
               {creating ? "Saving..." : "Use this client"}
             </button>
 
-            <button
-              onClick={onNext}
-              className="bg-bronze text-white px-4 py-2 rounded"
-              disabled={!selectedClient}
-            >
-              Next
-            </button>
+  <button
+  onClick={() => onNext?.(selectedOption?.client || null)}
+  className="bg-bronze text-white px-4 py-2 rounded"
+  disabled={!selectedClient}
+>
+  Next
+</button>
+
           </div>
         </div>
       </div>

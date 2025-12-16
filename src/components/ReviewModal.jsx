@@ -4,8 +4,6 @@ import Button from "./Button";
 import { format } from "date-fns";
 import SaveBookingsLog from "./bookings/SaveBookingsLog";
 import { v4 as uuidv4 } from "uuid";
-
-// ✅ Use token-backed client
 import { useAuth } from "../contexts/AuthContext.jsx";
 
 /* ===== Gap after chemical services ===== */
@@ -52,6 +50,8 @@ export default function ReviewModal({
   onBack,
   onConfirm,
   clients,
+  clientObj, // ✅ passed from CalendarPage
+  reviewData, // ✅ payload from NewBooking.onNext(...)
   stylistList,
   selectedClient,
   selectedSlot,
@@ -63,19 +63,41 @@ export default function ReviewModal({
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  const client = useMemo(
-    () => clients?.find((c) => c.id === selectedClient),
+  // Existing lookup (may fail if clients[] doesn’t contain the selected client)
+  const clientFromList = useMemo(
+    () => clients?.find((c) => c.id === selectedClient) || null,
     [clients, selectedClient]
   );
 
   const stylist = useMemo(
-    () => stylistList?.find((s) => s.id === selectedSlot?.resourceId),
+    () => stylistList?.find((s) => s.id === selectedSlot?.resourceId) || null,
     [stylistList, selectedSlot?.resourceId]
   );
 
-  const clientName = client
-    ? `${client.first_name} ${client.last_name}`.trim()
-    : "Unknown Client";
+  // ✅ FIX: resolve client id using reviewData FIRST (NewBooking already knows it),
+  // then fall back to local props/state
+  const resolvedClientId = useMemo(() => {
+    return (
+      reviewData?.client_id ??
+      reviewData?.client?.id ??
+      clientObj?.id ??
+      clientFromList?.id ??
+      selectedClient ??
+      null
+    );
+  }, [reviewData, clientObj, clientFromList, selectedClient]);
+
+  // ✅ FIX: resolve displayable name reliably
+  const resolvedClientName = useMemo(() => {
+    return (
+      reviewData?.client_name ||
+      (clientObj
+        ? `${clientObj.first_name ?? ""} ${clientObj.last_name ?? ""}`.trim()
+        : clientFromList
+          ? `${clientFromList.first_name ?? ""} ${clientFromList.last_name ?? ""}`.trim()
+          : "Unknown Client")
+    );
+  }, [reviewData, clientObj, clientFromList]);
 
   const timeLabel = selectedSlot
     ? `${format(selectedSlot.start, "eeee dd MMM yyyy")} ${format(
@@ -84,7 +106,10 @@ export default function ReviewModal({
       )} - ${format(selectedSlot.end, "HH:mm")}`
     : "No time selected";
 
-  const mins = basket.reduce((sum, s) => sum + (Number(s.displayDuration) || 0), 0);
+  const mins = basket.reduce(
+    (sum, s) => sum + (Number(s.displayDuration) || 0),
+    0
+  );
   const hrs = Math.floor(mins / 60);
   const remainingMins = mins % 60;
 
@@ -116,22 +141,18 @@ export default function ReviewModal({
         (typeof window !== "undefined" && window.location?.pathname) || "";
 
       const isPublicBooking =
-        /\/(book|booking|online)/i.test(pathname) ||
-        pathname === "/";
+        /\/(book|booking|online)/i.test(pathname) || pathname === "/";
 
       // For your PIN system, currentUser.id is typically staff.id
       const logged_by = isPublicBooking ? null : currentUser?.id ?? null;
-
-      const client_id = client?.id ?? null;
-      const client_name = clientName; // always non-empty if client exists
 
       const resource_id = stylist?.id ?? selectedSlot?.resourceId ?? null;
       const resource_name = stylist?.title ?? "Unknown";
 
       const booking_id = uuidv4();
 
-      // Public policy expects client_id null + source='public' + status pending/confirmed
-      const client_id_for_booking = isPublicBooking ? null : client_id;
+      // Public policy expects client_id null
+      const client_id_for_booking = isPublicBooking ? null : resolvedClientId;
       const source = isPublicBooking ? "public" : "staff";
       const status = "pending";
 
@@ -142,13 +163,15 @@ export default function ReviewModal({
         const durationMins = Math.max(1, Number(service.displayDuration || 0));
 
         const startISO = currentStart.toISOString();
-        const currentEnd = new Date(currentStart.getTime() + durationMins * 60000);
+        const currentEnd = new Date(
+          currentStart.getTime() + durationMins * 60000
+        );
         const endISO = currentEnd.toISOString();
 
         const newBooking = {
           booking_id,
           client_id: client_id_for_booking,
-          client_name,
+          client_name: resolvedClientName,
           resource_id,
           start: startISO,
           end: endISO,
@@ -179,13 +202,12 @@ export default function ReviewModal({
           resourceId: bookingData.resource_id,
         });
 
-        // Don’t let logs block the booking flow forever
         withTimeout(
           SaveBookingsLog({
             action: "created",
             booking_id,
             client_id: client_id_for_booking,
-            client_name,
+            client_name: resolvedClientName,
             stylist_id: resource_id,
             stylist_name: resource_name,
             service,
@@ -199,12 +221,17 @@ export default function ReviewModal({
           8000,
           "SaveBookingsLog"
         ).catch((e) => {
-          console.warn("[ReviewModal] log failed (non-blocking):", e?.message || e);
+          console.warn(
+            "[ReviewModal] log failed (non-blocking):",
+            e?.message || e
+          );
         });
 
         // Add chemical gap
         if (isChemical(service)) {
-          currentStart = new Date(currentEnd.getTime() + CHEMICAL_GAP_MIN * 60000);
+          currentStart = new Date(
+            currentEnd.getTime() + CHEMICAL_GAP_MIN * 60000
+          );
         } else {
           currentStart = new Date(currentEnd);
         }
@@ -230,7 +257,7 @@ export default function ReviewModal({
         )}
 
         <div className="mb-2">
-          <p className="font-semibold text-gray-700">{clientName}</p>
+          <p className="font-semibold text-gray-700">{resolvedClientName}</p>
           <p className="text-sm text-gray-600">{timeLabel}</p>
           <p className="text-sm text-gray-600">
             Stylist: {stylist?.title || "Unknown"}

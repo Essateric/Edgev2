@@ -1,9 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Button from "../Button";
-
-// ✅ use the token-backed client from AuthContext
 import { useAuth } from "../../contexts/AuthContext.jsx";
-// ^ if your file is in a different folder, adjust the ../../ part
 
 const CHEMICAL_GAP_MIN = 30;
 
@@ -46,8 +43,8 @@ export default function NewBooking({
   onCancel,
   onNext,
 }) {
-  const { supabaseClient, currentUser } = useAuth(); // ✅ important
-  const db = supabaseClient; // alias so it’s obvious which client we’re using
+  const { supabaseClient, currentUser } = useAuth();
+  const db = supabaseClient;
 
   const [categories, setCategories] = useState([]);
   const [services, setServices] = useState([]);
@@ -58,15 +55,89 @@ export default function NewBooking({
   const [warnFallbackAll, setWarnFallbackAll] = useState(false);
   const [loadError, setLoadError] = useState("");
 
-  // quick sanity log: are we holding a PIN token?
+  // ✅ If stylistId prop is missing, fallback to slot.resourceId (because that IS the staff id)
+  const effectiveStylistId = useMemo(() => {
+    return stylistId || selectedSlot?.resourceId || null;
+  }, [stylistId, selectedSlot?.resourceId]);
+
+  // ✅ If clientObj is missing (or not the same id), fetch the client by id so we ALWAYS have a name
+  const [fetchedClient, setFetchedClient] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function fetchClient() {
+      if (!db || !selectedClient) {
+        if (alive) setFetchedClient(null);
+        return;
+      }
+
+      // if the parent already gave us the correct client row, don’t fetch
+      if (clientObj?.id && clientObj.id === selectedClient) {
+        if (alive) setFetchedClient(null);
+        return;
+      }
+
+      // if it exists in clients[] already, don’t fetch
+      const fromList = (clients || []).find((c) => c.id === selectedClient);
+      if (fromList) {
+        if (alive) setFetchedClient(fromList);
+        return;
+      }
+
+      const { data, error } = await db
+        .from("clients")
+        .select("id, first_name, last_name, email, mobile, dob")
+        .eq("id", selectedClient)
+        .maybeSingle();
+
+      if (!alive) return;
+      if (error) {
+        console.warn("[NewBooking] fetch client by id failed:", error);
+        setFetchedClient(null);
+        return;
+      }
+
+      setFetchedClient(data || null);
+    }
+
+    fetchClient();
+    return () => {
+      alive = false;
+    };
+  }, [db, selectedClient, clientObj?.id, clients]);
+
+  // ✅ single “truth” for client
+  const effectiveClient = useMemo(() => {
+    if (clientObj?.id) return clientObj;
+    if (fetchedClient?.id) return fetchedClient;
+    if (selectedClient) return (clients || []).find((c) => c.id === selectedClient) || null;
+    return null;
+  }, [clientObj, fetchedClient, clients, selectedClient]);
+
+  const effectiveClientId = effectiveClient?.id ?? selectedClient ?? null;
+
+  const effectiveClientName = useMemo(() => {
+    if (effectiveClient) {
+      const nm = `${effectiveClient.first_name ?? ""} ${effectiveClient.last_name ?? ""}`.trim();
+      return nm || "Unknown Client";
+    }
+    return "Unknown Client";
+  }, [effectiveClient]);
+
+  // quick sanity log
   useEffect(() => {
     console.log("[NewBooking] currentUser", {
       hasUser: !!currentUser,
       hasToken: !!currentUser?.token,
       offline: !!currentUser?.offline,
-      stylistId,
+      stylistIdProp: stylistId,
+      effectiveStylistId,
+      selectedClient,
+      hasClientObj: !!clientObj,
+      hasEffectiveClient: !!effectiveClient,
     });
-  }, [currentUser, stylistId]);
+  }, [currentUser, stylistId, effectiveStylistId, selectedClient, clientObj, effectiveClient]);
 
   useEffect(() => {
     let cancelled = false;
@@ -85,7 +156,7 @@ export default function NewBooking({
 
       try {
         // 1) If stylist selected: try staff_services join
-        if (stylistId) {
+        if (effectiveStylistId) {
           const { data: linkRows, error: linkErr } = await db
             .from("staff_services")
             .select(
@@ -104,7 +175,7 @@ export default function NewBooking({
               )
             `
             )
-            .eq("staff_id", stylistId)
+            .eq("staff_id", effectiveStylistId)
             .eq("active", true);
 
           if (linkErr) {
@@ -121,10 +192,9 @@ export default function NewBooking({
             const cats = buildCats(linkedServices);
             setCategories(cats);
             setSelectedCategory((prev) => (prev && cats.includes(prev) ? prev : cats[0] || ""));
-            return; // ✅ done
+            return;
           }
 
-          // stylist selected but no links -> fallback
           if (!cancelled) {
             setStaffLinks(rows);
             setWarnFallbackAll(true);
@@ -178,7 +248,7 @@ export default function NewBooking({
     return () => {
       cancelled = true;
     };
-  }, [db, stylistId]);
+  }, [db, effectiveStylistId]);
 
   const getPriceAndDuration = (service) => {
     const row = staffLinks.find((o) => o.service_id === service.id);
@@ -262,8 +332,9 @@ export default function NewBooking({
     <div className="flex flex-col h-full">
       <div className="mb-4">
         <h2 className="text-lg font-bold text-bronze">
-          Booking for {clientObj?.first_name} {clientObj?.last_name}
+          Booking for {effectiveClientName}
         </h2>
+
         <p className="text-sm text-gray-700">Stylist: {stylistName || "Unknown"}</p>
 
         <p className="text-[11px] text-gray-400 mt-1">
@@ -416,48 +487,56 @@ export default function NewBooking({
         </div>
       </div>
 
-<div className="flex justify-between border-t border-gray-300 px-4 py-3">
-  <div className="flex gap-2">
-    <Button type="button" onClick={onBack}>
-      Back
-    </Button>
-    <Button
-      type="button"
-      onClick={onCancel}
-      className="bg-red-500 text-white hover:bg-red-600"
-    >
-      Cancel
-    </Button>
-  </div>
+      <div className="flex justify-between border-t border-gray-300 px-4 py-3">
+        <div className="flex gap-2">
+          <Button type="button" onClick={onBack}>
+            Back
+          </Button>
+          <Button
+            type="button"
+            onClick={onCancel}
+            className="bg-red-500 text-white hover:bg-red-600"
+          >
+            Cancel
+          </Button>
+        </div>
 
-  <Button
-    type="button"
-    onClick={() => {
-      console.log("[NewBooking] Review Booking clicked", {
-        hasOnNext: typeof onNext === "function",
-        basketLen: basket?.length ?? 0,
-      });
+        <Button
+          type="button"
+          onClick={() => {
+            console.log("[NewBooking] Review Booking clicked", {
+              hasOnNext: typeof onNext === "function",
+              basketLen: basket?.length ?? 0,
+              selectedClient: effectiveClientId,
+              effectiveClientName,
+              effectiveStylistId,
+            });
 
-      if (typeof onNext !== "function") {
-        console.warn("[NewBooking] onNext is missing or not a function");
-        return;
-      }
+            if (typeof onNext !== "function") {
+              console.warn("[NewBooking] onNext is missing or not a function");
+              return;
+            }
 
-      onNext({
-        timeline,
-        hasChemical,
-        sumActiveDuration,
-        totalSpanMins,
-        basket,
-      });
-    }}
-    className="bg-green-600 text-white hover:bg-green-700"
-    disabled={basket.length === 0}
-  >
-    Review Booking
-  </Button>
-</div>
-
+            // ✅ FIX: include client id + name (+client row) in the payload
+            onNext({
+              timeline,
+              hasChemical,
+              sumActiveDuration,
+              totalSpanMins,
+              basket,
+              client_id: effectiveClientId,
+              client_name: effectiveClientName,
+              client: effectiveClient,
+              stylist_id: effectiveStylistId,
+              stylist_name: stylistName || "Unknown",
+            });
+          }}
+          className="bg-green-600 text-white hover:bg-green-700"
+          disabled={basket.length === 0}
+        >
+          Review Booking
+        </Button>
+      </div>
     </div>
   );
 }
