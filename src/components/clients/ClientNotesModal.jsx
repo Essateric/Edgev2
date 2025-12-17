@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
-import { supabase } from "../../supabaseClient";
+import supabase from "../../supabaseClient";
+
 import Modal from "../Modal";
 import Button from "../Button";
 import ClientHistoryFullScreen from "../../pages/ClientHistory";
@@ -9,10 +10,16 @@ import { useAuth } from "../../contexts/AuthContext";
 /**
  * Props:
  * - isOpen, onClose
- * - clientId (required)
- * - bookingId (optional, the specific booking row this modal is opened from)
+ * - clientId (required)  ✅ should be clients.id (uuid)
+ * - bookingId (optional) ✅ should be bookings.id (uuid) OR sometimes a legacy group id (bookings.booking_id text)
  */
-export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId = null, modalZIndex = 60, }) {
+export default function ClientNotesModal({
+  isOpen,
+  onClose,
+  clientId,
+  bookingId = null,
+  modalZIndex = 60,
+}) {
   const [client, setClient] = useState(null);
 
   // Email editing
@@ -28,8 +35,8 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
   // History (bookings)
   const [history, setHistory] = useState([]);
   const [providerMap, setProviderMap] = useState({}); // { staffId: "Name" }
-  const [bookingMetaByRowId, setBookingMetaByRowId] = useState({});   // { bookingRowId: { when, title } }
-  const [bookingMetaByGroupId, setBookingMetaByGroupId] = useState({}); // { bookingGroupId(UUID): { when, title } }
+  const [bookingMetaByRowId, setBookingMetaByRowId] = useState({}); // { bookingRowId: { when, title } }
+  const [bookingMetaByGroupId, setBookingMetaByGroupId] = useState({}); // { bookingGroupId(text): { when, title } }
 
   const [showFullHistory, setShowFullHistory] = useState(false);
 
@@ -42,88 +49,201 @@ export default function ClientNotesModal({ isOpen, onClose, clientId, bookingId 
   const [historyPage, setHistoryPage] = useState(1);
   const [notesPage, setNotesPage] = useState(1);
 
-  // 🔹 current signed-in user
+  // 🔹 current signed-in user (PIN auth etc)
   const { currentUser } = useAuth();
+
+  // Internal: resolved IDs (fixes “wrong id passed in” issues)
+  const [effectiveClientId, setEffectiveClientId] = useState(null);
+  const [effectiveBookingRowId, setEffectiveBookingRowId] = useState(null);
 
   // -------- helpers --------
   const isValidEmail = (s) =>
     !s || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s).trim());
 
-// in ClientNotesModal (getCurrentStaffIdentity)
-const getCurrentStaffIdentity = async () => {
-  try {
-    const { data: { user } = {} } = await supabase.auth.getUser();
-    if (!user) {
-      return { staffId: null, authId: null, name: "Stylist", email: null, permission: null };
-    }
+  const isUuid = (v) =>
+    typeof v === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      v
+    );
 
-    if (user.email) {
-      const { data } = await supabase
-        .from("staff")
-        .select("id, name, email, permission")
-        .eq("email", user.email)
-        .maybeSingle();
-
-      if (data) {
+  // Prefer your PIN/currentUser identity if present, otherwise fall back to Supabase auth user
+  const getCurrentStaffIdentity = async () => {
+    try {
+      if (currentUser?.id || currentUser?.email || currentUser?.name) {
         return {
-          staffId: data.id || null,
-          authId: user.id,
-          name: data.name || data.email || (user.email ? user.email.split("@")[0] : "Stylist"),
-          email: data.email || user.email || null,
-          permission: data.permission || null,
+          staffId: currentUser?.id || null,
+          authId: null,
+          name:
+            currentUser?.name ||
+            (currentUser?.email ? currentUser.email.split("@")[0] : "Stylist"),
+          email: currentUser?.email || null,
+          permission: currentUser?.permission || null,
         };
       }
+
+      const { data: { user } = {} } = await supabase.auth.getUser();
+      if (!user) {
+        return {
+          staffId: null,
+          authId: null,
+          name: "Stylist",
+          email: null,
+          permission: null,
+        };
+      }
+
+      if (user.email) {
+        const { data } = await supabase
+          .from("staff")
+          .select("id, name, email, permission")
+          .eq("email", user.email)
+          .maybeSingle();
+
+        if (data) {
+          return {
+            staffId: data.id || null,
+            authId: user.id,
+            name:
+              data.name ||
+              data.email ||
+              (user.email ? user.email.split("@")[0] : "Stylist"),
+            email: data.email || user.email || null,
+            permission: data.permission || null,
+          };
+        }
+      }
+
+      return {
+        staffId: null,
+        authId: user.id,
+        name:
+          user.user_metadata?.name ||
+          (user.email ? user.email.split("@")[0] : "Stylist"),
+        email: user.email || null,
+        permission: null,
+      };
+    } catch {
+      return {
+        staffId: null,
+        authId: null,
+        name: "Stylist",
+        email: null,
+        permission: null,
+      };
     }
-
-    return {
-      staffId: null,
-      authId: user.id,
-      name: user.user_metadata?.name || (user.email ? user.email.split("@")[0] : "Stylist"),
-      email: user.email || null,
-      permission: null,
-    };
-  } catch {
-    return { staffId: null, authId: null, name: "Stylist", email: null, permission: null };
-  }
-};
-
+  };
 
   const resolveCurrentStaffName = async () => {
     const who = await getCurrentStaffIdentity();
     return who.name || "Stylist";
   };
 
-const loadNotes = async () => {
-  const res = await supabase
-    .from("client_notes")
-    .select("id, client_id, note_content, created_by, created_at, booking_id") // ⬅️ no booking_group_id
-    .eq("client_id", clientId)
-    .order("created_at", { ascending: false });
+  const loadNotes = async (cid) => {
+    const res = await supabase
+      .from("client_notes")
+      .select("id, client_id, note_content, created_by, created_at, booking_id")
+      .eq("client_id", cid)
+      .order("created_at", { ascending: false });
 
-  if (!res.error) setNotes(res.data || []);
-  else console.error("Error fetching notes:", res.error.message);
-};
+    if (!res.error) setNotes(res.data || []);
+    else console.error("Error fetching notes:", res.error.message);
+  };
 
+  // -------- resolve correct client + booking ids on open --------
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let active = true;
+
+    // reset “stale UI” when reopening
+    setIsEditingEmail(false);
+    setEmailError("");
+    setSavingEmail(false);
+    setShowFullHistory(false);
+
+    (async () => {
+      let resolvedClientId = isUuid(clientId) ? clientId : null;
+      let resolvedBookingRowId = isUuid(bookingId) ? bookingId : null;
+
+      // If bookingId is provided, try to resolve it to a booking row + its client_id.
+      // This fixes cases where the parent accidentally passes booking.id as clientId,
+      // or passes a legacy booking_id (text) instead of the booking row uuid.
+      if (bookingId) {
+        // Case A: bookingId is a booking row uuid
+        if (isUuid(bookingId)) {
+          const { data, error } = await supabase
+            .from("bookings")
+            .select("id, client_id")
+            .eq("id", bookingId)
+            .maybeSingle();
+
+          if (!error && data?.id) {
+            resolvedBookingRowId = data.id;
+            if (!resolvedClientId && data.client_id) resolvedClientId = data.client_id;
+          }
+        } else {
+          // Case B: bookingId is a booking group id (bookings.booking_id text)
+          const { data, error } = await supabase
+            .from("bookings")
+            .select("id, client_id")
+            .eq("booking_id", bookingId)
+            .order("start", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (!error && data?.id) {
+            resolvedBookingRowId = data.id;
+            if (!resolvedClientId && data.client_id) resolvedClientId = data.client_id;
+          }
+        }
+      }
+
+      if (!active) return;
+
+      setEffectiveClientId(resolvedClientId || null);
+      setEffectiveBookingRowId(resolvedBookingRowId || null);
+
+      // Helpful for catching wrong-id bugs quickly (doesn't break anything)
+      if (!resolvedClientId) {
+        console.warn("[ClientNotesModal] No resolved client id:", { clientId, bookingId });
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [isOpen, clientId, bookingId]);
 
   // -------- data loads --------
-  // Client + stylist name on open
+  // Client + stylist name on open (uses effectiveClientId)
   useEffect(() => {
-    if (!isOpen || !clientId) return;
+    if (!isOpen || !effectiveClientId) return;
     let active = true;
 
     (async () => {
       const { data, error } = await supabase
         .from("clients")
         .select("id, first_name, last_name, email")
-        .eq("id", clientId)
-        .single();
+        .eq("id", effectiveClientId)
+        .maybeSingle();
 
       if (!active) return;
-      if (!error) {
+
+      if (!error && data) {
         setClient(data);
         setEmailInput(data?.email || "");
+      } else if (error) {
+        console.error("Fetch client failed:", error.message, {
+          effectiveClientId,
+          clientId,
+          bookingId,
+        });
+        setClient(null);
+        setEmailInput("");
       } else {
-        console.error("Fetch client failed:", error.message);
+        // no row returned
+        setClient(null);
+        setEmailInput("");
       }
     })();
 
@@ -132,22 +252,29 @@ const loadNotes = async () => {
       if (active && name) setStaffName(name);
     })();
 
-    return () => { active = false; };
-  }, [isOpen, clientId]);
+    return () => {
+      active = false;
+    };
+  }, [isOpen, effectiveClientId]);
 
   // Notes on open
-  useEffect(() => { if (isOpen && clientId) { loadNotes(); setNotesPage(1); } }, [isOpen, clientId]);
+  useEffect(() => {
+    if (isOpen && effectiveClientId) {
+      loadNotes(effectiveClientId);
+      setNotesPage(1);
+    }
+  }, [isOpen, effectiveClientId]);
 
   // --- Load history (bookings) when opened ---
   useEffect(() => {
-    if (!isOpen || !clientId) return;
+    if (!isOpen || !effectiveClientId) return;
     let active = true;
 
     (async () => {
       const { data, error } = await supabase
         .from("bookings")
-        .select("id, booking_id, start, title, category, resource_id") // include group id
-        .eq("client_id", clientId)
+        .select("id, booking_id, start, title, category, resource_id")
+        .eq("client_id", effectiveClientId)
         .order("start", { ascending: false })
         .order("id", { ascending: true });
 
@@ -163,15 +290,13 @@ const loadNotes = async () => {
 
       const rows = data || [];
 
-      // De-duplicate by natural key (resource_id + start + title)
+      // De-duplicate by natural key (resource_id + start + title) safely
       const seen = new Set();
       const unique = [];
       for (const b of rows) {
-        const k = [
-          b.resource_id || "",
-          new Date(b.start).toISOString(),
-          b.title || ""
-        ].join("|");
+        const d = new Date(b.start);
+        const startIso = isNaN(d) ? "" : d.toISOString();
+        const k = [b.resource_id || "", startIso, b.title || ""].join("|");
         if (!seen.has(k)) {
           seen.add(k);
           unique.push(b);
@@ -182,7 +307,9 @@ const loadNotes = async () => {
       setHistoryPage(1);
 
       // Provider map
-      const ids = Array.from(new Set(unique.map((b) => b.resource_id).filter(Boolean)));
+      const ids = Array.from(
+        new Set(unique.map((b) => b.resource_id).filter(Boolean))
+      );
       if (ids.length) {
         const { data: staffRows, error: staffErr } = await supabase
           .from("staff")
@@ -212,14 +339,17 @@ const loadNotes = async () => {
           title: (b.category ? `${b.category}: ` : "") + (b.title || ""),
         };
         byRow[b.id] = meta;
-        if (b.booking_id) byGroup[b.booking_id] = meta; // map group UUID too
+        if (b.booking_id) byGroup[b.booking_id] = meta; // bookings.booking_id (text)
       });
+
       setBookingMetaByRowId(byRow);
       setBookingMetaByGroupId(byGroup);
     })();
 
-    return () => { active = false; };
-  }, [isOpen, clientId]);
+    return () => {
+      active = false;
+    };
+  }, [isOpen, effectiveClientId]);
 
   // -------- pagination helpers --------
   const paginatedHistory = useMemo(() => {
@@ -244,15 +374,25 @@ const loadNotes = async () => {
     const text = noteContent.trim();
     if (!text) return;
 
+    if (!effectiveClientId) {
+      alert("Couldn't find the client for this booking. Please refresh and try again.");
+      return;
+    }
+
     const who = await getCurrentStaffIdentity();
-    const authorName = who.name || "Stylist";
+    const authorName = who.name || staffName || "Stylist";
+
+    // Only write booking_id if we have a real booking row uuid (FK expects bookings.id)
+    const safeBookingRowId =
+      (effectiveBookingRowId && isUuid(effectiveBookingRowId) && effectiveBookingRowId) ||
+      (bookingId && isUuid(bookingId) && bookingId) ||
+      null;
 
     const payload = {
-      client_id: clientId,
+      client_id: effectiveClientId,
       note_content: text,
       created_by: authorName,
-      booking_id: bookingId || null, // link to booking row if provided
-      // leave booking_group_id null on manual notes
+      booking_id: safeBookingRowId,
     };
 
     const { error } = await supabase.from("client_notes").insert([payload]);
@@ -263,13 +403,15 @@ const loadNotes = async () => {
     }
 
     setNoteContent("");
-    await loadNotes();
+    await loadNotes(effectiveClientId);
     setNotesPage(1);
   };
 
   const emailIsInvalid = !!emailInput && !isValidEmail(emailInput);
 
   const handleSaveEmail = async () => {
+    if (!effectiveClientId) return;
+
     const val = (emailInput || "").trim();
     setEmailError("");
     if (!isValidEmail(val)) {
@@ -282,12 +424,13 @@ const loadNotes = async () => {
       const { data, error } = await supabase
         .from("clients")
         .update({ email: val || null })
-        .eq("id", clientId)
+        .eq("id", effectiveClientId)
         .select("id, first_name, last_name, email")
-        .single();
+        .maybeSingle();
 
       if (error) throw error;
-      setClient(data);
+
+      setClient(data || null);
       setIsEditingEmail(false);
     } catch (e) {
       console.error("Email update failed:", e.message);
@@ -300,13 +443,35 @@ const loadNotes = async () => {
   // -------- render --------
   const fullName = useMemo(() => {
     if (!client) return "Client details";
-    return `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim() || "Client details";
+    return (
+      `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim() ||
+      "Client details"
+    );
   }, [client]);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Client Details" className="w-full max-w-[640px]" zIndex={modalZIndex} >
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Client Details"
+      className="w-full max-w-[640px]"
+      zIndex={modalZIndex}
+    >
       <div className="space-y-4 text-gray-800">
-        <h3 className="text-lg font-semibold">{fullName}</h3>
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="text-lg font-semibold">{fullName}</h3>
+
+          {/* Kept state/import; only show button when it won't obviously break */}
+          {effectiveClientId ? (
+            <button
+              className="text-xs text-blue-600 underline"
+              onClick={() => setShowFullHistory(true)}
+              type="button"
+            >
+              Full history
+            </button>
+          ) : null}
+        </div>
 
         {/* EMAIL */}
         <div>
@@ -315,26 +480,46 @@ const loadNotes = async () => {
           {!isEditingEmail ? (
             <div className="flex items-center gap-2 text-sm">
               <span className="flex-1">
-                {client?.email || <span className="text-gray-500">No email</span>}
+                {client?.email ? (
+                  client.email
+                ) : (
+                  <span className="text-gray-500">No email</span>
+                )}
               </span>
-              <button className="text-blue-600 underline" onClick={() => setIsEditingEmail(true)}>Edit</button>
+              <button
+                className="text-blue-600 underline"
+                onClick={() => setIsEditingEmail(true)}
+                type="button"
+              >
+                Edit
+              </button>
             </div>
           ) : (
             <div className="flex flex-col gap-1">
               <div className="flex items-center gap-2">
                 <input
                   type="email"
-                  className={`flex-1 border rounded px-2 py-1 text-sm ${emailIsInvalid ? "border-red-500" : ""}`}
+                  className={`flex-1 border rounded px-2 py-1 text-sm ${
+                    emailIsInvalid ? "border-red-500" : ""
+                  }`}
                   placeholder="name@example.com"
                   value={emailInput}
                   onChange={(e) => setEmailInput(e.target.value)}
                   aria-invalid={emailIsInvalid}
                 />
-                <Button onClick={handleSaveEmail} disabled={savingEmail || emailIsInvalid} className="text-sm">
+                <Button
+                  onClick={handleSaveEmail}
+                  disabled={savingEmail || emailIsInvalid}
+                  className="text-sm"
+                >
                   {savingEmail ? "Saving..." : "Save"}
                 </Button>
                 <Button
-                  onClick={() => { setIsEditingEmail(false); setEmailInput(client?.email || ""); setEmailError(""); }}
+                  onClick={() => {
+                    setIsEditingEmail(false);
+                    setEmailInput(client?.email || "");
+                    setEmailError("");
+                  }}
                   className="text-sm"
                 >
                   Cancel
@@ -354,19 +539,27 @@ const loadNotes = async () => {
           <div className="flex items-center justify-between mb-2">
             <p className="text-sm font-semibold">Service History</p>
             <div className="flex items-center gap-2 text-xs">
-              <span className="text-gray-600">{pageInfo(historyPage, history.length, HISTORY_PAGE_SIZE)}</span>
+              <span className="text-gray-600">
+                {pageInfo(historyPage, history.length, HISTORY_PAGE_SIZE)}
+              </span>
               <div className="flex gap-1">
                 <button
                   className="px-2 py-1 border rounded disabled:opacity-40"
                   onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
                   disabled={historyPage === 1}
+                  type="button"
                 >
                   Previous
                 </button>
                 <button
                   className="px-2 py-1 border rounded disabled:opacity-40"
-                  onClick={() => setHistoryPage((p) => (p * HISTORY_PAGE_SIZE >= history.length ? p : p + 1))}
+                  onClick={() =>
+                    setHistoryPage((p) =>
+                      p * HISTORY_PAGE_SIZE >= history.length ? p : p + 1
+                    )
+                  }
                   disabled={historyPage * HISTORY_PAGE_SIZE >= history.length}
+                  type="button"
                 >
                   Next
                 </button>
@@ -381,17 +574,24 @@ const loadNotes = async () => {
               <table className="w-full text-sm border-collapse">
                 <thead>
                   <tr className="border-b">
-                    <th className="text-left py-2 pr-2 font-semibold w-[170px]">Date & time</th>
-                    <th className="text-left py-2 pr-2 font-semibold w-[140px]">Service provider</th>
+                    <th className="text-left py-2 pr-2 font-semibold w-[170px]">
+                      Date & time
+                    </th>
+                    <th className="text-left py-2 pr-2 font-semibold w-[140px]">
+                      Service provider
+                    </th>
                     <th className="text-left py-2 pr-0 font-semibold">Service</th>
                   </tr>
                 </thead>
                 <tbody>
                   {paginatedHistory.map((h) => {
                     const d = new Date(h.start);
-                    const dateTime = isNaN(d) ? "—" : `${format(d, "dd MMM yyyy")} · ${format(d, "HH:mm")}`;
+                    const dateTime = isNaN(d)
+                      ? "—"
+                      : `${format(d, "dd MMM yyyy")} · ${format(d, "HH:mm")}`;
                     const provider = providerMap[h.resource_id] || "—";
-                    const service = (h.category ? `${h.category}: ` : "") + (h.title || "");
+                    const service =
+                      (h.category ? `${h.category}: ` : "") + (h.title || "");
                     return (
                       <tr key={h.id} className="border-b align-top">
                         <td className="py-2 pr-2 whitespace-nowrap">{dateTime}</td>
@@ -422,19 +622,27 @@ const loadNotes = async () => {
           <div className="flex items-center justify-between mb-2">
             <p className="text-sm font-semibold">Notes</p>
             <div className="flex items-center gap-2 text-xs">
-              <span className="text-gray-600">{pageInfo(notesPage, notes.length, NOTES_PAGE_SIZE)}</span>
+              <span className="text-gray-600">
+                {pageInfo(notesPage, notes.length, NOTES_PAGE_SIZE)}
+              </span>
               <div className="flex gap-1">
                 <button
                   className="px-2 py-1 border rounded disabled:opacity-40"
                   onClick={() => setNotesPage((p) => Math.max(1, p - 1))}
                   disabled={notesPage === 1}
+                  type="button"
                 >
                   Previous
                 </button>
                 <button
                   className="px-2 py-1 border rounded disabled:opacity-40"
-                  onClick={() => setNotesPage((p) => (p * NOTES_PAGE_SIZE >= notes.length ? p : p + 1))}
+                  onClick={() =>
+                    setNotesPage((p) =>
+                      p * NOTES_PAGE_SIZE >= notes.length ? p : p + 1
+                    )
+                  }
                   disabled={notesPage * NOTES_PAGE_SIZE >= notes.length}
+                  type="button"
                 >
                   Next
                 </button>
@@ -442,26 +650,59 @@ const loadNotes = async () => {
             </div>
           </div>
 
-          <div className="space-y-2 max-h=[300px] overflow-auto bg-white p-1 rounded">
+          <div className="space-y-2 max-h-[300px] overflow-auto bg-white p-1 rounded">
             {paginatedNotes.map((note) => {
-           const meta = note.booking_id ? bookingMetaByRowId[note.booking_id] : null;
-
+              // note.booking_id is uuid (bookings.id). Keep a safe fallback to group map just in case.
+              const key = note.booking_id ? String(note.booking_id) : "";
+              const meta =
+                (key && bookingMetaByRowId[key]) ||
+                (key && bookingMetaByGroupId[key]) ||
+                null;
 
               return (
-                <div key={note.id} className="border rounded p-2 text-sm bg-white text-gray-900">
+                <div
+                  key={note.id}
+                  className="border rounded p-2 text-sm bg-white text-gray-900"
+                >
                   <div>{note.note_content}</div>
                   <div className="text-xs text-gray-500">
-                    {new Date(note.created_at).toLocaleString()} by {note.created_by || "Unknown"}
-                    {meta ? <> · <span className="italic">for {meta.title} on {meta.when}</span></> : null}
+                    {new Date(note.created_at).toLocaleString()} by{" "}
+                    {note.created_by || "Unknown"}
+                    {meta ? (
+                      <>
+                        {" "}
+                        · <span className="italic">for {meta.title} on {meta.when}</span>
+                      </>
+                    ) : null}
                   </div>
                 </div>
               );
             })}
             {notes.length === 0 && (
-              <div className="text-sm text-gray-500 bg-white border rounded p-2">No notes for this client yet.</div>
+              <div className="text-sm text-gray-500 bg-white border rounded p-2">
+                No notes for this client yet.
+              </div>
             )}
           </div>
         </div>
+
+        {/* Optional full history view (kept, but only shown when toggled) */}
+        {showFullHistory && (
+          <div className="border rounded p-2 bg-white">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-semibold">Full History</p>
+              <button
+                className="text-xs text-blue-600 underline"
+                type="button"
+                onClick={() => setShowFullHistory(false)}
+              >
+                Close
+              </button>
+            </div>
+            {/* This page/component is project-specific; we keep it mounted here without changing its internals */}
+            <ClientHistoryFullScreen />
+          </div>
+        )}
       </div>
     </Modal>
   );

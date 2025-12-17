@@ -63,6 +63,9 @@ export default function ReviewModal({
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
+  // ✅ NEW: lock toggle (applies to all rows created for this booking_id group)
+  const [lockBooking, setLockBooking] = useState(false);
+
   // Existing lookup (may fail if clients[] doesn’t contain the selected client)
   const clientFromList = useMemo(
     () => clients?.find((c) => c.id === selectedClient) || null,
@@ -74,8 +77,7 @@ export default function ReviewModal({
     [stylistList, selectedSlot?.resourceId]
   );
 
-  // ✅ FIX: resolve client id using reviewData FIRST (NewBooking already knows it),
-  // then fall back to local props/state
+  // ✅ FIX: resolve client id using reviewData FIRST
   const resolvedClientId = useMemo(() => {
     return (
       reviewData?.client_id ??
@@ -94,8 +96,8 @@ export default function ReviewModal({
       (clientObj
         ? `${clientObj.first_name ?? ""} ${clientObj.last_name ?? ""}`.trim()
         : clientFromList
-          ? `${clientFromList.first_name ?? ""} ${clientFromList.last_name ?? ""}`.trim()
-          : "Unknown Client")
+        ? `${clientFromList.first_name ?? ""} ${clientFromList.last_name ?? ""}`.trim()
+        : "Unknown Client")
     );
   }, [reviewData, clientObj, clientFromList]);
 
@@ -159,6 +161,9 @@ export default function ReviewModal({
       const newBookings = [];
       let currentStart = new Date(selectedSlot.start);
 
+      // optional extra fields to carry into returned event objects (not DB columns)
+      const ext = reviewData?.extendedProps || {};
+
       for (const service of basket) {
         const durationMins = Math.max(1, Number(service.displayDuration || 0));
 
@@ -181,6 +186,9 @@ export default function ReviewModal({
           category: service.category || "Uncategorised",
           source,
           status,
+
+          // ✅ NEW: lock flag stored in DB
+          is_locked: !!lockBooking,
         };
 
         console.log("[ReviewModal] inserting booking", newBooking);
@@ -195,8 +203,10 @@ export default function ReviewModal({
 
         if (bookingError) throw bookingError;
 
+        // ✅ Merge extra “display-only” props into the calendar event objects we return
         newBookings.push({
           ...bookingData,
+          ...ext,
           start: new Date(bookingData.start),
           end: new Date(bookingData.end),
           resourceId: bookingData.resource_id,
@@ -216,7 +226,7 @@ export default function ReviewModal({
             logged_by,
             reason: isPublicBooking ? "Public Booking" : "Manual Booking",
             before_snapshot: null,
-            after_snapshot: newBooking,
+            after_snapshot: newBooking, // includes is_locked
           }),
           8000,
           "SaveBookingsLog"
@@ -263,6 +273,16 @@ export default function ReviewModal({
             Stylist: {stylist?.title || "Unknown"}
           </p>
         </div>
+
+        {/* ✅ NEW: Lock checkbox */}
+        <label className="flex items-center gap-2 text-sm text-gray-700 mb-3">
+          <input
+            type="checkbox"
+            checked={lockBooking}
+            onChange={(e) => setLockBooking(e.target.checked)}
+          />
+          Lock booking (can’t be moved)
+        </label>
 
         <div className="border rounded p-2 mb-3">
           <h4 className="font-semibold text-bronze mb-1">Services</h4>

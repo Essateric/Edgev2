@@ -33,6 +33,9 @@ function BookingPopUpBody({
   onDeleteSuccess,
   stylistList = [],
   clients = [],
+
+  // ✅ NEW (optional): lets CalendarPage update its local events immediately
+  onBookingUpdated,
 }) {
   const { supabaseClient } = useAuth();
 
@@ -40,6 +43,11 @@ function BookingPopUpBody({
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [isEditingDob, setIsEditingDob] = useState(false);
   const [showRepeat, setShowRepeat] = useState(false);
+
+  // ✅ NEW: lock UI state
+  const [lockBooking, setLockBooking] = useState(false);
+  const [lockSaving, setLockSaving] = useState(false);
+  const [lockError, setLockError] = useState("");
 
   // who is adding notes
   const [currentStaff, setCurrentStaff] = useState(null);
@@ -71,9 +79,9 @@ function BookingPopUpBody({
 
   // notes
   const groupRowIds = useMemo(
-  () => (relatedBookings || []).map((r) => r.id),
-  [relatedBookings]
-);
+    () => (relatedBookings || []).map((r) => r.id),
+    [relatedBookings]
+  );
 
   const { notes, loading: notesLoading, setNotes } = useClientNotes({
     isOpen,
@@ -83,7 +91,8 @@ function BookingPopUpBody({
   });
 
   // DOB
-  const { dobInput, setDobInput, savingDOB, dobError, saveDOB } = useSaveClientDOB();
+  const { dobInput, setDobInput, savingDOB, dobError, saveDOB } =
+    useSaveClientDOB();
   useEffect(() => {
     if (!displayClient) return;
     if (displayClient?.dob) {
@@ -109,10 +118,29 @@ function BookingPopUpBody({
     "Client";
   const clientPhone = displayClient?.mobile || "N/A";
   const stylist = stylistList.find((s) => s.id === booking.resource_id);
+
   const isOnline =
     booking?.source === "public" ||
     (Array.isArray(relatedBookings) &&
       relatedBookings.some((r) => r.source === "public"));
+
+  // ✅ NEW: derive lock state (treat the group as locked if ANY row is locked)
+  const derivedLocked = useMemo(() => {
+    const fromGroup =
+      Array.isArray(relatedBookings) && relatedBookings.length > 0
+        ? relatedBookings.some((r) => !!r.is_locked)
+        : null;
+
+    if (fromGroup !== null) return fromGroup;
+    return !!booking?.is_locked;
+  }, [relatedBookings, booking?.is_locked]);
+
+  // keep checkbox in sync when popup opens + when relatedBookings finishes loading
+  useEffect(() => {
+    if (!isOpen) return;
+    setLockBooking(!!derivedLocked);
+    setLockError("");
+  }, [isOpen, derivedLocked]);
 
   // handlers
   const handleCancelBooking = async () => {
@@ -121,7 +149,11 @@ function BookingPopUpBody({
     );
     if (!confirmDelete) return;
     try {
-      const { error } = await supabaseClient.from("bookings").delete().eq("id", booking.id);
+      const { error } = await supabaseClient
+        .from("bookings")
+        .delete()
+        .eq("id", booking.id);
+
       if (error) {
         console.error("Failed to delete booking:", error);
         alert("Something went wrong.");
@@ -175,14 +207,58 @@ function BookingPopUpBody({
     return { ok: true, data };
   };
 
-if (!displayClient && clientLoading) {
-  return (
-    <ModalLarge isOpen={isOpen} onClose={onClose} zIndex={50}>
-      <div className="p-4 text-sm text-gray-700">Loading client…</div>
-    </ModalLarge>
-  );
-}
+  // ✅ NEW: lock/unlock booking group
+  const handleToggleLock = async (nextVal) => {
+    if (!supabaseClient) return;
+    setLockError("");
+    setLockSaving(true);
 
+    try {
+      const next = !!nextVal;
+
+      if (booking?.booking_id) {
+        // update ALL rows in the group
+        const { error } = await supabaseClient
+          .from("bookings")
+          .update({ is_locked: next })
+          .eq("booking_id", booking.booking_id);
+
+        if (error) throw error;
+      } else {
+        // fallback: update just this one row
+        const { error } = await supabaseClient
+          .from("bookings")
+          .update({ is_locked: next })
+          .eq("id", booking.id);
+
+        if (error) throw error;
+      }
+
+      setLockBooking(next);
+
+      // tell CalendarPage (optional) so it can update events state immediately
+      onBookingUpdated?.({
+        id: booking.id,
+        booking_id: booking.booking_id ?? null,
+        is_locked: next,
+      });
+    } catch (e) {
+      console.error("[BookingPopUp] lock update failed:", e);
+      setLockError(e?.message || "Failed to update lock");
+      // revert checkbox to derived state
+      setLockBooking(!!derivedLocked);
+    } finally {
+      setLockSaving(false);
+    }
+  };
+
+  if (!displayClient && clientLoading) {
+    return (
+      <ModalLarge isOpen={isOpen} onClose={onClose} zIndex={50}>
+        <div className="p-4 text-sm text-gray-700">Loading client…</div>
+      </ModalLarge>
+    );
+  }
 
   if (!displayClient && !clientLoading) {
     return (
@@ -205,7 +281,7 @@ if (!displayClient && clientLoading) {
     );
   }
 
-  return  (
+  return (
     <ModalLarge isOpen={isOpen} onClose={onClose} hideCloseIcon zIndex={50}>
       {/* === New layout wrapper that lets the popup breathe === */}
       <div className="modal-panel">
@@ -224,6 +300,27 @@ if (!displayClient && clientLoading) {
             setIsEditingDob={setIsEditingDob}
             onOpenDetails={() => setShowNotesModal(true)}
           />
+
+          {/* ✅ NEW: lock checkbox */}
+          <div className="mt-3 flex items-center gap-3 text-sm text-gray-700">
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={!!lockBooking}
+                disabled={lockSaving}
+                onChange={(e) => handleToggleLock(e.target.checked)}
+              />
+              Lock booking (can’t be moved)
+            </label>
+
+            {lockSaving && (
+              <span className="text-xs text-gray-500">Saving…</span>
+            )}
+
+            {!!lockError && (
+              <span className="text-xs text-red-600">{lockError}</span>
+            )}
+          </div>
         </div>
 
         {/* Scrollable body region */}
@@ -255,7 +352,7 @@ if (!displayClient && clientLoading) {
       {/* Notes modal */}
       {showNotesModal && (
         <ClientNotesModal
-         modalZIndex={60} 
+          modalZIndex={60}
           clientId={displayClient?.id || booking?.client_id || null}
           bookingId={booking?.id}
           isOpen={showNotesModal}

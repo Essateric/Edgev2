@@ -1,5 +1,5 @@
 // src/pages/CalendarPage.jsx
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
 import withDragAndDrop from "react-big-calendar/lib/addons/dragAndDrop";
 import { format, parse, startOfWeek, getDay } from "date-fns";
@@ -109,6 +109,19 @@ export default function CalendarPage() {
   const [showReminders, setShowReminders] = useState(false);
   const [errText, setErrText] = useState("");
   const [reviewData, setReviewData] = useState(null);
+
+  const selectedClientRow = useMemo(() => {
+  return clientObj || clients?.find((c) => c.id === selectedClient) || null;
+}, [clientObj, clients, selectedClient]);
+
+const newBookingExtendedProps = useMemo(() => {
+  return {
+    client_email: selectedClientRow?.email ?? null,
+    client_mobile: selectedClientRow?.mobile ?? null,
+    client_first_name: selectedClientRow?.first_name ?? null,
+    client_last_name: selectedClientRow?.last_name ?? null,
+  };
+}, [selectedClientRow]);
 
 
   const isAdmin = currentUser?.permission?.toLowerCase() === "admin";
@@ -281,7 +294,9 @@ export default function CalendarPage() {
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
 
   const moveEvent = useCallback(
+    
     async ({ event, start, end, resourceId }) => {
+      if (event?.is_locked) return;
       const { start: s, end: e } = clampRange(start, end);
       const rid = resourceId ?? event.resourceId;
 
@@ -510,6 +525,13 @@ export default function CalendarPage() {
         }}
         showAllDay={false}
         allDayAccessor={() => false}
+        draggableAccessor={(event) =>
+  !event.isUnavailable && !event.isSalonClosed && !event.is_locked
+}
+resizableAccessor={(event) =>
+  !event.isUnavailable && !event.isSalonClosed && !event.is_locked
+}
+
       />
 
       <BookingPopUp
@@ -534,6 +556,15 @@ export default function CalendarPage() {
         }}
         stylistList={stylistList}
         clients={clients}
+        onBookingUpdated={({ booking_id, id, is_locked }) => {
+    setEvents((prev) =>
+      prev.map((ev) => {
+        const same =
+          booking_id ? ev.booking_id === booking_id : ev.id === id;
+        return same ? { ...ev, is_locked } : ev;
+      })
+    );
+  }}
       />
 
       <SelectClientModal
@@ -605,6 +636,7 @@ export default function CalendarPage() {
           setBasket={setBasket}
           onBack={() => setStep(1)}
           onCancel={handleCancelBookingFlow}
+          extendedProps={newBookingExtendedProps}
 onNext={(payload) => {
   setReviewData(payload || null);
   setStep(3);

@@ -17,19 +17,16 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
 
+  const isBlank = (v) => v === null || v === undefined || String(v).trim() === "";
+
   // From the list provided by the parent
   const fromList = useMemo(() => {
     if (!booking?.client_id) return null;
     return clients.find((c) => c.id === booking.client_id) || null;
   }, [clients, booking?.client_id]);
 
-  // A safe “display” object so the popup can still render even if we’re fetching/falling back.
-  const displayClient = useMemo(() => {
-    // Prefer the DB row (row or fromList)
-    const base = row || fromList;
-    if (base) return base;
-
-    // Fallback: synthesize from booking so the header shows *something*
+  // Booking-derived fallback values (used to keep UI populated even when DB lookup fails)
+  const bookingFallback = useMemo(() => {
     const name = booking?.client_name || "";
     let first_name = "";
     let last_name = "";
@@ -38,55 +35,86 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
       first_name = parts[0] || "";
       last_name = parts.slice(1).join(" ") || "";
     }
+
     return {
       id: booking?.client_id ?? null,
       first_name,
       last_name,
       email: booking?.client_email ?? booking?.email ?? null,
-      mobile:
-        booking?.client_mobile ?? booking?.mobile ?? booking?.phone ?? null,
+      mobile: booking?.client_mobile ?? booking?.mobile ?? booking?.phone ?? null,
       dob: null,
     };
-  }, [row, fromList, booking]);
+  }, [booking]);
+
+  // A safe “display” object so the popup can still render even if we’re fetching/falling back.
+  const displayClient = useMemo(() => {
+    const base = row || fromList;
+
+    // If we have a base row, still fill blanks from bookingFallback
+    if (base) {
+      return {
+        ...base,
+        first_name: !isBlank(base.first_name) ? base.first_name : bookingFallback.first_name,
+        last_name: !isBlank(base.last_name) ? base.last_name : bookingFallback.last_name,
+        email: !isBlank(base.email) ? base.email : bookingFallback.email,
+        mobile: !isBlank(base.mobile) ? base.mobile : bookingFallback.mobile,
+        dob: base.dob ?? bookingFallback.dob,
+      };
+    }
+
+    // Otherwise return the fallback
+    return bookingFallback;
+  }, [row, fromList, bookingFallback]);
 
   // Verbose debug to console so we can see the truth quickly
   useEffect(() => {
     if (!isOpen || !booking) return;
-    // Toggle this line if it’s too chatty:
     console.log("[BookingPopUp] booking payload", booking);
   }, [isOpen, booking]);
 
   useEffect(() => {
     let alive = true;
+
     (async () => {
       setErr(null);
       setRow(null);
 
       if (!isOpen || !supabase || !booking) return;
 
-      // If parent already provided the row from a list, use it and stop.
-      if (fromList) {
-        setRow(fromList);
-        return;
-      }
-
       const normEmail = (booking?.client_email || booking?.email || "")
         .trim()
         .toLowerCase();
-      const rawMobile =
-        booking?.client_mobile ?? booking?.mobile ?? booking?.phone ?? "";
+
+      const rawMobile = booking?.client_mobile ?? booking?.mobile ?? booking?.phone ?? "";
       const normDigits = String(rawMobile).replace(/[^\d+]/g, "");
 
-      // If there is a client_id, fetch by id first.
-      if (booking.client_id) {
+      // If parent provided a row from a list, use it immediately for fast UI…
+      if (fromList) {
+        setRow(fromList);
+      }
+
+      // …BUT still fetch from DB if we’re missing key fields like email/mobile/dob.
+      // This fixes “mobile shows but email doesn’t” when clients[] is selected without email.
+      const shouldFetchById =
+        !!booking.client_id &&
+        (!fromList ||
+          isBlank(fromList.email) ||
+          isBlank(fromList.mobile) ||
+          fromList.dob === undefined);
+
+      // 1) If there is a client_id, fetch by id first (or upgrade fromList)
+      if (shouldFetchById) {
         try {
           setLoading(true);
           console.log("[useDisplayClient] fetch by id:", booking.client_id);
+
           const { data, error } = await supabase
             .from("clients")
             .select("id, first_name, last_name, email, mobile, dob")
             .eq("id", booking.client_id)
             .maybeSingle();
+
+          console.log("[useDisplayClient] fetch by id result:", { data, error });
 
           if (!alive) return;
           if (error) throw error;
@@ -102,23 +130,33 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
         } finally {
           if (alive) setLoading(false);
         }
+      } else {
+        // If we already have a complete fromList (including email), stop here.
+        if (fromList && !isBlank(fromList.email)) {
+          return;
+        }
       }
 
-      // No row yet — try fallbacks that help with online/public bookings.
+      // 2) No row yet — try fallbacks that help with online/public bookings.
 
-      // 1) by email (case-insensitive)
+      // 2.1) by email (case-insensitive)
       if (normEmail) {
         try {
           setLoading(true);
           console.log("[useDisplayClient] fallback by email:", normEmail);
+
           const { data, error } = await supabase
             .from("clients")
             .select("id, first_name, last_name, email, mobile, dob")
-            .ilike("email", normEmail) // case-insensitive exact match
+            // ilike is pattern match; without % this is an exact case-insensitive match
+            .ilike("email", normEmail)
             .maybeSingle();
+
+          console.log("[useDisplayClient] fallback by email result:", { data, error });
 
           if (!alive) return;
           if (error) throw error;
+
           if (data) {
             setRow(data);
             return;
@@ -131,23 +169,24 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
         }
       }
 
-      // 2) by mobile / phone (normalized)
+      // 2.2) by mobile / phone (normalized)
       if (normDigits) {
         try {
           setLoading(true);
           console.log("[useDisplayClient] fallback by mobile:", normDigits);
 
-          // Try exact first
-          let q = supabase
+          // Try exact first (as stored)
+          const exact = await supabase
             .from("clients")
             .select("id, first_name, last_name, email, mobile, dob")
             .eq("mobile", rawMobile)
             .maybeSingle();
 
-          let { data, error } = await q;
+          console.log("[useDisplayClient] fallback mobile exact result:", exact);
+
           if (!alive) return;
-          if (!error && data) {
-            setRow(data);
+          if (!exact.error && exact.data) {
+            setRow(exact.data);
             return;
           }
 
@@ -157,6 +196,8 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
             .select("id, first_name, last_name, email, mobile, dob")
             .ilike("mobile", `%${normDigits}%`)
             .limit(1);
+
+          console.log("[useDisplayClient] fallback mobile fuzzy result:", fuzzy);
 
           if (!alive) return;
           if (!fuzzy.error && fuzzy.data && fuzzy.data[0]) {
@@ -171,7 +212,7 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
         }
       }
 
-      // 3) by name (best-effort; may match multiple – we take first)
+      // 2.3) by name (best-effort; may match multiple – we take first)
       const full = (booking?.client_name || "").trim();
       if (full) {
         const parts = full.split(/\s+/);
@@ -181,6 +222,7 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
           try {
             setLoading(true);
             console.log("[useDisplayClient] fallback by name:", fn, ln);
+
             const { data, error } = await supabase
               .from("clients")
               .select("id, first_name, last_name, email, mobile, dob")
@@ -188,8 +230,11 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
               .ilike("last_name", ln)
               .limit(1);
 
+            console.log("[useDisplayClient] fallback by name result:", { data, error });
+
             if (!alive) return;
             if (error) throw error;
+
             if (data && data[0]) {
               setRow(data[0]);
               return;
@@ -203,10 +248,7 @@ export function useDisplayClient({ isOpen, booking, clients = [], supabase }) {
         }
       }
 
-      // If we’re here, we didn’t find a DB row. Not a hard error — UI will use displayClient.
-      console.log(
-        "[useDisplayClient] no DB client row found. Using booking fallback."
-      );
+      console.log("[useDisplayClient] no DB client row found. Using booking fallback.");
     })();
 
     return () => {

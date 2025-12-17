@@ -42,6 +42,9 @@ export default function NewBooking({
   onBack,
   onCancel,
   onNext,
+
+  // ✅ NEW: allow parent to pass extra event props (used later for FullCalendar etc)
+  extendedProps,
 }) {
   const { supabaseClient, currentUser } = useAuth();
   const db = supabaseClient;
@@ -109,7 +112,8 @@ export default function NewBooking({
 
   // ✅ single “truth” for client
   const effectiveClient = useMemo(() => {
-    if (clientObj?.id) return clientObj;
+    // ✅ small safety: only trust clientObj if it matches selectedClient (prevents stale clientObj bugs)
+    if (clientObj?.id && (!selectedClient || clientObj.id === selectedClient)) return clientObj;
     if (fetchedClient?.id) return fetchedClient;
     if (selectedClient) return (clients || []).find((c) => c.id === selectedClient) || null;
     return null;
@@ -517,8 +521,7 @@ export default function NewBooking({
               return;
             }
 
-            // ✅ FIX: include client id + name (+client row) in the payload
-            onNext({
+            const payload = {
               timeline,
               hasChemical,
               sumActiveDuration,
@@ -529,6 +532,25 @@ export default function NewBooking({
               client: effectiveClient,
               stylist_id: effectiveStylistId,
               stylist_name: stylistName || "Unknown",
+
+              // ✅ Base extended props always included (so email/mobile can show later)
+              extendedProps: {
+                client_id: effectiveClientId ?? null,
+                client_name: effectiveClientName ?? null,
+                client_first_name: effectiveClient?.first_name ?? null,
+                client_last_name: effectiveClient?.last_name ?? null,
+                client_email: effectiveClient?.email ?? null,
+                client_mobile: effectiveClient?.mobile ?? null,
+                client_dob: effectiveClient?.dob ?? null,
+                stylist_id: effectiveStylistId ?? null,
+                stylist_name: stylistName || "Unknown",
+              },
+            };
+
+            // ✅ This is exactly where your merge snippet goes:
+            onNext?.({
+              ...payload,
+              extendedProps: { ...(payload.extendedProps || {}), ...(extendedProps || {}) },
             });
           }}
           className="bg-green-600 text-white hover:bg-green-700"
@@ -536,6 +558,7 @@ export default function NewBooking({
         >
           Review Booking
         </Button>
+
       </div>
     </div>
   );
