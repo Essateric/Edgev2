@@ -19,6 +19,38 @@ import RepeatBookingsModal from "./popup/RepeatBookingsModal"; // ESM import
 /* Layout styles for the roomy popup */
 import "../../styles/modal-tidy.css";
 
+/* ✅ Small toggle switch (no deps) */
+function ToggleSwitch({ checked, onChange, disabled = false, label }) {
+  return (
+    <div className="flex items-center justify-between gap-3 w-full">
+      <span className="text-sm text-gray-700">{label}</span>
+
+      <button
+        type="button"
+        role="switch"
+        aria-checked={!!checked}
+        disabled={disabled}
+        onClick={() => {
+          if (disabled) return;
+          onChange?.(!checked);
+        }}
+        className={[
+          "relative inline-flex h-6 w-11 items-center rounded-full transition",
+          checked ? "bg-emerald-600" : "bg-gray-300",
+          disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
+        ].join(" ")}
+      >
+        <span
+          className={[
+            "inline-block h-5 w-5 rounded-full bg-white transition transform",
+            checked ? "translate-x-5" : "translate-x-1",
+          ].join(" ")}
+        />
+      </button>
+    </div>
+  );
+}
+
 export default function BookingPopUp(props) {
   const { isOpen, booking } = props;
   if (!isOpen || !booking) return null;
@@ -142,7 +174,7 @@ function BookingPopUpBody({
     return !!booking?.is_locked;
   }, [relatedBookings, booking?.is_locked]);
 
-  // keep checkbox in sync when popup opens + when relatedBookings finishes loading
+  // keep toggle in sync when popup opens + when relatedBookings finishes loading
   useEffect(() => {
     if (!isOpen) return;
     setLockBooking(!!derivedLocked);
@@ -252,7 +284,7 @@ function BookingPopUpBody({
     } catch (e) {
       console.error("[BookingPopUp] lock update failed:", e);
       setLockError(e?.message || "Failed to update lock");
-      // revert checkbox to derived state
+      // revert toggle to derived state
       setLockBooking(!!derivedLocked);
     } finally {
       setLockSaving(false);
@@ -309,25 +341,25 @@ function BookingPopUpBody({
             onOpenDetails={() => setShowNotesModal(true)}
           />
 
-          {/* ✅ NEW: lock checkbox */}
-          <div className="mt-3 flex items-center gap-3 text-sm text-gray-700">
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
+          {/* ✅ Toggle instead of checkbox */}
+          <div className="mt-3 w-full">
+            <div className="border rounded p-2 bg-gray-50">
+              <ToggleSwitch
                 checked={!!lockBooking}
                 disabled={lockSaving}
-                onChange={(e) => handleToggleLock(e.target.checked)}
+                onChange={(v) => handleToggleLock(!!v)}
+                label="Lock booking (can’t be moved)"
               />
-              Lock booking (can’t be moved)
-            </label>
 
-            {lockSaving && (
-              <span className="text-xs text-gray-500">Saving…</span>
-            )}
-
-            {!!lockError && (
-              <span className="text-xs text-red-600">{lockError}</span>
-            )}
+              <div className="mt-1 flex items-center gap-2">
+                {lockSaving && (
+                  <span className="text-xs text-gray-500">Saving…</span>
+                )}
+                {!!lockError && (
+                  <span className="text-xs text-red-600">{lockError}</span>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 

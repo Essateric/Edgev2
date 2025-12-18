@@ -44,6 +44,38 @@ const withTimeout = (promise, ms, label = "Operation") =>
     ),
   ]);
 
+/* ✅ Small toggle switch (no deps) */
+function ToggleSwitch({ checked, onChange, disabled = false, label }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-sm text-gray-700">{label}</span>
+
+      <button
+        type="button"
+        role="switch"
+        aria-checked={!!checked}
+        disabled={disabled}
+        onClick={() => {
+          if (disabled) return;
+          onChange?.(!checked);
+        }}
+        className={[
+          "relative inline-flex h-6 w-11 items-center rounded-full transition",
+          checked ? "bg-emerald-600" : "bg-gray-300",
+          disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
+        ].join(" ")}
+      >
+        <span
+          className={[
+            "inline-block h-5 w-5 rounded-full bg-white transition transform",
+            checked ? "translate-x-5" : "translate-x-1",
+          ].join(" ")}
+        />
+      </button>
+    </div>
+  );
+}
+
 export default function ReviewModal({
   isOpen,
   onClose,
@@ -274,15 +306,15 @@ export default function ReviewModal({
           </p>
         </div>
 
-        {/* ✅ NEW: Lock checkbox */}
-        <label className="flex items-center gap-2 text-sm text-gray-700 mb-3">
-          <input
-            type="checkbox"
+        {/* ✅ Toggle instead of checkbox */}
+        <div className="mb-3 border rounded p-2 bg-gray-50">
+          <ToggleSwitch
             checked={lockBooking}
-            onChange={(e) => setLockBooking(e.target.checked)}
+            onChange={(v) => setLockBooking(!!v)}
+            disabled={loading}
+            label="Lock booking (can’t be moved)"
           />
-          Lock booking (can’t be moved)
-        </label>
+        </div>
 
         <div className="border rounded p-2 mb-3">
           <h4 className="font-semibold text-bronze mb-1">Services</h4>
@@ -292,8 +324,8 @@ export default function ReviewModal({
               <span>{b.name}</span>
               <span>£{Number(b.displayPrice || 0)}</span>
               <span>
-                {Math.floor((Number(b.displayDuration || 0)) / 60)}h{" "}
-                {(Number(b.displayDuration || 0)) % 60}m
+                {Math.floor(Number(b.displayDuration || 0) / 60)}h{" "}
+                {Number(b.displayDuration || 0) % 60}m
               </span>
             </div>
           ))}
