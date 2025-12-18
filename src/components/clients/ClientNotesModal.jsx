@@ -1,6 +1,7 @@
+// src/components/clients/ClientNotesModal.jsx
 import { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
-import supabase from "../../supabaseClient";
+import baseSupabase from "../../supabaseClient";
 
 import Modal from "../Modal";
 import Button from "../Button";
@@ -16,6 +17,7 @@ import { useAuth } from "../../contexts/AuthContext";
 export default function ClientNotesModal({
   isOpen,
   onClose,
+  clientEmail,
   clientId,
   bookingId = null,
   modalZIndex = 60,
@@ -50,7 +52,10 @@ export default function ClientNotesModal({
   const [notesPage, setNotesPage] = useState(1);
 
   // 🔹 current signed-in user (PIN auth etc)
-  const { currentUser } = useAuth();
+  const { currentUser, supabaseClient } = useAuth();
+
+  // ✅ IMPORTANT: use token-backed client when available (same behavior as BookingPopUp)
+  const db = supabaseClient || baseSupabase;
 
   // Internal: resolved IDs (fixes “wrong id passed in” issues)
   const [effectiveClientId, setEffectiveClientId] = useState(null);
@@ -81,7 +86,7 @@ export default function ClientNotesModal({
         };
       }
 
-      const { data: { user } = {} } = await supabase.auth.getUser();
+      const { data: { user } = {} } = await db.auth.getUser();
       if (!user) {
         return {
           staffId: null,
@@ -93,7 +98,7 @@ export default function ClientNotesModal({
       }
 
       if (user.email) {
-        const { data } = await supabase
+        const { data } = await db
           .from("staff")
           .select("id, name, email, permission")
           .eq("email", user.email)
@@ -139,7 +144,7 @@ export default function ClientNotesModal({
   };
 
   const loadNotes = async (cid) => {
-    const res = await supabase
+    const res = await db
       .from("client_notes")
       .select("id, client_id, note_content, created_by, created_at, booking_id")
       .eq("client_id", cid)
@@ -171,7 +176,7 @@ export default function ClientNotesModal({
       if (bookingId) {
         // Case A: bookingId is a booking row uuid
         if (isUuid(bookingId)) {
-          const { data, error } = await supabase
+          const { data, error } = await db
             .from("bookings")
             .select("id, client_id")
             .eq("id", bookingId)
@@ -183,7 +188,7 @@ export default function ClientNotesModal({
           }
         } else {
           // Case B: bookingId is a booking group id (bookings.booking_id text)
-          const { data, error } = await supabase
+          const { data, error } = await db
             .from("bookings")
             .select("id, client_id")
             .eq("booking_id", bookingId)
@@ -212,7 +217,7 @@ export default function ClientNotesModal({
     return () => {
       active = false;
     };
-  }, [isOpen, clientId, bookingId]);
+  }, [isOpen, clientId, bookingId, db]);
 
   // -------- data loads --------
   // Client + stylist name on open (uses effectiveClientId)
@@ -221,7 +226,7 @@ export default function ClientNotesModal({
     let active = true;
 
     (async () => {
-      const { data, error } = await supabase
+      const { data, error } = await db
         .from("clients")
         .select("id, first_name, last_name, email")
         .eq("id", effectiveClientId)
@@ -231,7 +236,7 @@ export default function ClientNotesModal({
 
       if (!error && data) {
         setClient(data);
-        setEmailInput(data?.email || "");
+        setEmailInput(data?.email || clientEmail || "");
       } else if (error) {
         console.error("Fetch client failed:", error.message, {
           effectiveClientId,
@@ -239,11 +244,11 @@ export default function ClientNotesModal({
           bookingId,
         });
         setClient(null);
-        setEmailInput("");
+        setEmailInput(clientEmail || "");
       } else {
         // no row returned
         setClient(null);
-        setEmailInput("");
+        setEmailInput(clientEmail || "");
       }
     })();
 
@@ -255,7 +260,7 @@ export default function ClientNotesModal({
     return () => {
       active = false;
     };
-  }, [isOpen, effectiveClientId]);
+  }, [isOpen, effectiveClientId, clientId, bookingId, clientEmail, db]);
 
   // Notes on open
   useEffect(() => {
@@ -271,7 +276,7 @@ export default function ClientNotesModal({
     let active = true;
 
     (async () => {
-      const { data, error } = await supabase
+      const { data, error } = await db
         .from("bookings")
         .select("id, booking_id, start, title, category, resource_id")
         .eq("client_id", effectiveClientId)
@@ -311,7 +316,7 @@ export default function ClientNotesModal({
         new Set(unique.map((b) => b.resource_id).filter(Boolean))
       );
       if (ids.length) {
-        const { data: staffRows, error: staffErr } = await supabase
+        const { data: staffRows, error: staffErr } = await db
           .from("staff")
           .select("id, name, permission, email")
           .in("id", ids);
@@ -349,7 +354,7 @@ export default function ClientNotesModal({
     return () => {
       active = false;
     };
-  }, [isOpen, effectiveClientId]);
+  }, [isOpen, effectiveClientId, db]);
 
   // -------- pagination helpers --------
   const paginatedHistory = useMemo(() => {
@@ -395,7 +400,7 @@ export default function ClientNotesModal({
       booking_id: safeBookingRowId,
     };
 
-    const { error } = await supabase.from("client_notes").insert([payload]);
+    const { error } = await db.from("client_notes").insert([payload]);
     if (error) {
       console.error("Add note failed:", error?.message || error);
       alert("Couldn't save note. " + (error?.message || ""));
@@ -421,7 +426,7 @@ export default function ClientNotesModal({
 
     try {
       setSavingEmail(true);
-      const { data, error } = await supabase
+      const { data, error } = await db
         .from("clients")
         .update({ email: val || null })
         .eq("id", effectiveClientId)
@@ -448,6 +453,11 @@ export default function ClientNotesModal({
       "Client details"
     );
   }, [client]);
+
+  // ✅ EMAIL FIX: always show a value even if clients fetch fails (RLS / timing / etc)
+  const emailToShow = useMemo(() => {
+    return String(client?.email || clientEmail || "").trim();
+  }, [client?.email, clientEmail]);
 
   return (
     <Modal
@@ -480,8 +490,10 @@ export default function ClientNotesModal({
           {!isEditingEmail ? (
             <div className="flex items-center gap-2 text-sm">
               <span className="flex-1">
-                {client?.email ? (
-                  client.email
+                {emailToShow ? (
+                  <a className="underline" href={`mailto:${emailToShow}`}>
+                    {emailToShow}
+                  </a>
                 ) : (
                   <span className="text-gray-500">No email</span>
                 )}
@@ -517,7 +529,7 @@ export default function ClientNotesModal({
                 <Button
                   onClick={() => {
                     setIsEditingEmail(false);
-                    setEmailInput(client?.email || "");
+                    setEmailInput(client?.email || clientEmail || "");
                     setEmailError("");
                   }}
                   className="text-sm"

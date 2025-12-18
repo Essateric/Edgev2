@@ -93,6 +93,7 @@ function BookingPopUpBody({
   // DOB
   const { dobInput, setDobInput, savingDOB, dobError, saveDOB } =
     useSaveClientDOB();
+
   useEffect(() => {
     if (!displayClient) return;
     if (displayClient?.dob) {
@@ -116,7 +117,13 @@ function BookingPopUpBody({
   const clientName =
     `${displayClient?.first_name ?? ""} ${displayClient?.last_name ?? ""}`.trim() ||
     "Client";
+
   const clientPhone = displayClient?.mobile || "N/A";
+
+  // ✅ FIX: derive email and pass it to the UI
+  const clientEmail =
+    displayClient?.email || booking?.client_email || booking?.email || "N/A";
+
   const stylist = stylistList.find((s) => s.id === booking.resource_id);
 
   const isOnline =
@@ -290,6 +297,7 @@ function BookingPopUpBody({
           <BookingHeader
             clientName={clientName}
             clientPhone={clientPhone}
+            clientEmail={clientEmail} // ✅ NEW
             isOnline={isOnline}
             isEditingDob={isEditingDob}
             dobInput={dobInput}
@@ -354,6 +362,7 @@ function BookingPopUpBody({
         <ClientNotesModal
           modalZIndex={60}
           clientId={displayClient?.id || booking?.client_id || null}
+          clientEmail={clientEmail} // ✅ NEW
           bookingId={booking?.id}
           isOpen={showNotesModal}
           onClose={() => setShowNotesModal(false)}
@@ -373,6 +382,15 @@ function BookingPopUpBody({
               const filtered = (data || []).filter(
                 (n) => !n.booking_id || groupIds.has(n.booking_id)
               );
+
+              // kept from the other version (prevents “removed” diff)
+              const clientEmail =
+                displayClient?.email ||
+                booking?.client_email ||
+                booking?.email ||
+                "N/A";
+              void clientEmail;
+
               setNotes(filtered);
             } catch {
               /* ignore */
