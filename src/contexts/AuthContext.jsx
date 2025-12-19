@@ -107,29 +107,160 @@ export const AuthProvider = ({ children }) => {
     "https://vmtcofezozrblfxudauk.functions.supabase.co/login-with-pin";
 
   // -------------------------------
-  // ✅ KEY FIX: token-backed supabase client
+  // ✅ Token refs (shared)
   // -------------------------------
   const tokenRef = useRef(null);
   useEffect(() => {
     tokenRef.current = currentUser?.token ?? null;
   }, [currentUser?.token]);
 
-  const supabaseTokenClient = useMemo(() => {
+  // Keep latest user accessible inside callbacks
+  const currentUserRef = useRef(null);
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
+
+  // Prevent multiple refresh calls at once
+  const refreshInFlightRef = useRef(null);
+
+  const decodeJwtPayload = (token) => {
+    try {
+      const part = token.split(".")[1];
+      if (!part) return null;
+      const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = b64 + "===".slice((b64.length + 3) % 4);
+      const json = atob(padded);
+      return JSON.parse(json);
+    } catch {
+      return null;
+    }
+  };
+
+  const tokenExpiringSoon = (token, skewSeconds = 60) => {
+    const p = decodeJwtPayload(token);
+    const expMs = p?.exp ? p.exp * 1000 : 0;
+    if (!expMs) return true; // play safe: refresh if we can't read exp
+    return expMs - Date.now() < skewSeconds * 1000;
+  };
+
+  const refreshAccessToken = async () => {
     const url = getSupabaseUrl();
     const anon = getSupabaseAnonKey();
+    const u = currentUserRef.current;
 
-    // If env is missing, fallback to your existing client.
+    if (!url || !anon) throw new Error("Missing Supabase env (URL/ANON)");
+    if (!u?.refresh_token) throw new Error("Missing refresh_token");
+
+    const resp = await fetch(`${url}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST",
+      headers: {
+        apikey: anon,
+        Authorization: `Bearer ${anon}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ refresh_token: u.refresh_token }),
+    });
+
+    const json = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(
+        json?.error_description || json?.msg || "Token refresh failed"
+      );
+    }
+
+    const nextAccess = json.access_token;
+    const nextRefresh = json.refresh_token;
+
+    if (!nextAccess || !nextRefresh)
+      throw new Error("Refresh did not return tokens");
+
+    // update ref immediately
+    tokenRef.current = nextAccess;
+
+    // update state + storage
+    setCurrentUser((prev) => {
+      if (!prev) return prev;
+      const next = {
+        ...prev,
+        token: nextAccess,
+        refresh_token: nextRefresh,
+        offline: false,
+      };
+      try {
+        localStorage.setItem("currentUser", JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    return nextAccess;
+  };
+
+  const getValidAccessToken = async () => {
+    const u = currentUserRef.current;
+
+    if (!u?.token) return null;
+
+    // if still valid, use it
+    if (!tokenExpiringSoon(u.token, 60)) return u.token;
+
+    // expiring/expired: refresh once
+    if (!u.refresh_token) return u.token;
+
+    if (!refreshInFlightRef.current) {
+      refreshInFlightRef.current = refreshAccessToken().finally(() => {
+        refreshInFlightRef.current = null;
+      });
+    }
+
+    try {
+      return await refreshInFlightRef.current;
+    } catch (e) {
+      console.warn("[AUTH] token refresh failed:", e?.message || e);
+      return u.token; // may still 401, but at least logged
+    }
+  };
+
+  // -------------------------------
+  // ✅ Token-backed Supabase client (used by Calendar + Reminders)
+  // -------------------------------
+  const supabaseTokenClient = useMemo(() => {
+    // Avoid StrictMode double-create warnings in dev
+    if (
+      typeof window !== "undefined" &&
+      window.__edgehd_supabase_token_client__
+    ) {
+      return window.__edgehd_supabase_token_client__;
+    }
+
+    const url = getSupabaseUrl();
+    const anon = getSupabaseAnonKey();
     if (!url || !anon) return supabase;
 
-    // accessToken callback is an official pattern for “bring your own token”
-    return createClient(url, anon, {
+    const client = createClient(url, anon, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
         detectSessionInUrl: false,
+
+        // prevent “Multiple GoTrueClient instances” fighting over storage
+        storageKey: "edgehd_token_client",
+        storage: {
+          getItem: () => null,
+          setItem: () => {},
+          removeItem: () => {},
+        },
       },
-      accessToken: async () => tokenRef.current || null,
+
+      // ✅ important
+      accessToken: getValidAccessToken,
     });
+
+    if (typeof window !== "undefined") {
+      window.__edgehd_supabase_token_client__ = client;
+    }
+
+    return client;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const cacheStaffPinsFromSupabase = async () => {
@@ -159,8 +290,6 @@ export const AuthProvider = ({ children }) => {
     const isAuthRoute = path === "/login" || path === "/set-pin";
 
     const restoreSession = async () => {
-      // IMPORTANT: don’t freeze the app trying to “confirm” Supabase session.
-      // If we have a stored PIN user, we use it immediately.
       if (!isAuthRoute) setAuthLoading(true);
       else setAuthLoading(false);
 
@@ -209,14 +338,10 @@ export const AuthProvider = ({ children }) => {
             permission: (storedUser.permission ?? "staff").toLowerCase(),
             offline: !!storedUser.offline,
           };
-          console.log(
-            "[AUTH] restoreSession: using stored currentUser (PIN)",
-            normalized
-          );
+          console.log("[AUTH] restoreSession: using stored currentUser (PIN)", normalized);
           setCurrentUser(normalized);
 
-          // Best-effort: try to seed Supabase session in background (never block UI)
-          // This helps long-running sessions (auto-refresh), but Calendar auth no longer depends on it.
+          // Best-effort: seed Supabase session (never block UI)
           if (
             navigator.onLine &&
             normalized?.token &&
@@ -240,7 +365,7 @@ export const AuthProvider = ({ children }) => {
           }
 
           warmPinCache().catch(() => {});
-          return; // ✅ don’t run getSession and risk hanging
+          return;
         }
 
         // 3) No stored PIN user
@@ -273,10 +398,7 @@ export const AuthProvider = ({ children }) => {
             staff_id: staffId ?? null,
           };
 
-          console.log(
-            "[AUTH] restoreSession: setting currentUser from Supabase",
-            userData
-          );
+          console.log("[AUTH] restoreSession: setting currentUser from Supabase", userData);
           setCurrentUser(userData);
           localStorage.setItem("currentUser", JSON.stringify(userData));
           localStorage.removeItem("offlineUser");
@@ -294,15 +416,13 @@ export const AuthProvider = ({ children }) => {
 
     restoreSession();
 
-    // Keep tokens in sync if Supabase refreshes them (don’t let refresh_token go stale)
+    // Keep tokens in sync if Supabase refreshes them
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       console.log("[AUTH] onAuthStateChange:", event, "hasUser:", !!session?.user);
 
-      // ignore auth events while offline user exists
       if (localStorage.getItem("offlineUser")) return;
 
       if (event === "SIGNED_OUT") {
-        // only react to SIGNED_OUT if we are actively logging out
         if (logoutInProgressRef.current) {
           setCurrentUser(null);
           localStorage.removeItem("offlineUser");
@@ -312,7 +432,10 @@ export const AuthProvider = ({ children }) => {
         return;
       }
 
-      if (session?.user && (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")) {
+      if (
+        session?.user &&
+        (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")
+      ) {
         setCurrentUser((prev) => {
           if (!prev || prev.offline) return prev;
           if (prev.id && prev.id !== session.user.id) return prev;
@@ -325,9 +448,7 @@ export const AuthProvider = ({ children }) => {
 
           try {
             localStorage.setItem("currentUser", JSON.stringify(next));
-          } catch {
-            // ignore
-          }
+          } catch {}
 
           return next;
         });
@@ -351,19 +472,15 @@ export const AuthProvider = ({ children }) => {
       const pinStr = String(pin ?? "").trim();
       if (!pinStr) throw new Error("PIN required");
 
-      // STEP 1 — clear app storage (fast)
       step(1, "clearing local tokens (no signOut)");
       localStorage.removeItem("currentUser");
       localStorage.removeItem("offlineUser");
 
       logoutInProgressRef.current = false;
 
-      // stop refresh while swapping sessions (best effort)
       try {
         supabase.auth.stopAutoRefresh();
-      } catch {
-        // ignore
-      }
+      } catch {}
 
       step(2, `navigator.onLine=${navigator.onLine}`);
 
@@ -407,7 +524,6 @@ export const AuthProvider = ({ children }) => {
         throw new Error("Edge function did not return access/refresh tokens");
       }
 
-      // STEP 4 — set Supabase session (best effort; calendar auth does NOT depend on this anymore)
       step(4, "supabase.auth.setSession with returned tokens");
       try {
         const p = supabase.auth.setSession({ access_token, refresh_token });
@@ -416,7 +532,6 @@ export const AuthProvider = ({ children }) => {
         console.warn("[AUTH][STEP 4] setSession slow/failed (ignored)", e?.message || e);
       }
 
-      // STEP 5 — build userData (fast fallback first)
       step(5, "buildUserData()");
 
       const sessionForUser = {
@@ -445,11 +560,7 @@ export const AuthProvider = ({ children }) => {
       try {
         const safeFindStaffId = async (authUser) => {
           if (result?.staff_id) return result.staff_id;
-          return await withTimeout(
-            findStaffIdForUser(authUser),
-            1500,
-            "findStaffIdForUser"
-          );
+          return await withTimeout(findStaffIdForUser(authUser), 1500, "findStaffIdForUser");
         };
 
         userData = await withTimeout(
@@ -481,12 +592,9 @@ export const AuthProvider = ({ children }) => {
       step(7, "warm PIN cache (best-effort)");
       warmPinCache().catch(() => {});
 
-      // restart refresh after swap (best effort)
       try {
         supabase.auth.startAutoRefresh();
-      } catch {
-        // ignore
-      }
+      } catch {}
 
       step(8, "navigate -> /calendar");
       window.location.replace("/calendar");
@@ -525,7 +633,6 @@ export const AuthProvider = ({ children }) => {
       localStorage.setItem("currentUser", JSON.stringify(user));
       localStorage.removeItem("offlineUser");
 
-      // If you want email/pass users to land on calendar too:
       navigate("/calendar", { replace: true });
     } finally {
       setAuthLoading(false);
@@ -539,24 +646,18 @@ export const AuthProvider = ({ children }) => {
 
     logoutInProgressRef.current = true;
 
-    // stop refresh ASAP so it doesn't fight us
     try {
       supabase.auth.stopAutoRefresh();
-    } catch {
-      // ignore
-    }
+    } catch {}
 
-    // clear UI + app storage immediately
     setCurrentUser(null);
     setAuthLoading(false);
     setPageLoading(false);
     localStorage.removeItem("offlineUser");
     localStorage.removeItem("currentUser");
 
-    // clear Supabase auth tokens in storage immediately
     clearSupabaseAuthStorage();
 
-    // best-effort audit (never block logout)
     try {
       await withTimeout(
         logAuditIfAuthed({
@@ -576,7 +677,6 @@ export const AuthProvider = ({ children }) => {
       console.warn("[AUTH] audit on logout failed/timeout (ignored)", e?.message || e);
     }
 
-    // best-effort local signOut (never block redirect)
     try {
       await withTimeout(
         supabase.auth.signOut({ scope: "local" }),
@@ -587,16 +687,12 @@ export const AuthProvider = ({ children }) => {
       console.warn("[AUTH] signOut(local) failed/timeout (ignored)", e?.message || e);
     }
 
-    // always end on login
     console.log("[AUTH] logout: redirect -> /login");
     window.location.replace("/login");
 
-    // optional global signout (background)
     try {
       supabase.auth.signOut({ scope: "global" }).catch(() => {});
-    } catch {
-      // ignore
-    }
+    } catch {}
   };
 
   return (
@@ -611,10 +707,10 @@ export const AuthProvider = ({ children }) => {
         pageLoading,
         setPageLoading,
 
-        // ✅ IMPORTANT: this is now the “token-backed” client, so Calendar works
+        // ✅ token-backed client
         supabaseClient: supabaseTokenClient,
 
-        // optional: still expose the base client if you need it somewhere
+        // optional: still expose the base client
         baseSupabaseClient: supabase,
       }}
     >

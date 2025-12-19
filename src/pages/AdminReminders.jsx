@@ -1,196 +1,236 @@
-// ==============================
-// FILE: src/pages/AdminReminders.jsx
-// ==============================
+// ==========================================
+// FILE: src/components/reminders/RemindersDialog.jsx
+// ==========================================
 import React, { useEffect, useMemo, useState } from "react";
-import supabase from "../supabaseClient";
+import supabase from "../../supabaseClient"; // ✅ default export
+import { REMINDER_DEFAULT_TEMPLATE } from "../../utils/Reminders";
 
-// If you have a central auth/user hook, you can replace with that
-import InitAuthAudit from "../auth/initAuthAudit.jsx";
-
-// Simple utilities
-const startOfWeek = (date) => {
-  const d = new Date(date);
-  const day = d.getDay(); // 0 Sun ... 6 Sat
-  const diff = (day === 0 ? -6 : 1) - day; // Monday as start
-  d.setDate(d.getDate() + diff);
-  d.setHours(0, 0, 0, 0);
-  return d;
+// ===== Helpers =====
+const mondayStartOfWeek = (d) => {
+  const x = new Date(d);
+  const day = x.getDay(); // 0..6 (Sun..Sat)
+  const diff = (day === 0 ? -6 : 1) - day; // Monday start
+  x.setDate(x.getDate() + diff);
+  x.setHours(0, 0, 0, 0);
+  return x;
 };
 
-const endOfWeek = (date) => {
-  const s = startOfWeek(date);
-  const e = new Date(s);
+const endOfWeekFrom = (start) => {
+  const e = new Date(start);
   e.setDate(e.getDate() + 7);
   e.setMilliseconds(-1);
   return e;
 };
 
-const fmtDateTimeUK = (iso) =>
+const fmtDateUK = (iso) =>
   new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium",
+    timeZone: "Europe/London",
+  }).format(new Date(iso));
+
+const fmtTimeUK = (iso) =>
+  new Intl.DateTimeFormat("en-GB", {
     timeStyle: "short",
     timeZone: "Europe/London",
   }).format(new Date(iso));
 
-const defaultTemplate = `Hi {{first_name}}, just a friendly reminder of your appointment on {{date}} at {{time}}. See you soon!`;
+// Safely read client fields
+const getClientFirstName = (c = {}) =>
+  c.first_name || c.firstname || c.fname || c.given_name || "";
 
-const channels = ["email", "sms", "whatsapp"];
+const getClientLastName = (c = {}) =>
+  c.last_name || c.lastname || c.surname || c.family_name || "";
 
-// Helpers to safely read client fields even if names differ a bit
-function getClientFirstName(c = {}) {
-  return (
-    c.first_name ||
-    c.firstname ||
-    c.fname ||
-    c.given_name ||
-    c.name_first ||
-    ""
+const getClientEmail = (c = {}) => c.email || c.email_address || c.mail || "";
+
+// Your schema uses mobile primarily
+const getClientPhone = (c = {}) =>
+  c.mobile ||
+  c.phone ||
+  c.mobile_number ||
+  c.phone_number ||
+  c.contact_number ||
+  "";
+
+const CHANNELS = ["email", "sms", "whatsapp"];
+
+export default function RemindersDialog({
+  isOpen,
+  onClose,
+  initialFrom,
+  initialTo,
+  defaultWeekFromDate,
+}) {
+  const [from, setFrom] = useState(
+    initialFrom ?? mondayStartOfWeek(defaultWeekFromDate ?? new Date())
   );
-}
-
-function getClientLastName(c = {}) {
-  return (
-    c.last_name ||
-    c.lastname ||
-    c.surname ||
-    c.family_name ||
-    c.name_last ||
-    ""
+  const [to, setTo] = useState(
+    initialTo ??
+      endOfWeekFrom(mondayStartOfWeek(defaultWeekFromDate ?? new Date()))
   );
-}
 
-function getClientEmail(c = {}) {
-  return c.email || c.email_address || c.mail || "";
-}
-
-function getClientPhone(c = {}) {
-  // Try a few likely column names – whichever exists will be used
-  return (
-    c.phone ||
-    c.mobile ||
-    c.mobile_number ||
-    c.phone_number ||
-    c.contact_number ||
-    ""
-  );
-}
-
-function getWhatsappOptIn(c = {}) {
-  return !!(
-    c.whatsapp_opt_in ||
-    c.whatsapp ||
-    c.allow_whatsapp ||
-    c.sms_opt_in
-  );
-}
-
-export default function AdminReminders() {
-  const [from, setFrom] = useState(() => startOfWeek(new Date()));
-  const [to, setTo] = useState(() => endOfWeek(new Date()));
   const [channel, setChannel] = useState("email");
-  const [template, setTemplate] = useState(defaultTemplate);
-  const [loading, setLoading] = useState(false);
-  const [bookings, setBookings] = useState([]);
+  const [template, setTemplate] = useState(REMINDER_DEFAULT_TEMPLATE);
+
+  const [loadingBookings, setLoadingBookings] = useState(false);
+  const [sending, setSending] = useState(false);
+
+  const [error, setError] = useState("");
+  const [rows, setRows] = useState([]);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [search, setSearch] = useState("");
-  const [error, setError] = useState("");
-  const [sentResult, setSentResult] = useState(null);
+  const [result, setResult] = useState(null);
 
-  // Replace with your real admin/role check if available
-  const [isAdmin, setIsAdmin] = useState(false);
-
+  // Reset when opened + set default range based on visibleDate
   useEffect(() => {
-    (async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      // Example: check a user_metadata role, or query a profile table
-      if (user?.user_metadata?.role === "admin") setIsAdmin(true);
-    })();
-  }, []);
+    if (!isOpen) return;
+
+    setError("");
+    setResult(null);
+    setSearch("");
+
+    const base = initialFrom
+      ? new Date(initialFrom)
+      : mondayStartOfWeek(defaultWeekFromDate ?? new Date());
+    base.setHours(0, 0, 0, 0);
+
+    const end = initialTo ? new Date(initialTo) : endOfWeekFrom(base);
+    end.setHours(23, 59, 59, 999);
+
+    setFrom(base);
+    setTo(end);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   const fetchBookings = async () => {
     setError("");
-    setLoading(true);
+    setResult(null);
+    setLoadingBookings(true);
+
     try {
-      // bookings(id, start_time, end_time, client_id, note)
-      // clients(id, first_name, last_name, email, <phone-ish>, whatsapp_opt_in)
+      const fromDate = new Date(from);
+      fromDate.setHours(0, 0, 0, 0);
+
+      const toDate = new Date(to);
+      toDate.setHours(23, 59, 59, 999);
+
+      // ✅ DB columns: start and "end"
+      // Alias them to start_time/end_time for UI
       const { data, error } = await supabase
         .from("bookings")
         .select(
           `
           id,
-          start_time,
-          end_time,
-          note,
-          clients:client_id(*)
+          booking_id,
+          title,
+          category,
+          start_time:start,
+          end_time:end,
+          client_id,
+          client_name,
+          clients:client_id (
+            id,
+            first_name,
+            last_name,
+            mobile,
+            email
+          )
         `
         )
-        .gte("start_time", from.toISOString())
-        .lte("start_time", to.toISOString())
-        .order("start_time", { ascending: true });
+        .gte("start", fromDate.toISOString())
+        .lte("start", toDate.toISOString())
+        .order("start", { ascending: true });
+
+      if (import.meta.env.DEV) {
+        console.log("[RemindersDialog] range", {
+          from: fromDate.toISOString(),
+          to: toDate.toISOString(),
+          got: (data || []).length,
+          err: error || null,
+        });
+      }
 
       if (error) throw error;
 
-      const rows = (data || []).map((b) => {
+      const mapped = (data || []).map((b) => {
         const c = b.clients || {};
-        const client = {
-          id: c.id,
-          first_name: getClientFirstName(c),
-          last_name: getClientLastName(c),
-          email: getClientEmail(c),
-          phone: getClientPhone(c),
-          whatsapp_opt_in: getWhatsappOptIn(c),
-        };
         return {
-          id: b.id,
+          id: b.id, // ✅ always use uuid for selection
+          booking_id: b.booking_id || null, // optional text ref
+          title: b.title || "Appointment",
+          category: b.category || "",
           start_time: b.start_time,
-          end_time: b.end_time,
-          note: b.note,
-          client,
+          end_time: b.end_time || null,
+          client: {
+            id: c.id || b.client_id || null,
+            first_name:
+              getClientFirstName(c) ||
+              (b.client_name || "").split(" ")[0] ||
+              "",
+            last_name:
+              getClientLastName(c) ||
+              (b.client_name || "").split(" ").slice(1).join(" ") ||
+              "",
+            email: getClientEmail(c),
+            phone: getClientPhone(c),
+            whatsapp_opt_in: !!getClientPhone(c),
+          },
         };
       });
 
-      setBookings(rows);
-      setSelectedIds(new Set(rows.map((r) => r.id))); // preselect all
+      setRows(mapped);
+      setSelectedIds(new Set(mapped.map((x) => x.id))); // preselect all
     } catch (e) {
       console.error(e);
-      setError(e.message || "Failed to load bookings");
+      setRows([]);
+      setSelectedIds(new Set());
+      setError(e?.message || "Failed to load bookings");
     } finally {
-      setLoading(false);
+      setLoadingBookings(false);
     }
   };
 
+  // Fetch whenever the dialog is open and range changes
   useEffect(() => {
+    if (!isOpen) return;
     fetchBookings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isOpen, from, to]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return bookings;
-    return bookings.filter((b) => {
-      const name = `${b.client.first_name} ${b.client.last_name}`.toLowerCase();
-      return (
-        name.includes(q) ||
-        b.client.email.toLowerCase().includes(q) ||
-        (b.client.phone || "").toLowerCase().includes(q)
-      );
+    if (!q) return rows;
+
+    return rows.filter((b) => {
+      const name = `${b.client.first_name || ""} ${b.client.last_name || ""}`
+        .trim()
+        .toLowerCase();
+      const email = (b.client.email || "").toLowerCase();
+      const phone = (b.client.phone || "").toLowerCase();
+      return name.includes(q) || email.includes(q) || phone.includes(q);
     });
-  }, [bookings, search]);
+  }, [rows, search]);
 
   const toggleAll = (checked) => {
-    if (checked) setSelectedIds(new Set(filtered.map((b) => b.id)));
+    if (checked) setSelectedIds(new Set(filtered.map((r) => r.id)));
     else setSelectedIds(new Set());
   };
 
   const onSend = async () => {
     setError("");
-    setLoading(true);
-    setSentResult(null);
+    setResult(null);
+    setSending(true);
+
     try {
-      const selected = bookings.filter((b) => selectedIds.has(b.id));
+      let selected = rows.filter((r) => selectedIds.has(r.id));
       if (!selected.length) throw new Error("No bookings selected");
+
+      if (channel === "whatsapp") {
+        selected = selected.filter((r) => r.client.phone);
+        if (!selected.length) {
+          throw new Error("No recipients with a mobile number for WhatsApp");
+        }
+      }
 
       const resp = await fetch("/.netlify/functions/sendBulkReminders", {
         method: "POST",
@@ -200,7 +240,7 @@ export default function AdminReminders() {
           template,
           timezone: "Europe/London",
           bookings: selected.map((b) => ({
-            booking_id: b.id,
+            booking_id: b.booking_id || b.id,
             start_time: b.start_time,
             end_time: b.end_time,
             client: b.client,
@@ -212,294 +252,266 @@ export default function AdminReminders() {
         const t = await resp.text();
         throw new Error(t || "Failed to send reminders");
       }
+
       const json = await resp.json();
-      setSentResult(json);
+      setResult(json);
     } catch (e) {
       console.error(e);
-      setError(e.message || "Failed to send reminders");
+      setError(e?.message || "Failed to send reminders");
     } finally {
-      setLoading(false);
+      setSending(false);
     }
   };
 
-  const replaceTokens = (tpl, b) => {
-    const date = new Intl.DateTimeFormat("en-GB", {
-      dateStyle: "medium",
-      timeZone: "Europe/London",
-    }).format(new Date(b.start_time));
-    const time = new Intl.DateTimeFormat("en-GB", {
-      timeStyle: "short",
-      timeZone: "Europe/London",
-    }).format(new Date(b.start_time));
-    return tpl
-      .replaceAll("{{first_name}}", b.client.first_name || "")
-      .replaceAll("{{last_name}}", b.client.last_name || "")
-      .replaceAll("{{date}}", date)
-      .replaceAll("{{time}}", time);
-  };
-
-  if (!isAdmin) {
-    return (
-      <div className="p-6">
-        <InitAuthAudit />
-        <h1 className="text-2xl font-semibold">Reminders</h1>
-        <p className="mt-2 text-red-600">You must be an admin to access this page.</p>
-      </div>
-    );
-  }
+  if (!isOpen) return null;
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 bg-slate-100/60 min-h-[calc(100vh-4rem)]">
-      <InitAuthAudit />
-      <div className="mx-auto max-w-5xl bg-white text-gray-900 rounded-lg shadow border border-gray-200 overflow-hidden">
+    <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-6">
+      <div className="w-full sm:max-w-4xl bg-white text-gray-900 rounded-t-2xl sm:rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-4 bg-gray-50 border-b">
+        <div className="p-4 border-b flex items-center gap-3 bg-gray-50">
           <div>
-            <h1 className="text-lg sm:text-xl font-semibold">
-              Send Appointment Reminders
-            </h1>
-            <p className="text-xs sm:text-sm text-gray-600 mt-0.5">
-              Choose a date range, edit the message, then send via Email / SMS / WhatsApp.
+            <h2 className="text-base sm:text-lg font-semibold">Send Reminders</h2>
+            <p className="text-xs sm:text-sm text-gray-600">
+              Loaded: {rows.length} | Selected: {selectedIds.size}
+            </p>
+          </div>
+
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              className="px-3 py-1.5 text-xs sm:text-sm rounded border"
+              onClick={() => {
+                const s = mondayStartOfWeek(new Date());
+                const e = endOfWeekFrom(s);
+                setFrom(s);
+                setTo(e);
+              }}
+            >
+              This week
+            </button>
+
+            <button
+              className="px-3 py-1.5 text-xs sm:text-sm rounded border"
+              onClick={() => {
+                const base = new Date();
+                base.setDate(base.getDate() + 7);
+                const s = mondayStartOfWeek(base);
+                const e = endOfWeekFrom(s);
+                setFrom(s);
+                setTo(e);
+              }}
+            >
+              Next week
+            </button>
+
+            <button
+              className="px-3 py-1.5 text-xs sm:text-sm rounded border"
+              onClick={() => {
+                const d = new Date();
+                const s = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+                const e = new Date(
+                  d.getFullYear(),
+                  d.getMonth() + 1,
+                  0,
+                  23,
+                  59,
+                  59,
+                  999
+                );
+                setFrom(s);
+                setTo(e);
+              }}
+            >
+              This month
+            </button>
+
+            <button
+              className="px-3 py-1.5 text-xs sm:text-sm rounded border"
+              onClick={fetchBookings}
+              disabled={loadingBookings || sending}
+            >
+              {loadingBookings ? "Loading..." : "Refresh"}
+            </button>
+
+            <button
+              className="px-3 py-1.5 text-xs sm:text-sm rounded border"
+              onClick={onClose}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+
+        {/* Controls */}
+        <div className="p-4 grid gap-3 sm:grid-cols-4 items-start border-b">
+          <div className="sm:col-span-2 flex items-center gap-2">
+            <label className="text-xs sm:text-sm w-14 sm:w-16">From</label>
+            <input
+              type="date"
+              className="border rounded px-2 py-2 w-full text-sm"
+              value={from.toISOString().slice(0, 10)}
+              onChange={(e) => {
+                const d = new Date(e.target.value);
+                d.setHours(0, 0, 0, 0);
+                setFrom(d);
+              }}
+            />
+          </div>
+
+          <div className="sm:col-span-2 flex items-center gap-2">
+            <label className="text-xs sm:text-sm w-14 sm:w-16">To</label>
+            <input
+              type="date"
+              className="border rounded px-2 py-2 w-full text-sm"
+              value={to.toISOString().slice(0, 10)}
+              onChange={(e) => {
+                const d = new Date(e.target.value);
+                d.setHours(23, 59, 59, 999);
+                setTo(d);
+              }}
+            />
+          </div>
+
+          <div className="sm:col-span-1">
+            <label className="block text-xs sm:text-sm mb-1">Channel</label>
+            <select
+              className="border rounded px-2 py-2 w-full text-sm"
+              value={channel}
+              onChange={(e) => setChannel(e.target.value)}
+            >
+              {CHANNELS.map((c) => (
+                <option key={c} value={c}>
+                  {c.toUpperCase()}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="sm:col-span-3">
+            <label className="block text-xs sm:text-sm mb-1">Message template</label>
+            <textarea
+              className="border rounded px-3 py-2 w-full min-h-[110px] text-sm"
+              value={template}
+              onChange={(e) => setTemplate(e.target.value)}
+            />
+            <p className="text-[11px] text-gray-500 mt-1">
+              Tokens: {"{{first_name}}"}, {"{{last_name}}"}, {"{{date}}"}, {"{{time}}"}
             </p>
           </div>
         </div>
 
-        {/* Content */}
-        <div className="px-4 sm:px-6 py-4 sm:py-6 space-y-6 text-sm">
-          {/* Date range */}
-          <section className="grid gap-3 md:grid-cols-4">
-            <div className="col-span-2 flex items-center gap-2">
-              <label className="text-xs sm:text-sm w-16 sm:w-20">From</label>
-              <input
-                type="date"
-                className="border rounded px-2 py-2 w-full text-sm"
-                value={from.toISOString().slice(0, 10)}
-                onChange={(e) => {
-                  const d = new Date(e.target.value);
-                  d.setHours(0, 0, 0, 0);
-                  setFrom(d);
-                }}
-              />
-            </div>
-            <div className="col-span-2 flex items-center gap-2">
-              <label className="text-xs sm:text-sm w-16 sm:w-20">To</label>
-              <input
-                type="date"
-                className="border rounded px-2 py-2 w-full text-sm"
-                value={to.toISOString().slice(0, 10)}
-                onChange={(e) => {
-                  const d = new Date(e.target.value);
-                  d.setHours(23, 59, 59, 999);
-                  setTo(d);
-                }}
-              />
-            </div>
-            <div className="col-span-4 flex flex-wrap gap-2 pt-1">
-              <button
-                className="border rounded px-3 py-1.5 text-xs sm:text-sm"
-                onClick={() => {
-                  const now = new Date();
-                  setFrom(startOfWeek(now));
-                  setTo(endOfWeek(now));
-                }}
-              >
-                This week
-              </button>
-              <button
-                className="border rounded px-3 py-1.5 text-xs sm:text-sm"
-                onClick={() => {
-                  const d = new Date();
-                  d.setDate(d.getDate() + 7);
-                  setFrom(startOfWeek(d));
-                  setTo(endOfWeek(d));
-                }}
-              >
-                Next week
-              </button>
-              <button
-                className="border rounded px-3 py-1.5 text-xs sm:text-sm"
-                onClick={() => {
-                  const d = new Date();
-                  setFrom(new Date(d.getFullYear(), d.getMonth(), 1));
-                  setTo(
-                    new Date(
-                      d.getFullYear(),
-                      d.getMonth() + 1,
-                      0,
-                      23,
-                      59,
-                      59,
-                      999
-                    )
-                  );
-                }}
-              >
-                This month
-              </button>
-              <button
-                className="border rounded px-3 py-1.5 text-xs sm:text-sm ml-auto"
-                onClick={fetchBookings}
-                disabled={loading}
-              >
-                {loading ? "Loading…" : "Refresh bookings"}
-              </button>
-            </div>
-          </section>
+        {/* Search + action */}
+        <div className="px-4 pt-3 pb-2 flex flex-wrap items-center gap-2">
+          <input
+            className="border rounded px-3 py-2 text-sm flex-1 min-w-[200px]"
+            placeholder="Search name, email, phone"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
 
-          {/* Channel + message template */}
-          <section className="grid gap-4 md:grid-cols-4 items-start">
-            <div className="col-span-4 md:col-span-1 space-y-2">
-              <div>
-                <label className="block text-xs sm:text-sm mb-1">Channel</label>
-                <select
-                  className="border rounded px-2 py-2 w-full text-sm"
-                  value={channel}
-                  onChange={(e) => setChannel(e.target.value)}
-                >
-                  {channels.map((c) => (
-                    <option key={c} value={c}>
-                      {c.toUpperCase()}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="col-span-4 md:col-span-3">
-              <label className="block text-xs sm:text-sm mb-1">
-                Message template
-              </label>
-              <textarea
-                className="border rounded px-3 py-2 w-full min-h-[110px] text-sm"
-                value={template}
-                onChange={(e) => setTemplate(e.target.value)}
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Tokens: {"{{first_name}}"}, {"{{last_name}}"}, {"{{date}}"},{" "}
-                {"{{time}}"}
-              </p>
-            </div>
-          </section>
-
-          {/* Search + actions */}
-          <section className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-xs sm:text-sm whitespace-nowrap">
             <input
-              className="border rounded px-3 py-2 text-sm flex-1 min-w-[200px]"
-              placeholder="Search name, email, phone"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              type="checkbox"
+              checked={filtered.length > 0 && selectedIds.size === filtered.length}
+              onChange={(e) => toggleAll(e.target.checked)}
             />
-            <label className="flex items-center gap-2 text-xs sm:text-sm whitespace-nowrap">
-              <input
-                type="checkbox"
-                checked={filtered.length && selectedIds.size === filtered.length}
-                onChange={(e) => toggleAll(e.target.checked)}
-              />
-              <span>Select all ({filtered.length})</span>
-            </label>
-            <button
-              className="ml-auto bg-black text-white rounded px-4 py-2 text-sm"
-              onClick={onSend}
-              disabled={loading}
-            >
-              {loading ? "Sending…" : "Send reminders"}
-            </button>
-          </section>
+            <span>Select all ({filtered.length})</span>
+          </label>
 
-          {/* Error / result */}
-          {error && (
-            <div className="p-3 bg-red-50 text-red-700 rounded text-sm">
-              {error}
-            </div>
-          )}
-          {sentResult && (
+          <button
+            className="ml-auto bg-black text-white rounded px-4 py-2 text-sm"
+            onClick={onSend}
+            disabled={sending || loadingBookings}
+          >
+            {sending ? "Sending…" : "Send reminders"}
+          </button>
+        </div>
+
+        {/* Feedback */}
+        {error && (
+          <div className="px-4 pb-2">
+            <div className="p-3 bg-red-50 text-red-700 rounded text-sm">{error}</div>
+          </div>
+        )}
+
+        {result && (
+          <div className="px-4 pb-2 space-y-2">
             <div className="p-3 bg-green-50 text-green-700 rounded text-sm">
-              <div className="font-semibold">Reminders sent</div>
+              <div className="font-semibold">Sent</div>
               <div className="mt-1">
-                Total: {sentResult.total} | Success: {sentResult.success} | Failed:{" "}
-                {sentResult.failed}
+                Total: {result.total} | Success: {result.success} | Failed: {result.failed}
               </div>
             </div>
-          )}
 
-          {/* Bookings table */}
-          <section className="border rounded overflow-auto">
-            <table className="min-w-full text-xs sm:text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="p-2 text-left w-10">Sel</th>
-                  <th className="p-2 text-left">Client</th>
-                  <th className="p-2 text-left">Contact</th>
-                  <th className="p-2 text-left">Appointment</th>
-                  <th className="p-2 text-left">Preview</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((b) => {
-                  const checked = selectedIds.has(b.id);
-                  const preview = replaceTokens(template, b);
-                  return (
-                    <tr key={b.id} className="border-t align-top">
-                      <td className="p-2">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(e) => {
-                            const next = new Set(selectedIds);
-                            if (e.target.checked) next.add(b.id);
-                            else next.delete(b.id);
-                            setSelectedIds(next);
-                          }}
-                        />
-                      </td>
-                      <td className="p-2 whitespace-nowrap">
-                        {b.client.first_name} {b.client.last_name}
-                      </td>
-                      <td className="p-2">
-                        <div className="truncate max-w-[180px]">
-                          {b.client.email || "—"}
-                        </div>
-                        <div className="text-gray-500">
-                          {b.client.phone || "—"}
-                        </div>
-                      </td>
-                      <td className="p-2 whitespace-nowrap">
-                        <div>{fmtDateTimeUK(b.start_time)}</div>
-                        {b.end_time && (
-                          <div className="text-gray-500">
-                            Ends {fmtDateTimeUK(b.end_time)}
-                          </div>
-                        )}
-                      </td>
-                      <td className="p-2 text-gray-700 whitespace-pre-wrap max-w-xs sm:max-w-md">
-                        {preview}
-                      </td>
-                    </tr>
-                  );
-                })}
-                {!filtered.length && (
-                  <tr>
-                    <td
-                      colSpan={5}
-                      className="p-6 text-center text-gray-500 text-sm"
-                    >
-                      No bookings in range.
+            {result.results && result.results.length > 0 && (
+              <div className="p-3 bg-gray-50 text-gray-800 rounded text-xs max-h-40 overflow-auto">
+                {result.results.map((r, idx) => (
+                  <div key={idx} className="mb-1">
+                    Booking {r.booking_id}:{" "}
+                    {r.ok ? "✅ sent" : `❌ failed – ${r.error || "Unknown error"}`}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Table */}
+        <div className="p-4 overflow-auto border-t">
+          <table className="min-w-full text-xs sm:text-sm">
+            <thead className="bg-gray-50 sticky top-0">
+              <tr>
+                <th className="p-2 text-left w-10">Sel</th>
+                <th className="p-2 text-left">Client</th>
+                <th className="p-2 text-left">Contact</th>
+                <th className="p-2 text-left">Appointment</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {filtered.map((b) => {
+                const checked = selectedIds.has(b.id);
+                return (
+                  <tr key={b.id} className="border-t align-top">
+                    <td className="p-2">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => {
+                          const next = new Set(selectedIds);
+                          if (e.target.checked) next.add(b.id);
+                          else next.delete(b.id);
+                          setSelectedIds(next);
+                        }}
+                      />
+                    </td>
+
+                    <td className="p-2 whitespace-nowrap">
+                      {b.client.first_name} {b.client.last_name}
+                    </td>
+
+                    <td className="p-2">
+                      <div className="truncate max-w-[180px]">{b.client.email || "—"}</div>
+                      <div className="text-gray-500">{b.client.phone || "—"}</div>
+                    </td>
+
+                    <td className="p-2 whitespace-nowrap">
+                      <div>{fmtDateUK(b.start_time)}</div>
+                      <div className="text-gray-500">{fmtTimeUK(b.start_time)}</div>
                     </td>
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </section>
+                );
+              })}
 
-          <section className="text-[11px] text-gray-500">
-            <p>
-              Note: This page expects a <code>bookings</code> table with a foreign
-              key <code>client_id</code> pointing to a <code>clients</code> table.
-              If your column names for first name / last name / email / phone are
-              different, they are handled in the helper functions at the top of
-              this file.
-            </p>
-          </section>
+              {!filtered.length && (
+                <tr>
+                  <td colSpan={4} className="p-6 text-center text-gray-500 text-sm">
+                    No bookings in range.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

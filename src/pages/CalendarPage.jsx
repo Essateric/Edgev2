@@ -44,6 +44,7 @@ const localizer = dateFnsLocalizer({
   locales,
 });
 
+
 /* ----------------- small date helpers ----------------- */
 
 // keep times as local wall-clock and guarantee at least 1 minute
@@ -70,6 +71,22 @@ const clampRange = (start, end) => {
 const toDate = (v) => (v instanceof Date ? v : new Date(v));
 
 export default function CalendarPage() {
+    const [stylistList, setStylistList] = useState([]);
+  const mapBookingRowToEvent = (b) => {
+  const stylistRow = stylistList.find((s) => s.id === b.resource_id);
+  const start = b.start ?? b.start_time;
+  const end = b.end ?? b.end_time;
+
+  return {
+    ...b,
+    start: new Date(start),
+    end: new Date(end),
+    resourceId: b.resource_id,
+    stylistName: stylistRow?.name || "Unknown Stylist",
+    title: b.title || "No Service Name",
+  };
+};
+
   const auth = useAuth();
   const { currentUser, pageLoading, authLoading } = auth;
 
@@ -79,7 +96,6 @@ export default function CalendarPage() {
   const hasUser = !!currentUser;
 
   const [clients, setClients] = useState([]);
-  const [stylistList, setStylistList] = useState([]);
   const [events, setEvents] = useState([]);
 
   const [dbg, setDbg] = useState({});
@@ -122,6 +138,16 @@ const newBookingExtendedProps = useMemo(() => {
     client_last_name: selectedClientRow?.last_name ?? null,
   };
 }, [selectedClientRow]);
+
+
+  const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
+  const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
+
+const calendarEvents = useMemo(() => {
+  const live = (events || []).filter((e) => e.status !== "cancelled");
+  return [...live, ...unavailableBlocks, ...salonClosedBlocks];
+}, [events, unavailableBlocks, salonClosedBlocks]);
+
 
 
   const isAdmin = currentUser?.permission?.toLowerCase() === "admin";
@@ -290,8 +316,46 @@ const newBookingExtendedProps = useMemo(() => {
     };
   }, [currentUser?.id, supabase]);
 
-  const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
-  const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
+  useEffect(() => {
+  if (!currentUser?.id) return;
+  if (!supabase) return;
+
+  const channel = supabase
+    .channel("realtime:bookings")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "bookings" },
+      (payload) => {
+        if (payload.eventType === "DELETE") {
+          const oldRow = payload.old;
+          if (!oldRow?.id) return;
+          setEvents((prev) => prev.filter((e) => e.id !== oldRow.id));
+          return;
+        }
+
+        const row = payload.new;
+        if (!row?.id) return;
+
+        setEvents((prev) => {
+          const idx = prev.findIndex((e) => e.id === row.id);
+          const mapped = mapBookingRowToEvent(row);
+
+          if (idx === -1) return [...prev, mapped];
+
+          const copy = prev.slice();
+          copy[idx] = { ...copy[idx], ...mapped };
+          return copy;
+        });
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [supabase, currentUser?.id, stylistList]);
+
+
 
   const moveEvent = useCallback(
     
@@ -461,7 +525,7 @@ const newBookingExtendedProps = useMemo(() => {
 
       <DnDCalendar
         localizer={localizer}
-        events={[...events, ...unavailableBlocks, ...salonClosedBlocks]}
+       events={calendarEvents}
         startAccessor="start"
         endAccessor="end"
         resources={stylistList}
@@ -497,27 +561,22 @@ const newBookingExtendedProps = useMemo(() => {
         onEventDrop={moveEvent}
         resizable
         onEventResize={moveEvent}
-        eventPropGetter={(event) => {
-          if (event.isUnavailable) {
-            return {
-              style: {
-                backgroundColor: "#36454F",
-                opacity: 0.7,
-                border: "none",
-              },
-            };
-          }
-          if (event.isSalonClosed) {
-            return {
-              style: {
-                backgroundColor: "#333333",
-                opacity: 0.7,
-                border: "none",
-              },
-            };
-          }
-          return { style: { zIndex: 2 } };
-        }}
+eventPropGetter={(event) => {
+  if (event.isUnavailable) {
+    return { style: { backgroundColor: "#36454F", opacity: 0.7, border: "none" } };
+  }
+  if (event.isSalonClosed) {
+    return { style: { backgroundColor: "#333333", opacity: 0.7, border: "none" } };
+  }
+
+  if (event.status === "confirmed") {
+    return { style: { zIndex: 2, opacity: 0.6 } };
+  }
+
+  return { style: { zIndex: 2 } };
+}}
+
+
         style={{ height: "90vh" }}
         components={{
           event: CustomCalendarEvent,
