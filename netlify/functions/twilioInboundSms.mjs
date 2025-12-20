@@ -21,10 +21,16 @@ const parseReply = (bodyRaw) => {
   return null;
 };
 
+const normalizeFrom = (from) => String(from || "").trim().replace(/^whatsapp:/i, "");
+
 export const handler = async (event) => {
   try {
-    const params = new URLSearchParams(event.body || "");
-    const from = params.get("From");      // +447...
+    const bodyRaw = event.isBase64Encoded
+      ? Buffer.from(event.body || "", "base64").toString("utf8")
+      : (event.body || "");
+
+    const params = new URLSearchParams(bodyRaw);
+    const from = normalizeFrom(params.get("From")); // +447...
     const body = params.get("Body");
     const messageSid = params.get("MessageSid");
 
@@ -44,10 +50,10 @@ export const handler = async (event) => {
     const sb = sbAdmin();
     const nowIso = new Date().toISOString();
 
-    // ✅ Find newest pending confirmation for this phone
+    // ✅ newest pending confirmation for this phone
     const { data: conf, error: cErr } = await sb
       .from("booking_confirmations")
-      .select("id, booking_id, expires_at, responded_at, channel")
+      .select("id, booking_id, expires_at, responded_at, channel, created_at")
       .eq("client_phone", from)
       .eq("channel", "sms")
       .is("responded_at", null)
@@ -59,10 +65,13 @@ export const handler = async (event) => {
     if (cErr) throw cErr;
 
     if (!conf) {
-      return { statusCode: 200, headers: { "Content-Type": "text/xml" }, body: twiml("No pending booking found. Please contact the salon.") };
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "text/xml" },
+        body: twiml("No pending booking found. Please contact the salon."),
+      };
     }
 
-    // Load booking (the “first booking”)
     const { data: booking, error: bErr } = await sb
       .from("bookings")
       .select("id, booking_id, client_id")
@@ -74,8 +83,9 @@ export const handler = async (event) => {
       return { statusCode: 200, headers: { "Content-Type": "text/xml" }, body: twiml("Booking not found.") };
     }
 
-    // ✅ Apply to ALL slots in that block
+    // ✅ update ALL rows in the same booking block
     let affectedIds = [booking.id];
+
     if (booking.booking_id) {
       const { data: allSlots, error: aErr } = await sb
         .from("bookings")

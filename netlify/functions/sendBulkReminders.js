@@ -308,6 +308,11 @@ export const handler = async (event) => {
       }),
     };
   } catch (e) {
-    return { statusCode: 400, body: e?.message || "Bad request" };
-  }
+  return {
+    statusCode: 400,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    body: JSON.stringify({ message: e?.message || "Bad request" }),
+  };
+}
+
 };

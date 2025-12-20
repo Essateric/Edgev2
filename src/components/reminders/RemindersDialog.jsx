@@ -3,7 +3,7 @@
 // ==========================================
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useAuth } from "../../contexts/AuthContext.jsx";
-import { REMINDER_DEFAULT_TEMPLATE } from "../../utils/Reminders";
+import { REMINDER_DEFAULT_TEMPLATE } from "../../utils/Reminders.js";
 
 // ---- Date helpers (prevents off-by-one with <input type="date">)
 const dateToInputValue = (date) => {
@@ -11,29 +11,6 @@ const dateToInputValue = (date) => {
   const tz = d.getTimezoneOffset() * 60000;
   return new Date(d.getTime() - tz).toISOString().slice(0, 10);
 };
-
-const normalizeUkMobileToE164 = (raw) => {
-  const s = String(raw || "").trim();
-  if (!s) return "";
-
-  // remove spaces, dashes, brackets
-  let n = s.replace(/[^\d+]/g, "");
-
-  // already E.164
-  if (n.startsWith("+")) return n;
-
-  // 00 prefix -> +
-  if (n.startsWith("00")) return "+" + n.slice(2);
-
-  // UK mobile 07xxxxxxxxx -> +447xxxxxxxxx
-  if (n.startsWith("07")) return "+44" + n.slice(1);
-
-  // UK without leading 0 (7xxxxxxxxx) -> +447xxxxxxxxx
-  if (n.startsWith("7") && n.length === 10) return "+44" + n;
-
-  return n; // fallback
-};
-
 
 const inputValueToDate = (yyyyMmDd, endOfDay = false) => {
   const [y, m, d] = String(yyyyMmDd).split("-").map(Number);
@@ -97,6 +74,12 @@ const minuteKey = (iso) => {
   }
 };
 
+// Defensive cancelled check (handles "cancelled", "canceled", whitespace, case)
+const isCancelledStatus = (status) => {
+  const s = String(status || "").trim().toLowerCase();
+  return s === "cancelled" || s === "canceled" || s.startsWith("cancel");
+};
+
 export default function RemindersDialog({
   isOpen,
   onClose,
@@ -105,8 +88,6 @@ export default function RemindersDialog({
   defaultWeekFromDate,
 }) {
   const { currentUser, supabaseClient, baseSupabaseClient } = useAuth();
-
-  // ✅ IMPORTANT: use the token-backed client (auto refreshes token)
   const db = supabaseClient || baseSupabaseClient;
 
   const baseDate = defaultWeekFromDate ? new Date(defaultWeekFromDate) : new Date();
@@ -128,13 +109,14 @@ export default function RemindersDialog({
   const [search, setSearch] = useState("");
   const [result, setResult] = useState(null);
 
-  // reset range on open
+  // reset range + template on open
   useEffect(() => {
     if (!isOpen) return;
 
     setError("");
     setResult(null);
     setSearch("");
+    setTemplate(REMINDER_DEFAULT_TEMPLATE);
 
     const base = initialFrom ? new Date(initialFrom) : mondayStartOfWeek(baseDate);
     base.setHours(0, 0, 0, 0);
@@ -152,7 +134,6 @@ export default function RemindersDialog({
     setResult(null);
     setLoading(true);
 
-    // If they are offline or token is missing, reminders won’t work anyway
     if (!db) {
       setLoading(false);
       setRows([]);
@@ -176,20 +157,22 @@ export default function RemindersDialog({
     toDate.setHours(23, 59, 59, 999);
 
     try {
-      // ✅ Your real columns are start + "end"
+      // ✅ NOTE: We DO NOT filter out cancelled here anymore.
+      // We want them visible in the modal, but not selectable/contactable.
       const { data, error } = await db
         .from("bookings")
         .select(
           `
-          id,
-          booking_id,
-          title,
-          client_id,
-          client_name,
-          start,
-          end,
-          clients:client_id ( id, first_name, last_name, mobile, email )
-        `
+            id,
+            booking_id,
+            title,
+            client_id,
+            client_name,
+            start,
+            end,
+            status,
+            clients:client_id ( id, first_name, last_name, mobile, email )
+          `
         )
         .gte("start", fromDate.toISOString())
         .lte("start", toDate.toISOString())
@@ -197,10 +180,7 @@ export default function RemindersDialog({
 
       if (error) throw error;
 
-      // ✅ One row per APPOINTMENT (not per row in bookings table)
-      // Priority:
-      // 1) booking_id (if exists)
-      // 2) fallback key = client + start(minute)  (prevents duplicates when booking_id is null)
+      // ✅ One row per APPOINTMENT (grouped by booking_id, fallback to client+minute)
       const byKey = new Map();
 
       for (const b of data || []) {
@@ -208,19 +188,19 @@ export default function RemindersDialog({
         const clientName = b.client_name || "";
         const phone = getClientPhone(c);
 
-        const clientKey =
-          c.id || b.client_id || clientName || "unknown-client";
-
+        const clientKey = c.id || b.client_id || clientName || "unknown-client";
         const key =
           (b.booking_id && String(b.booking_id).trim()) ||
           `${clientKey}__${minuteKey(b.start)}`;
 
-        const baseRow = {
-          id: String(key),
+        const row = {
+          id: String(key),      // group key for selection
+          booking_uuid: b.id,   // REAL uuid (FK-safe)
           booking_id: b.booking_id || null,
           start_time: b.start,
           end_time: b.end || null,
           title: b.title || "Appointment",
+          status: b.status || null,
           client: {
             id: c.id || b.client_id || null,
             first_name: getClientFirstName(c, clientName),
@@ -231,27 +211,37 @@ export default function RemindersDialog({
           },
         };
 
-        const existing = byKey.get(baseRow.id);
+        const existing = byKey.get(row.id);
         if (!existing) {
-          byKey.set(baseRow.id, baseRow);
+          byKey.set(row.id, row);
         } else {
-          // Keep earliest start and latest end (covers multi-row bookings)
-          if (new Date(baseRow.start_time) < new Date(existing.start_time)) {
-            existing.start_time = baseRow.start_time;
+          // Keep earliest start and latest end
+          if (new Date(row.start_time) < new Date(existing.start_time)) {
+            existing.start_time = row.start_time;
+            existing.booking_uuid = row.booking_uuid; // align uuid to earliest slot
           }
           if (
-            baseRow.end_time &&
-            (!existing.end_time || new Date(baseRow.end_time) > new Date(existing.end_time))
+            row.end_time &&
+            (!existing.end_time || new Date(row.end_time) > new Date(existing.end_time))
           ) {
-            existing.end_time = baseRow.end_time;
+            existing.end_time = row.end_time;
           }
-          byKey.set(baseRow.id, existing);
+
+          // ✅ If ANY slot in the block is cancelled, treat the whole block as cancelled
+          if (isCancelledStatus(row.status) || isCancelledStatus(existing.status)) {
+            existing.status = "cancelled";
+          }
+
+          byKey.set(row.id, existing);
         }
       }
 
       const mapped = Array.from(byKey.values());
+
+      // ✅ Preselect ONLY non-cancelled bookings
+      const selectable = mapped.filter((r) => !isCancelledStatus(r.status));
       setRows(mapped);
-      setSelectedIds(new Set(mapped.map((x) => x.id)));
+      setSelectedIds(new Set(selectable.map((x) => x.id)));
     } catch (e) {
       console.error(e);
       setRows([]);
@@ -278,85 +268,80 @@ export default function RemindersDialog({
     });
   }, [rows, search]);
 
+  const filteredSelectable = useMemo(
+    () => filtered.filter((r) => !isCancelledStatus(r.status)),
+    [filtered]
+  );
+
+  const allSelectableSelected =
+    filteredSelectable.length > 0 &&
+    filteredSelectable.every((r) => selectedIds.has(r.id));
+
   const toggleAll = (checked) => {
-    if (checked) setSelectedIds(new Set(filtered.map((r) => r.id)));
-    else setSelectedIds(new Set());
-  };
-const onSend = async () => {
-  setError("");
-  setResult(null);
-  setSending(true);
-
-  try {
-    let selected = rows.filter((r) => selectedIds.has(r.id));
-    if (!selected.length) throw new Error("No bookings selected");
-
-    // ✅ normalize channel so it always matches your Netlify function keys
-    const normalizedChannel = String(channel || "email").toLowerCase().trim();
-
-    if (normalizedChannel === "whatsapp") {
-      selected = selected.filter((r) => r.client.phone);
-      if (!selected.length)
-        throw new Error("No recipients with a mobile number for WhatsApp");
+    if (checked) {
+      setSelectedIds(new Set(filteredSelectable.map((r) => r.id)));
+    } else {
+      setSelectedIds(new Set());
     }
+  };
 
-    const payload = {
-      channel: normalizedChannel, // ✅ send the normalized value
-      template,
-      timezone: "Europe/London",
-   bookings: selected.map((b) => ({
-  id: b.id,                 // ✅ bookings.id (uuid) — required
-  booking_id: b.booking_id, // ✅ bookings.booking_id (text) — group key
-  start_time: b.start_time,
-  end_time: b.end_time,
-  client: b.client,
-})),
-    };
+  const onSend = async () => {
+    setError("");
+    setResult(null);
+    setSending(true);
 
-    console.log("[RemindersDialog] SEND payload", payload);
+    try {
+      let selected = rows.filter((r) => selectedIds.has(r.id));
 
-   const resp = await fetch("/.netlify/functions/sendBulkReminders", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    channel,
-    template,
-    timezone: "Europe/London",
-    bookings: selected.map((b) => ({
-      id: b.id,  
-      booking_id: b.booking_id || b.id,
-      start_time: b.start_time,
-      end_time: b.end_time,
-      client: b.client,
-    })),
-  }),
-});
+      // ✅ Hard block: never send to cancelled bookings
+      selected = selected.filter((r) => !isCancelledStatus(r.status));
 
-const json = await resp.json().catch(() => null);
+      if (!selected.length) throw new Error("No contactable (non-cancelled) bookings selected");
 
-console.log("[RemindersDialog] SEND result", json);
+      const normalizedChannel = String(channel || "email").toLowerCase().trim();
 
-const firstFail = json?.results?.find((r) => r && r.ok === false);
-if (firstFail) {
-  console.warn("[RemindersDialog] SEND first error", firstFail.error);
-}
+      if (normalizedChannel === "whatsapp") {
+        selected = selected.filter((r) => r.client.phone);
+        if (!selected.length) throw new Error("No recipients with a mobile number for WhatsApp");
+      }
 
-if (!resp.ok) {
-  throw new Error((json && json.message) || "Failed to send reminders");
-}
+      const payload = {
+        channel: normalizedChannel,
+        template,
+        timezone: "Europe/London",
+        bookings: selected.map((b) => ({
+          id: b.booking_uuid,       // ✅ FK-safe uuid
+          booking_id: b.booking_id, // optional text group id
+          start_time: b.start_time,
+          end_time: b.end_time,
+          client: b.client,
+        })),
+      };
 
-setResult(json);
+      const resp = await fetch("/.netlify/functions/sendBulkReminders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
-  } catch (e) {
-    console.error(e);
-    setError(e?.message || "Failed to send reminders");
-  } finally {
-    setSending(false);
-  }
-};
+      const json = await resp.json().catch(() => null);
 
+      if (!resp.ok) {
+        throw new Error((json && json.message) || "Failed to send reminders");
+      }
+
+      setResult(json);
+    } catch (e) {
+      console.error(e);
+      setError(e?.message || "Failed to send reminders");
+    } finally {
+      setSending(false);
+    }
+  };
 
   if (!isOpen) return null;
+
+  const cancelledCount = rows.filter((r) => isCancelledStatus(r.status)).length;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-6">
@@ -366,7 +351,8 @@ setResult(json);
           <div>
             <h2 className="text-base sm:text-lg font-semibold">Send Reminders</h2>
             <p className="text-xs sm:text-sm text-gray-600">
-              Loaded: {rows.length} | Selected: {selectedIds.size}
+              Loaded: {rows.length}
+              {cancelledCount ? ` (${cancelledCount} cancelled)` : ""} | Selected: {selectedIds.size}
             </p>
           </div>
 
@@ -378,7 +364,10 @@ setResult(json);
             >
               {loading ? "Loading..." : "Refresh"}
             </button>
-            <button className="px-3 py-1.5 text-xs sm:text-sm rounded border" onClick={onClose}>
+            <button
+              className="px-3 py-1.5 text-xs sm:text-sm rounded border"
+              onClick={onClose}
+            >
               Close
             </button>
           </div>
@@ -443,10 +432,10 @@ setResult(json);
           <label className="flex items-center gap-2 text-xs sm:text-sm whitespace-nowrap">
             <input
               type="checkbox"
-              checked={filtered.length > 0 && selectedIds.size === filtered.length}
+              checked={allSelectableSelected}
               onChange={(e) => toggleAll(e.target.checked)}
             />
-            <span>Select all ({filtered.length})</span>
+            <span>Select all ({filteredSelectable.length})</span>
           </label>
 
           <button
@@ -476,33 +465,55 @@ setResult(json);
               </tr>
             </thead>
             <tbody>
-              {filtered.map((b) => (
-                <tr key={String(b.id)} className="border-t align-top">
-                  <td className="p-2">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(b.id)}
-                      onChange={(e) => {
-                        const next = new Set(selectedIds);
-                        if (e.target.checked) next.add(b.id);
-                        else next.delete(b.id);
-                        setSelectedIds(next);
-                      }}
-                    />
-                  </td>
-                  <td className="p-2 whitespace-nowrap">
-                    {b.client.first_name} {b.client.last_name}
-                  </td>
-                  <td className="p-2">
-                    <div className="truncate max-w-[180px]">{b.client.email || "—"}</div>
-                    <div className="text-gray-500">{b.client.phone || "—"}</div>
-                  </td>
-                  <td className="p-2 whitespace-nowrap">
-                    <div>{fmtDateUK(b.start_time)}</div>
-                    <div className="text-gray-500">{fmtTimeUK(b.start_time)}</div>
-                  </td>
-                </tr>
-              ))}
+              {filtered.map((b) => {
+                const cancelled = isCancelledStatus(b.status);
+                const checked = selectedIds.has(b.id);
+
+                return (
+                  <tr
+                    key={String(b.id)}
+                    className={`border-t align-top ${cancelled ? "bg-red-50 opacity-70" : ""}`}
+                    title={cancelled ? "Cancelled booking (cannot send reminders)" : ""}
+                  >
+                    <td className="p-2">
+                      <input
+                        type="checkbox"
+                        disabled={cancelled}
+                        checked={cancelled ? false : checked}
+                        onChange={(e) => {
+                          const next = new Set(selectedIds);
+                          if (e.target.checked) next.add(b.id);
+                          else next.delete(b.id);
+                          setSelectedIds(next);
+                        }}
+                      />
+                    </td>
+
+                    <td className="p-2 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        <span>
+                          {b.client.first_name} {b.client.last_name}
+                        </span>
+                        {cancelled && (
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
+                            CANCELLED
+                          </span>
+                        )}
+                      </div>
+                    </td>
+
+                    <td className="p-2">
+                      <div className="truncate max-w-[180px]">{b.client.email || "—"}</div>
+                      <div className="text-gray-500">{b.client.phone || "—"}</div>
+                    </td>
+
+                    <td className="p-2 whitespace-nowrap">
+                      <div>{fmtDateUK(b.start_time)}</div>
+                      <div className="text-gray-500">{fmtTimeUK(b.start_time)}</div>
+                    </td>
+                  </tr>
+                );
+              })}
 
               {!filtered.length && (
                 <tr>
@@ -518,7 +529,8 @@ setResult(json);
         {result && (
           <div className="px-4 pb-4">
             <div className="p-3 bg-green-50 text-green-700 rounded text-sm">
-              Sent. Total: {result.total} | Success: {result.success} | Failed: {result.failed}
+              Sent. Total: {result.total_groups ?? result.total ?? "—"} | Success:{" "}
+              {result.success ?? "—"} | Failed: {result.failed ?? "—"}
             </div>
           </div>
         )}

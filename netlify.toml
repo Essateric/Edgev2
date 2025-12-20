@@ -58,7 +58,6 @@
   # Relaxed production CSP so any inline bootstrap/preamble code can run
   [[headers]]
     for = "/*"
-    [headers.values]
 
 
 # SPA fallback so /book and other client routes work

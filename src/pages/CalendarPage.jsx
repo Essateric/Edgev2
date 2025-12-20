@@ -144,9 +144,9 @@ const newBookingExtendedProps = useMemo(() => {
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
 
 const calendarEvents = useMemo(() => {
-  const live = (events || []).filter((e) => e.status !== "cancelled");
-  return [...live, ...unavailableBlocks, ...salonClosedBlocks];
+  return [...(events || []), ...unavailableBlocks, ...salonClosedBlocks];
 }, [events, unavailableBlocks, salonClosedBlocks]);
+
 
 
 
@@ -572,6 +572,10 @@ eventPropGetter={(event) => {
   if (event.status === "confirmed") {
     return { style: { zIndex: 2, opacity: 0.6 } };
   }
+  if (event.status === "cancelled") {
+  return { style: { backgroundColor: "#b91c1c", color: "#fff", zIndex: 2, opacity: 0.95 } };
+}
+
 
   return { style: { zIndex: 2 } };
 }}
