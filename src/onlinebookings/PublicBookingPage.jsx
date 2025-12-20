@@ -541,6 +541,24 @@ export default function PublicBookingPage() {
 
       await safeInsertBookings(payloadRows);
 
+      // 6) Client notes (public-safe via RPC)
+const rawNotes = String(client.notes || "").trim();
+if (rawNotes) {
+  const { data: noteId, error: noteErr } = await supabase.rpc("public_add_client_note", {
+    p_client_id: clientId,
+    p_booking_group_id: bookingId, // your uuidv4() stored in bookings.booking_id (text)
+    p_note_content: `Notes added by client: ${rawNotes}`,
+    p_created_by: "client",
+  });
+
+  if (noteErr) {
+    console.warn("public_add_client_note failed:", noteErr.message);
+  } else if (import.meta.env.DEV) {
+    console.log("client note saved, id =", noteId);
+  }
+}
+
+
       // 5b) HARD GUARANTEE (best-effort):
       // If your DB trigger/RLS/RPC dropped client_id, try to patch missing rows.
       // (Once your bookings_sanitize_anon function no longer sets client_id := null,
