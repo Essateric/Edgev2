@@ -55,10 +55,10 @@ const fmtTimeUK = (iso) =>
 
 // ---- Client field helpers
 const getClientFirstName = (c = {}, client_name = "") =>
-  c.first_name || client_name.split(" ")[0] || "";
+  c.first_name || String(client_name || "").split(" ")[0] || "";
 
 const getClientLastName = (c = {}, client_name = "") =>
-  c.last_name || client_name.split(" ").slice(1).join(" ") || "";
+  c.last_name || String(client_name || "").split(" ").slice(1).join(" ") || "";
 
 const getClientEmail = (c = {}) => c.email || "";
 const getClientPhone = (c = {}) => c.mobile || "";
@@ -74,10 +74,15 @@ const minuteKey = (iso) => {
   }
 };
 
-// Defensive cancelled check (handles "cancelled", "canceled", whitespace, case)
+// Cancelled check (handles "cancelled", "canceled", whitespace, case)
 const isCancelledStatus = (status) => {
   const s = String(status || "").trim().toLowerCase();
   return s === "cancelled" || s === "canceled" || s.startsWith("cancel");
+};
+
+const isPastBooking = (startIso, now = new Date()) => {
+  const d = new Date(startIso);
+  return Number.isFinite(d.getTime()) && d.getTime() < now.getTime();
 };
 
 export default function RemindersDialog({
@@ -90,11 +95,16 @@ export default function RemindersDialog({
   const { currentUser, supabaseClient, baseSupabaseClient } = useAuth();
   const db = supabaseClient || baseSupabaseClient;
 
-  const baseDate = defaultWeekFromDate ? new Date(defaultWeekFromDate) : new Date();
+  const baseDate = defaultWeekFromDate
+    ? new Date(defaultWeekFromDate)
+    : new Date();
+
   const defaultFrom = mondayStartOfWeek(baseDate);
   const defaultTo = endOfWeekFrom(defaultFrom);
 
-  const [from, setFrom] = useState(initialFrom ? new Date(initialFrom) : defaultFrom);
+  const [from, setFrom] = useState(
+    initialFrom ? new Date(initialFrom) : defaultFrom
+  );
   const [to, setTo] = useState(initialTo ? new Date(initialTo) : defaultTo);
 
   const [channel, setChannel] = useState("email");
@@ -157,8 +167,7 @@ export default function RemindersDialog({
     toDate.setHours(23, 59, 59, 999);
 
     try {
-      // ✅ NOTE: We DO NOT filter out cancelled here anymore.
-      // We want them visible in the modal, but not selectable/contactable.
+      // ✅ We keep cancelled + past visible. We only disable sending/selecting.
       const { data, error } = await db
         .from("bookings")
         .select(
@@ -195,7 +204,7 @@ export default function RemindersDialog({
 
         const row = {
           id: String(key),      // group key for selection
-          booking_uuid: b.id,   // REAL uuid (FK-safe)
+          booking_uuid: b.id,   // real uuid (FK-safe)
           booking_id: b.booking_id || null,
           start_time: b.start,
           end_time: b.end || null,
@@ -214,32 +223,37 @@ export default function RemindersDialog({
         const existing = byKey.get(row.id);
         if (!existing) {
           byKey.set(row.id, row);
-        } else {
-          // Keep earliest start and latest end
-          if (new Date(row.start_time) < new Date(existing.start_time)) {
-            existing.start_time = row.start_time;
-            existing.booking_uuid = row.booking_uuid; // align uuid to earliest slot
-          }
-          if (
-            row.end_time &&
-            (!existing.end_time || new Date(row.end_time) > new Date(existing.end_time))
-          ) {
-            existing.end_time = row.end_time;
-          }
-
-          // ✅ If ANY slot in the block is cancelled, treat the whole block as cancelled
-          if (isCancelledStatus(row.status) || isCancelledStatus(existing.status)) {
-            existing.status = "cancelled";
-          }
-
-          byKey.set(row.id, existing);
+          continue;
         }
+
+        // Keep earliest start and latest end
+        if (new Date(row.start_time) < new Date(existing.start_time)) {
+          existing.start_time = row.start_time;
+          existing.booking_uuid = row.booking_uuid; // align uuid to earliest slot
+        }
+        if (
+          row.end_time &&
+          (!existing.end_time || new Date(row.end_time) > new Date(existing.end_time))
+        ) {
+          existing.end_time = row.end_time;
+        }
+
+        // ✅ If ANY slot is cancelled, treat the whole block as cancelled
+        if (isCancelledStatus(row.status) || isCancelledStatus(existing.status)) {
+          existing.status = "cancelled";
+        }
+
+        byKey.set(row.id, existing);
       }
 
       const mapped = Array.from(byKey.values());
+      const now = new Date();
 
-      // ✅ Preselect ONLY non-cancelled bookings
-      const selectable = mapped.filter((r) => !isCancelledStatus(r.status));
+      // ✅ Preselect ONLY contactable: not cancelled AND not past
+      const selectable = mapped.filter(
+        (r) => !isCancelledStatus(r.status) && !isPastBooking(r.start_time, now)
+      );
+
       setRows(mapped);
       setSelectedIds(new Set(selectable.map((x) => x.id)));
     } catch (e) {
@@ -260,29 +274,30 @@ export default function RemindersDialog({
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return rows;
+
     return rows.filter((b) => {
-      const name = `${b.client.first_name || ""} ${b.client.last_name || ""}`.toLowerCase();
+      const name = `${b.client.first_name || ""} ${b.client.last_name || ""}`
+        .toLowerCase();
       const email = (b.client.email || "").toLowerCase();
       const phone = (b.client.phone || "").toLowerCase();
       return name.includes(q) || email.includes(q) || phone.includes(q);
     });
   }, [rows, search]);
 
-  const filteredSelectable = useMemo(
-    () => filtered.filter((r) => !isCancelledStatus(r.status)),
-    [filtered]
-  );
+  const filteredSelectable = useMemo(() => {
+    const now = new Date();
+    return filtered.filter(
+      (r) => !isCancelledStatus(r.status) && !isPastBooking(r.start_time, now)
+    );
+  }, [filtered]);
 
   const allSelectableSelected =
     filteredSelectable.length > 0 &&
     filteredSelectable.every((r) => selectedIds.has(r.id));
 
   const toggleAll = (checked) => {
-    if (checked) {
-      setSelectedIds(new Set(filteredSelectable.map((r) => r.id)));
-    } else {
-      setSelectedIds(new Set());
-    }
+    if (checked) setSelectedIds(new Set(filteredSelectable.map((r) => r.id)));
+    else setSelectedIds(new Set());
   };
 
   const onSend = async () => {
@@ -291,18 +306,34 @@ export default function RemindersDialog({
     setSending(true);
 
     try {
-      let selected = rows.filter((r) => selectedIds.has(r.id));
-
-      // ✅ Hard block: never send to cancelled bookings
-      selected = selected.filter((r) => !isCancelledStatus(r.status));
-
-      if (!selected.length) throw new Error("No contactable (non-cancelled) bookings selected");
-
       const normalizedChannel = String(channel || "email").toLowerCase().trim();
 
-      if (normalizedChannel === "whatsapp") {
+      let selected = rows.filter((r) => selectedIds.has(r.id));
+      const now = new Date();
+
+      // ✅ Hard block: never send to cancelled OR past
+      selected = selected.filter(
+        (r) => !isCancelledStatus(r.status) && !isPastBooking(r.start_time, now)
+      );
+
+      if (!selected.length) {
+        throw new Error(
+          "No contactable bookings selected (cancelled/past bookings can’t be contacted)."
+        );
+      }
+
+      // Optional but sensible: ensure the required contact exists for the chosen channel
+      if (normalizedChannel === "whatsapp" || normalizedChannel === "sms") {
         selected = selected.filter((r) => r.client.phone);
-        if (!selected.length) throw new Error("No recipients with a mobile number for WhatsApp");
+        if (!selected.length) {
+          throw new Error("No recipients with a mobile number for this channel.");
+        }
+      }
+      if (normalizedChannel === "email") {
+        selected = selected.filter((r) => r.client.email);
+        if (!selected.length) {
+          throw new Error("No recipients with an email address.");
+        }
       }
 
       const payload = {
@@ -311,7 +342,7 @@ export default function RemindersDialog({
         timezone: "Europe/London",
         bookings: selected.map((b) => ({
           id: b.booking_uuid,       // ✅ FK-safe uuid
-          booking_id: b.booking_id, // optional text group id
+          booking_id: b.booking_id, // optional group id
           start_time: b.start_time,
           end_time: b.end_time,
           client: b.client,
@@ -341,7 +372,9 @@ export default function RemindersDialog({
 
   if (!isOpen) return null;
 
+  const nowForCounts = new Date();
   const cancelledCount = rows.filter((r) => isCancelledStatus(r.status)).length;
+  const pastCount = rows.filter((r) => isPastBooking(r.start_time, nowForCounts)).length;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-6">
@@ -352,7 +385,10 @@ export default function RemindersDialog({
             <h2 className="text-base sm:text-lg font-semibold">Send Reminders</h2>
             <p className="text-xs sm:text-sm text-gray-600">
               Loaded: {rows.length}
-              {cancelledCount ? ` (${cancelledCount} cancelled)` : ""} | Selected: {selectedIds.size}
+              {cancelledCount ? ` • ${cancelledCount} cancelled` : ""}
+              {pastCount ? ` • ${pastCount} past` : ""}
+              {" • "}
+              Selected: {selectedIds.size}
             </p>
           </div>
 
@@ -464,22 +500,33 @@ export default function RemindersDialog({
                 <th className="p-2 text-left">Appointment</th>
               </tr>
             </thead>
+
             <tbody>
               {filtered.map((b) => {
                 const cancelled = isCancelledStatus(b.status);
+                const past = isPastBooking(b.start_time, new Date());
+                const disabled = cancelled || past;
                 const checked = selectedIds.has(b.id);
 
                 return (
                   <tr
                     key={String(b.id)}
-                    className={`border-t align-top ${cancelled ? "bg-red-50 opacity-70" : ""}`}
-                    title={cancelled ? "Cancelled booking (cannot send reminders)" : ""}
+                    className={`border-t align-top ${
+                      cancelled ? "bg-red-50 opacity-70" : past ? "bg-gray-50 opacity-70" : ""
+                    }`}
+                    title={
+                      cancelled
+                        ? "Cancelled booking (cannot send reminders)"
+                        : past
+                        ? "Past booking (cannot send reminders)"
+                        : ""
+                    }
                   >
                     <td className="p-2">
                       <input
                         type="checkbox"
-                        disabled={cancelled}
-                        checked={cancelled ? false : checked}
+                        disabled={disabled}
+                        checked={disabled ? false : checked}
                         onChange={(e) => {
                           const next = new Set(selectedIds);
                           if (e.target.checked) next.add(b.id);
@@ -494,9 +541,16 @@ export default function RemindersDialog({
                         <span>
                           {b.client.first_name} {b.client.last_name}
                         </span>
+
                         {cancelled && (
                           <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
                             CANCELLED
+                          </span>
+                        )}
+
+                        {past && !cancelled && (
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">
+                            PAST
                           </span>
                         )}
                       </div>

@@ -4,11 +4,7 @@ import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
 import withDragAndDrop from "react-big-calendar/lib/addons/dragAndDrop";
 import { format, parse, startOfWeek, getDay } from "date-fns";
 import enGB from "date-fns/locale/en-GB";
-import {
-  ChevronLeft,
-  ChevronRight,
-  Calendar as CalendarIcon,
-} from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon } from "lucide-react";
 
 import CalendarModal from "../components/CalendarModal";
 import BookingPopUp from "../components/bookings/BookingPopUp";
@@ -44,7 +40,6 @@ const localizer = dateFnsLocalizer({
   locales,
 });
 
-
 /* ----------------- small date helpers ----------------- */
 
 // keep times as local wall-clock and guarantee at least 1 minute
@@ -70,22 +65,31 @@ const clampRange = (start, end) => {
 
 const toDate = (v) => (v instanceof Date ? v : new Date(v));
 
-export default function CalendarPage() {
-    const [stylistList, setStylistList] = useState([]);
-  const mapBookingRowToEvent = (b) => {
-  const stylistRow = stylistList.find((s) => s.id === b.resource_id);
-  const start = b.start ?? b.start_time;
-  const end = b.end ?? b.end_time;
-
-  return {
-    ...b,
-    start: new Date(start),
-    end: new Date(end),
-    resourceId: b.resource_id,
-    stylistName: stylistRow?.name || "Unknown Stylist",
-    title: b.title || "No Service Name",
-  };
+// Defensive cancelled check (handles "cancelled", "canceled", whitespace, case)
+const isCancelledStatus = (status) => {
+  const s = String(status || "").trim().toLowerCase();
+  return s === "cancelled" || s === "canceled" || s.startsWith("cancel");
 };
+
+const isConfirmedStatus = (status) => String(status || "").trim().toLowerCase() === "confirmed";
+
+export default function CalendarPage() {
+  const [stylistList, setStylistList] = useState([]);
+
+  const mapBookingRowToEvent = (b) => {
+    const stylistRow = stylistList.find((s) => s.id === b.resource_id);
+    const start = b.start ?? b.start_time;
+    const end = b.end ?? b.end_time;
+
+    return {
+      ...b,
+      start: new Date(start),
+      end: new Date(end),
+      resourceId: b.resource_id,
+      stylistName: stylistRow?.title || "Unknown Stylist", // ✅ FIX: stylistList uses `title`
+      title: b.title || "No Service Name",
+    };
+  };
 
   const auth = useAuth();
   const { currentUser, pageLoading, authLoading } = auth;
@@ -127,28 +131,25 @@ export default function CalendarPage() {
   const [reviewData, setReviewData] = useState(null);
 
   const selectedClientRow = useMemo(() => {
-  return clientObj || clients?.find((c) => c.id === selectedClient) || null;
-}, [clientObj, clients, selectedClient]);
+    return clientObj || clients?.find((c) => c.id === selectedClient) || null;
+  }, [clientObj, clients, selectedClient]);
 
-const newBookingExtendedProps = useMemo(() => {
-  return {
-    client_email: selectedClientRow?.email ?? null,
-    client_mobile: selectedClientRow?.mobile ?? null,
-    client_first_name: selectedClientRow?.first_name ?? null,
-    client_last_name: selectedClientRow?.last_name ?? null,
-  };
-}, [selectedClientRow]);
-
+  const newBookingExtendedProps = useMemo(() => {
+    return {
+      client_email: selectedClientRow?.email ?? null,
+      client_mobile: selectedClientRow?.mobile ?? null,
+      client_first_name: selectedClientRow?.first_name ?? null,
+      client_last_name: selectedClientRow?.last_name ?? null,
+    };
+  }, [selectedClientRow]);
 
   const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
 
-const calendarEvents = useMemo(() => {
-  return [...(events || []), ...unavailableBlocks, ...salonClosedBlocks];
-}, [events, unavailableBlocks, salonClosedBlocks]);
-
-
-
+  // ✅ Include cancelled in view (we color them red below)
+  const calendarEvents = useMemo(() => {
+    return [...(events || []), ...unavailableBlocks, ...salonClosedBlocks];
+  }, [events, unavailableBlocks, salonClosedBlocks]);
 
   const isAdmin = currentUser?.permission?.toLowerCase() === "admin";
 
@@ -163,7 +164,7 @@ const calendarEvents = useMemo(() => {
       resourceId: rid,
       title: ev.title || "No Service Name",
       stylistName:
-        ev.stylistName || stylist?.name || stylist?.title || "Unknown Stylist",
+        ev.stylistName || stylist?.title || "Unknown Stylist",
     };
   };
 
@@ -181,11 +182,6 @@ const calendarEvents = useMemo(() => {
         stylist?.title ?? ""
       }`
     : "Booking";
-
-  // UseTimeSlotLabel(9, 20, 15);
-  // AddGridTimeLabels(9, 20, 15);
-
-  /* --------- fetch clients, staff, bookings once user is ready --------- */
 
   // ✅ StrictMode-safe: only the latest run is allowed to set state
   const runIdRef = useRef(0);
@@ -312,55 +308,53 @@ const calendarEvents = useMemo(() => {
 
     return () => {
       dbgLog("effect cleanup", { runId });
-      // no cancelled flag — runIdRef handles staleness
     };
   }, [currentUser?.id, supabase]);
 
   useEffect(() => {
-  if (!currentUser?.id) return;
-  if (!supabase) return;
+    if (!currentUser?.id) return;
+    if (!supabase) return;
 
-  const channel = supabase
-    .channel("realtime:bookings")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "bookings" },
-      (payload) => {
-        if (payload.eventType === "DELETE") {
-          const oldRow = payload.old;
-          if (!oldRow?.id) return;
-          setEvents((prev) => prev.filter((e) => e.id !== oldRow.id));
-          return;
+    const channel = supabase
+      .channel("realtime:bookings")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "bookings" },
+        (payload) => {
+          if (payload.eventType === "DELETE") {
+            const oldRow = payload.old;
+            if (!oldRow?.id) return;
+            setEvents((prev) => prev.filter((e) => e.id !== oldRow.id));
+            return;
+          }
+
+          const row = payload.new;
+          if (!row?.id) return;
+
+          setEvents((prev) => {
+            const idx = prev.findIndex((e) => e.id === row.id);
+            const mapped = mapBookingRowToEvent(row);
+
+            if (idx === -1) return [...prev, mapped];
+
+            const copy = prev.slice();
+            copy[idx] = { ...copy[idx], ...mapped };
+            return copy;
+          });
         }
+      )
+      .subscribe();
 
-        const row = payload.new;
-        if (!row?.id) return;
-
-        setEvents((prev) => {
-          const idx = prev.findIndex((e) => e.id === row.id);
-          const mapped = mapBookingRowToEvent(row);
-
-          if (idx === -1) return [...prev, mapped];
-
-          const copy = prev.slice();
-          copy[idx] = { ...copy[idx], ...mapped };
-          return copy;
-        });
-      }
-    )
-    .subscribe();
-
-  return () => {
-    supabase.removeChannel(channel);
-  };
-}, [supabase, currentUser?.id, stylistList]);
-
-
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [supabase, currentUser?.id, stylistList]); // keep stylistList so names update
 
   const moveEvent = useCallback(
-    
     async ({ event, start, end, resourceId }) => {
       if (event?.is_locked) return;
+      if (isCancelledStatus(event?.status)) return; // ✅ don't move cancelled
+
       const { start: s, end: e } = clampRange(start, end);
       const rid = resourceId ?? event.resourceId;
 
@@ -378,9 +372,7 @@ const calendarEvents = useMemo(() => {
         allDay: false,
       };
 
-      setEvents((prev) =>
-        prev.map((ev) => (ev.id === event.id ? updated : ev))
-      );
+      setEvents((prev) => prev.map((ev) => (ev.id === event.id ? updated : ev)));
 
       try {
         await supabase
@@ -405,13 +397,12 @@ const calendarEvents = useMemo(() => {
     setSelectedClient("");
     setClientObj(null);
     setBasket([]);
-    setReviewData(null); 
+    setReviewData(null);
     setStep(1);
   };
 
   /* ---------- simple auth gate ---------- */
 
-  // 1) still bootstrapping auth & no user yet → global loader
   if (authLoading && !hasUser) {
     return (
       <div className="p-6">
@@ -427,12 +418,10 @@ const calendarEvents = useMemo(() => {
     );
   }
 
-  // 2) auth finished and no user → send them to login
   if (!hasUser && !authLoading) {
     return <div className="p-6">You must be logged in to view the calendar.</div>;
   }
 
-  // 3) user exists, but calendar data not ready yet
   if (!ready) {
     return (
       <div className="p-6">
@@ -463,9 +452,7 @@ const calendarEvents = useMemo(() => {
   return (
     <div className="p-4 metallic-bg">
       <div>
-        <h1 className="text-5xl font-bold metallic-text p-5">
-          The Edge HD Salon
-        </h1>
+        <h1 className="text-5xl font-bold metallic-text p-5">The Edge HD Salon</h1>
       </div>
 
       <div className="flex justify-between items-center mb-4">
@@ -525,7 +512,7 @@ const calendarEvents = useMemo(() => {
 
       <DnDCalendar
         localizer={localizer}
-       events={calendarEvents}
+        events={calendarEvents}
         startAccessor="start"
         endAccessor="end"
         resources={stylistList}
@@ -543,11 +530,8 @@ const calendarEvents = useMemo(() => {
         selectable
         showNowIndicator
         onRangeChange={(range) => {
-          if (Array.isArray(range)) {
-            setVisibleDate(range[0]);
-          } else {
-            setVisibleDate(range.start);
-          }
+          if (Array.isArray(range)) setVisibleDate(range[0]);
+          else setVisibleDate(range.start);
         }}
         onSelectSlot={(slot) => {
           setSelectedSlot(slot);
@@ -561,26 +545,58 @@ const calendarEvents = useMemo(() => {
         onEventDrop={moveEvent}
         resizable
         onEventResize={moveEvent}
-eventPropGetter={(event) => {
-  if (event.isUnavailable) {
-    return { style: { backgroundColor: "#36454F", opacity: 0.7, border: "none" } };
-  }
-  if (event.isSalonClosed) {
-    return { style: { backgroundColor: "#333333", opacity: 0.7, border: "none" } };
-  }
+        eventPropGetter={(event) => {
+          if (event.isUnavailable) {
+            return {
+              style: {
+                backgroundColor: "#36454F",
+                opacity: 0.7,
+                border: "none",
+              },
+            };
+          }
 
-  if (event.status === "confirmed") {
-    return { style: { zIndex: 2, opacity: 0.6 } };
-  }
-  if (event.status === "cancelled") {
-  return { style: { backgroundColor: "#b91c1c", color: "#fff", zIndex: 2, opacity: 0.95 } };
-}
+          if (event.isSalonClosed) {
+            return {
+              style: {
+                backgroundColor: "#333333",
+                opacity: 0.7,
+                border: "none",
+              },
+            };
+          }
 
+          const status = String(event.status || "").trim().toLowerCase();
 
-  return { style: { zIndex: 2 } };
-}}
+          // ✅ Cancelled = red
+          if (isCancelledStatus(status)) {
+            return {
+              style: {
+                zIndex: 2,
+                backgroundColor: "#b91c1c",
+                color: "#fff",
+                border: "none",
+                opacity: 0.95,
+              },
+            };
+          }
 
+          // ✅ Confirmed = green (this is your “blue -> green” change)
+          if (isConfirmedStatus(status)) {
+            return {
+              style: {
+                zIndex: 2,
+                backgroundColor: "#16a34a",
+                color: "#fff",
+                border: "none",
+                opacity: 0.95,
+              },
+            };
+          }
 
+          // default (pending etc)
+          return { style: { zIndex: 2 } };
+        }}
         style={{ height: "90vh" }}
         components={{
           event: CustomCalendarEvent,
@@ -589,12 +605,17 @@ eventPropGetter={(event) => {
         showAllDay={false}
         allDayAccessor={() => false}
         draggableAccessor={(event) =>
-  !event.isUnavailable && !event.isSalonClosed && !event.is_locked
-}
-resizableAccessor={(event) =>
-  !event.isUnavailable && !event.isSalonClosed && !event.is_locked
-}
-
+          !event.isUnavailable &&
+          !event.isSalonClosed &&
+          !event.is_locked &&
+          !isCancelledStatus(event.status)
+        }
+        resizableAccessor={(event) =>
+          !event.isUnavailable &&
+          !event.isSalonClosed &&
+          !event.is_locked &&
+          !isCancelledStatus(event.status)
+        }
       />
 
       <BookingPopUp
@@ -620,14 +641,13 @@ resizableAccessor={(event) =>
         stylistList={stylistList}
         clients={clients}
         onBookingUpdated={({ booking_id, id, is_locked }) => {
-    setEvents((prev) =>
-      prev.map((ev) => {
-        const same =
-          booking_id ? ev.booking_id === booking_id : ev.id === id;
-        return same ? { ...ev, is_locked } : ev;
-      })
-    );
-  }}
+          setEvents((prev) =>
+            prev.map((ev) => {
+              const same = booking_id ? ev.booking_id === booking_id : ev.id === id;
+              return same ? { ...ev, is_locked } : ev;
+            })
+          );
+        }}
       />
 
       <SelectClientModal
@@ -648,39 +668,38 @@ resizableAccessor={(event) =>
         }}
       />
 
-<SelectClientModalStaff
-  supabaseClient={supabase}
-  isOpen={isModalOpen && step === 1}
-  onClose={handleCancelBookingFlow}
-  clients={clients}
-  selectedSlot={selectedSlot}
-  selectedClient={selectedClient}
-  setSelectedClient={async (id) => {
-    setSelectedClient(id);
+      <SelectClientModalStaff
+        supabaseClient={supabase}
+        isOpen={isModalOpen && step === 1}
+        onClose={handleCancelBookingFlow}
+        clients={clients}
+        selectedSlot={selectedSlot}
+        selectedClient={selectedClient}
+        setSelectedClient={async (id) => {
+          setSelectedClient(id);
 
-    const local = clients.find((c) => c.id === id);
-    if (local) {
-      setClientObj(local);
-      return;
-    }
+          const local = clients.find((c) => c.id === id);
+          if (local) {
+            setClientObj(local);
+            return;
+          }
 
-    const { data, error } = await supabase
-      .from("clients")
-      .select("id, first_name, last_name, mobile, email, notes, dob, created_at")
-      .eq("id", id)
-      .single();
+          const { data, error } = await supabase
+            .from("clients")
+            .select("id, first_name, last_name, mobile, email, notes, dob, created_at")
+            .eq("id", id)
+            .single();
 
-    if (error) console.error("[CalendarPage] fetch selected client failed:", error);
-    if (data) setClientObj(data);
-  }}
-  onNext={() => setStep(2)}
-  onClientCreated={(c) => {
-    setClients((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c]));
-    setSelectedClient(c.id);
-    setClientObj(c);
-  }}
-/>
-
+          if (error) console.error("[CalendarPage] fetch selected client failed:", error);
+          if (data) setClientObj(data);
+        }}
+        onNext={() => setStep(2)}
+        onClientCreated={(c) => {
+          setClients((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c]));
+          setSelectedClient(c.id);
+          setClientObj(c);
+        }}
+      />
 
       <RightDrawer
         isOpen={step === 2}
@@ -700,11 +719,10 @@ resizableAccessor={(event) =>
           onBack={() => setStep(1)}
           onCancel={handleCancelBookingFlow}
           extendedProps={newBookingExtendedProps}
-onNext={(payload) => {
-  setReviewData(payload || null);
-  setStep(3);
-}}
-
+          onNext={(payload) => {
+            setReviewData(payload || null);
+            setStep(3);
+          }}
         />
       </RightDrawer>
 
@@ -717,8 +735,8 @@ onNext={(payload) => {
           handleCancelBookingFlow();
         }}
         clients={clients}
-          clientObj={clientObj}       // ✅ add
-  reviewData={reviewData} 
+        clientObj={clientObj}
+        reviewData={reviewData}
         stylistList={stylistList}
         selectedClient={selectedClient}
         selectedSlot={selectedSlot}
