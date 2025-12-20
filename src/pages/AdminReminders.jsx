@@ -52,6 +52,11 @@ const getClientPhone = (c = {}) =>
   c.contact_number ||
   "";
 
+const normalizeEmbedOne = (maybe) => {
+  if (!maybe) return null;
+  return Array.isArray(maybe) ? maybe[0] || null : maybe;
+};
+
 const CHANNELS = ["email", "sms", "whatsapp"];
 
 export default function RemindersDialog({
@@ -116,7 +121,7 @@ export default function RemindersDialog({
 
       // ✅ DB columns: start and "end"
       // Alias them to start_time/end_time for UI
-      const { data, error } = await supabase
+      const { data, error: qErr } = await supabase
         .from("bookings")
         .select(
           `
@@ -141,19 +146,69 @@ export default function RemindersDialog({
         .lte("start", toDate.toISOString())
         .order("start", { ascending: true });
 
-      if (import.meta.env.DEV) {
-        console.log("[RemindersDialog] range", {
-          from: fromDate.toISOString(),
-          to: toDate.toISOString(),
-          got: (data || []).length,
-          err: error || null,
-        });
+      if (qErr) throw qErr;
+
+      const raw = data || [];
+
+      // ------------------------------------------------------------
+      // NEW: Backfill client contact details if embed is missing
+      // ------------------------------------------------------------
+      // If your embedded join comes back null for some rows (common when
+      // relationship / RLS / postgrest embed issues happen), we fetch
+      // clients separately by client_id and merge.
+      const missingClientIds = Array.from(
+        new Set(
+          raw
+            .filter((b) => {
+              const embedded = normalizeEmbedOne(b.clients);
+              const hasEmbed = !!embedded?.id;
+              const hasContact =
+                !!getClientEmail(embedded || {}) || !!getClientPhone(embedded || {});
+              return !!b.client_id && (!hasEmbed || !hasContact);
+            })
+            .map((b) => b.client_id)
+            .filter(Boolean)
+        )
+      );
+
+      let clientsById = new Map();
+
+      if (missingClientIds.length) {
+        try {
+          const { data: clientRows, error: cErr } = await supabase
+            .from("clients")
+            .select("id, first_name, last_name, email, mobile")
+            .in("id", missingClientIds);
+
+          if (cErr) {
+            // Don't fail the whole dialog — just log and continue with what we have
+            console.warn("[RemindersDialog] client backfill failed:", cErr.message);
+          } else {
+            clientsById = new Map((clientRows || []).map((c) => [c.id, c]));
+          }
+        } catch (e) {
+          console.warn("[RemindersDialog] client backfill exception:", e?.message);
+        }
       }
 
-      if (error) throw error;
+      const mapped = raw.map((b) => {
+        const embedded = normalizeEmbedOne(b.clients);
+        const backfill = b.client_id ? clientsById.get(b.client_id) : null;
 
-      const mapped = (data || []).map((b) => {
-        const c = b.clients || {};
+        // Prefer embedded, but use backfill to fill missing bits
+        const c = embedded || backfill || {};
+
+        const firstFromName = (b.client_name || "").split(" ")[0] || "";
+        const lastFromName = (b.client_name || "").split(" ").slice(1).join(" ") || "";
+
+        const first =
+          getClientFirstName(c) || firstFromName || "";
+        const last =
+          getClientLastName(c) || lastFromName || "";
+
+        const email = getClientEmail(c) || "";
+        const phone = getClientPhone(c) || "";
+
         return {
           id: b.id, // ✅ always use uuid for selection
           booking_id: b.booking_id || null, // optional text ref
@@ -163,20 +218,29 @@ export default function RemindersDialog({
           end_time: b.end_time || null,
           client: {
             id: c.id || b.client_id || null,
-            first_name:
-              getClientFirstName(c) ||
-              (b.client_name || "").split(" ")[0] ||
-              "",
-            last_name:
-              getClientLastName(c) ||
-              (b.client_name || "").split(" ").slice(1).join(" ") ||
-              "",
-            email: getClientEmail(c),
-            phone: getClientPhone(c),
-            whatsapp_opt_in: !!getClientPhone(c),
+            first_name: first,
+            last_name: last,
+            email,
+            phone,
+            whatsapp_opt_in: !!phone,
           },
         };
       });
+
+      // Optional dev visibility
+      if (import.meta.env.DEV) {
+        const missingContactCount = mapped.filter(
+          (r) => !r.client.email && !r.client.phone
+        ).length;
+        console.log("[RemindersDialog] bookings loaded:", mapped.length);
+        console.log("[RemindersDialog] missing contact rows:", missingContactCount);
+        if (missingContactCount) {
+          console.log(
+            "[RemindersDialog] examples missing contact:",
+            mapped.filter((r) => !r.client.email && !r.client.phone).slice(0, 3)
+          );
+        }
+      }
 
       setRows(mapped);
       setSelectedIds(new Set(mapped.map((x) => x.id))); // preselect all

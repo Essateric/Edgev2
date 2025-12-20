@@ -37,6 +37,136 @@ const initialClient = {
   notes: "",
 };
 
+const normalizePhone = (s = "") => String(s).replace(/[^\d]/g, "");
+const normName = (s = "") => String(s || "").trim().toLowerCase();
+
+/**
+ * Find-or-create client ID for PUBLIC bookings.
+ * Rules:
+ * - If email provided: match by email (case-insensitive). Patch missing fields.
+ * - Else match by (first+last + mobile). Patch missing fields.
+ * - If not found: create new client row -> returns UUID.
+ *
+ * IMPORTANT:
+ * This will only persist into bookings.client_id if your DB trigger
+ * (bookings_sanitize_anon) no longer forces new.client_id := null.
+ */
+async function findOrCreateClientId({ first, last, email, mobileN }) {
+  const firstN = String(first || "").trim();
+  const lastN = String(last || "").trim();
+  const emailN = String(email || "").trim().toLowerCase();
+  const mobileNN = normalizePhone(mobileN || "");
+
+  if (!firstN || !lastN) throw new Error("First name and last name are required.");
+  if (!emailN && !mobileNN) throw new Error("Email or mobile is required.");
+
+  // 1) EMAIL path (preferred)
+  if (emailN) {
+    const { data: existing, error: findErr } = await supabase
+      .from("clients")
+      .select("id, first_name, last_name, email, mobile")
+      .ilike("email", emailN)
+      .maybeSingle();
+
+    if (findErr) throw findErr;
+
+    if (existing?.id) {
+      // Patch missing bits (non-destructive)
+      const patch = {};
+      if (!existing.first_name && firstN) patch.first_name = firstN;
+      if (!existing.last_name && lastN) patch.last_name = lastN;
+      if (!existing.mobile && mobileNN) patch.mobile = mobileNN;
+
+      if (Object.keys(patch).length) {
+        const { error: updErr } = await supabase
+          .from("clients")
+          .update(patch)
+          .eq("id", existing.id);
+
+        if (updErr) throw updErr;
+      }
+
+      return existing.id;
+    }
+
+    // Create new
+    const { data: created, error: insErr } = await supabase
+      .from("clients")
+      .insert([
+        {
+          first_name: firstN,
+          last_name: lastN || null,
+          email: emailN,
+          mobile: mobileNN || null,
+        },
+      ])
+      .select("id")
+      .single();
+
+    if (insErr) throw insErr;
+    return created.id;
+  }
+
+  // 2) MOBILE path (only if no email)
+  {
+    // If mobile is empty after normalization, we can't search safely
+    if (!mobileNN) throw new Error("Valid mobile is required when email is missing.");
+
+    const { data: candidates, error: mobErr } = await supabase
+      .from("clients")
+      .select("id, first_name, last_name, email, mobile")
+      .or(`mobile.eq.${mobileNN},mobile.ilike.%${mobileNN}%`)
+      .limit(25);
+
+    if (mobErr) throw mobErr;
+
+    const firstKey = normName(firstN);
+    const lastKey = normName(lastN);
+
+    const match =
+      (candidates || []).find((r) => {
+        const rMob = normalizePhone(r?.mobile || "");
+        const rFirst = normName(r?.first_name);
+        const rLast = normName(r?.last_name);
+        return rMob === mobileNN && rFirst === firstKey && rLast === lastKey;
+      }) || null;
+
+    if (match?.id) {
+      // Patch missing bits
+      const patch = {};
+      if (!match.first_name && firstN) patch.first_name = firstN;
+      if (!match.last_name && lastN) patch.last_name = lastN;
+
+      if (Object.keys(patch).length) {
+        const { error: updErr } = await supabase
+          .from("clients")
+          .update(patch)
+          .eq("id", match.id);
+        if (updErr) throw updErr;
+      }
+
+      return match.id;
+    }
+
+    // Create new
+    const { data: created, error: insErr } = await supabase
+      .from("clients")
+      .insert([
+        {
+          first_name: firstN,
+          last_name: lastN || null,
+          email: null,
+          mobile: mobileNN,
+        },
+      ])
+      .select("id")
+      .single();
+
+    if (insErr) throw insErr;
+    return created.id;
+  }
+}
+
 export default function PublicBookingPage() {
   const [step, setStep] = useState(1);
 
@@ -53,7 +183,7 @@ export default function PublicBookingPage() {
 
   // Toast
   const { toast, showToast, hideToast } = useToast();
-    console.log("PublicBookingPage render – toast =", toast);
+  console.log("PublicBookingPage render – toast =", toast);
 
   // Data: services + providers
   const { services, providers } = useServicesAndProviders();
@@ -72,7 +202,6 @@ export default function PublicBookingPage() {
     serviceNameForEmail,
     sumActiveDuration,
     sumPrice,
-    // NOTE: older version returned getEffectivePD; current hook does not.
   } = useTimeline({
     selectedServices,
     selectedProvider,
@@ -85,28 +214,20 @@ export default function PublicBookingPage() {
     const o = providerOverrides.find((x) => x?.service_id === svc?.id);
     const baseDuration = Number(svc?.base_duration ?? 0) || 0;
     return {
-      duration:
-        (o?.duration != null ? Number(o.duration) : baseDuration) || 0,
+      duration: (o?.duration != null ? Number(o.duration) : baseDuration) || 0,
       price: o?.price != null ? Number(o.price) : null,
     };
   };
 
   // Slots (windows, min notice, busy spans, per-segment clash check)
-  const {
-    viewDate,
-    setViewDate,
-    availableSlots,
-    slotsLoading,
-    recomputeFor: _,
-  } = useSlots({
+  const { viewDate, setViewDate, availableSlots, slotsLoading } = useSlots({
     selectedServices,
     selectedProvider,
     selectedDate,
     timeline,
   });
 
-  const lastPickedService =
-    selectedServices[selectedServices.length - 1] || null;
+  const lastPickedService = selectedServices[selectedServices.length - 1] || null;
 
   const isTBA = (p) =>
     p == null || p === "" || Number(p) === 0 || Number.isNaN(Number(p));
@@ -156,6 +277,165 @@ export default function PublicBookingPage() {
     }
   };
 
+  // ----- Selection summary chip bar -----
+  const startDateTime = useMemo(() => {
+    if (!selectedDate || !selectedTime) return null;
+    const d = new Date(selectedDate);
+    d.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
+    return d;
+  }, [selectedDate, selectedTime]);
+
+  function SelectionSummary({ provider, start, onClear }) {
+    if (!provider && !start) return null;
+
+    const dateStr = start
+      ? start.toLocaleDateString(undefined, {
+          weekday: "short",
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        })
+      : null;
+
+    const timeStr = start
+      ? start.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+      : null;
+
+    return (
+      <div className="max-w-6xl mx-auto px-4 pt-4">
+        <div className="flex flex-wrap items-center gap-2 bg-neutral-900/70 border border-neutral-800 rounded-2xl px-4 py-3">
+          {provider && (
+            <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded-full border border-neutral-700 bg-neutral-800 text-white">
+              <span className="opacity-80">Stylist</span>
+              <span className="font-semibold">
+                {provider.name || provider.title || "—"}
+              </span>
+            </span>
+          )}
+          {start && (
+            <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded-full border border-neutral-700 bg-neutral-800 text-white">
+              <span className="opacity-80">Time</span>
+              <span className="font-semibold">
+                {dateStr} • {timeStr}
+              </span>
+            </span>
+          )}
+
+          {(provider || start) && (
+            <button
+              className="ml-auto px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-white text-sm"
+              onClick={onClear}
+              type="button"
+            >
+              Clear selection
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ----- Cart (right column / mobile card) -----
+  const CartSection = () => {
+    if (!selectedServices.length) return null;
+
+    return (
+      <section className="w-full min-w-0 bg-neutral-900/90 rounded-2xl shadow p-5 border-2 border-amber-600/40">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xl font-semibold text-white">Your services</h3>
+        </div>
+
+        {/* Selected stylist chip */}
+        {selectedProvider && (
+          <div className="mb-4">
+            <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded-full border border-neutral-700 bg-amber-600/30 text-amber-100">
+              <span className="opacity-80">Stylist</span>
+              <span className="font-semibold">
+                {selectedProvider.name || selectedProvider.title || "—"}
+              </span>
+            </span>
+          </div>
+        )}
+
+        {!selectedProvider && (
+          <p className="mb-3 text-xs text-amber-300">
+            Select a stylist to see exact time and price.
+          </p>
+        )}
+
+        <ul className="space-y-3">
+          {selectedServices.map((svc) => {
+            const { duration, price } =
+              typeof getEffectivePD === "function"
+                ? getEffectivePD(svc)
+                : { duration: null, price: null };
+
+            const dLabel = selectedProvider ? minsToLabel(duration) : "—";
+            const pLabel =
+              selectedProvider && !isTBA(price) ? money(price) : "TBA";
+
+            return (
+              <li
+                key={svc.id}
+                className="flex items-start justify-between gap-3 bg-neutral-800/70 rounded-xl px-4 py-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-base font-medium text-white break-words">
+                    {svc.name}
+                    {svc.is_chemical && (
+                      <span className="ml-2 text-xs px-2 py-0.5 rounded bg-amber-600/30 text-amber-300">
+                        chemical
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-sm text-gray-300">
+                    {dLabel} • {pLabel}
+                  </p>
+                </div>
+                <button
+                  aria-label={`Remove ${svc.name}`}
+                  className="text-white/80 hover:text-white text-lg leading-none shrink-0"
+                  onClick={() => toggleService(svc)}
+                  title="Remove"
+                  type="button"
+                >
+                  Remove
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+
+        {hasChemical && selectedProvider && (
+          <div className="mt-3 text-sm text-amber-300">
+            Processing time for chemical treatments applied.
+          </div>
+        )}
+
+        <div className="mt-5 border-t border-neutral-700 pt-4">
+          <div className="flex items-center justify-between text-base">
+            <span className="text-gray-300 whitespace-nowrap">Total time</span>
+            <span className="text-white font-medium text-right">
+              {selectedProvider ? minsToLabel(sumActiveDuration) : "—"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between text-lg mt-2">
+            <span className="text-gray-300 whitespace-nowrap">Total price</span>
+            <span className="text-white font-semibold text-right">
+              {hasUnknownPrice ? "TBA" : money(sumPrice)}
+            </span>
+          </div>
+        </div>
+
+        {hasUnknownPrice && (
+          <p className="mt-3 text-xs text-gray-400">
+            Please select a stylist for price.
+          </p>
+        )}
+      </section>
+    );
+  };
+
   // ---------- save grouped rows ----------
   async function saveBooking() {
     if (!selectedServices.length || !selectedProvider || !selectedDate || !selectedTime) return;
@@ -164,8 +444,6 @@ export default function PublicBookingPage() {
       alert("Please enter your first & last name, and at least email or mobile.");
       return;
     }
-
-    const normalizePhone = (s = "") => String(s).replace(/[^\d]/g, "");
 
     setSaving(true);
     try {
@@ -183,8 +461,9 @@ export default function PublicBookingPage() {
       {
         const minStart = new Date(Date.now() + MIN_NOTICE_HOURS * 60 * 60 * 1000);
         if (start < minStart) {
-          alert("Bookings must be made at least 24 hours in advance. Please choose a later time.");
-          setSaving(false);
+          alert(
+            "Bookings must be made at least 24 hours in advance. Please choose a later time."
+          );
           return;
         }
       }
@@ -208,69 +487,20 @@ export default function PublicBookingPage() {
       const totalEndISO = rows[rows.length - 1].end;
       const bookingId = uuidv4();
 
-      // 3) Find-or-create client (email-first, else mobile/name)
-      let clientId = null;
-      if (email) {
-        const { data: byEmail, error: findEmailErr } = await supabase
-          .from("clients")
-          .select("id, first_name, last_name, email, mobile")
-          .ilike("email", email)
-          .limit(1);
-        if (findEmailErr) throw findEmailErr;
+      // 3) ✅ FIX: Always create/find a client FIRST, and use its UUID in booking rows
+      const clientId = await findOrCreateClientId({
+        first,
+        last,
+        email,
+        mobileN,
+      });
 
-        if (byEmail?.length) {
-          clientId = byEmail[0].id;
-          const patch = {};
-          if (!byEmail[0].first_name && first) patch.first_name = first;
-          if (!byEmail[0].last_name && last) patch.last_name = last;
-          if (!byEmail[0].mobile && mobileN) patch.mobile = mobileN;
-          if (Object.keys(patch).length) {
-            const { error: updErr } = await supabase
-              .from("clients")
-              .update(patch)
-              .eq("id", clientId);
-            if (updErr) throw updErr;
-          }
-        } else {
-          const { data: created, error: insErr } = await supabase
-            .from("clients")
-            .insert([{ first_name: first, last_name: last || null, email, mobile: mobileN || null }])
-            .select("id")
-            .single();
-          if (insErr) throw insErr;
-          clientId = created.id;
-        }
-      } else {
-        const { data: candidates, error: findMobErr } = await supabase
-          .from("clients")
-          .select("id, first_name, last_name, mobile")
-          .or(`mobile.eq.${mobileN},mobile.ilike.%${mobileN}%`)
-          .limit(20);
-        if (findMobErr) throw findMobErr;
-
-        const existing = (candidates || []).find(
-          (r) =>
-            String((r.mobile || "").replace(/[^\d]/g, "")) === mobileN &&
-            String(r.first_name || "").trim().toLowerCase() === first.toLowerCase() &&
-            String(r.last_name || "").trim().toLowerCase() === last.toLowerCase()
-        );
-
-        if (existing) {
-          clientId = existing.id;
-        } else {
-          const { data: created, error: insErr } = await supabase
-            .from("clients")
-            .insert([{ first_name: first, last_name: last || null, email: null, mobile: mobileN }])
-            .select("id")
-            .single();
-          if (insErr) throw insErr;
-          clientId = created.id;
-        }
-      }
+      if (!clientId) throw new Error("Client ID could not be created.");
 
       // 4) Same-day clash check (per segment)
       const dayStartISO = new Date(new Date(selectedDate).setHours(0, 0, 0, 0)).toISOString();
       const dayEndISO = new Date(new Date(selectedDate).setHours(23, 59, 59, 999)).toISOString();
+
       const { data: dayBookings, error: dayErr } = await supabase.rpc("public_get_booked_spans", {
         p_staff: selectedProvider.id,
         p_start: dayStartISO,
@@ -278,8 +508,7 @@ export default function PublicBookingPage() {
       });
       if (dayErr) throw dayErr;
 
-      const rangesOverlap = (aStart, aEnd, bStart, bEnd) =>
-        aStart < bEnd && aEnd > bStart;
+      const rangesOverlap = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && aEnd > bStart;
 
       for (const r of rows) {
         const s = new Date(r.start);
@@ -289,7 +518,6 @@ export default function PublicBookingPage() {
         );
         if (clash) {
           alert("Sorry, one of those times was just taken. Please pick another slot.");
-          setSaving(false);
           return;
         }
       }
@@ -310,7 +538,25 @@ export default function PublicBookingPage() {
         status: "confirmed",
         service_id: r.service_id,
       }));
+
       await safeInsertBookings(payloadRows);
+
+      // 5b) HARD GUARANTEE (best-effort):
+      // If your DB trigger/RLS/RPC dropped client_id, try to patch missing rows.
+      // (Once your bookings_sanitize_anon function no longer sets client_id := null,
+      // this should normally do nothing.)
+      const { error: linkErr } = await supabase
+        .from("bookings")
+        .update({
+          client_id: clientId,
+          client_name: `${first} ${last}`.trim(),
+        })
+        .eq("booking_id", bookingId)
+        .is("client_id", null);
+
+      if (linkErr) {
+        console.warn("Post-insert booking link failed:", linkErr.message);
+      }
 
       // notify listeners
       window.dispatchEvent(
@@ -319,34 +565,35 @@ export default function PublicBookingPage() {
         })
       );
 
-// 6) Client notes – simple direct insert, no RPC
-try {
-  const rawNotes = String(client.notes || "").trim();
-  if (rawNotes) {
-    const { data: rowIds, error: rowsErr } = await supabase
-      .from("bookings")
-      .select("id")
-      .eq("booking_id", bookingId)
-      .order("start", { ascending: true })
-      .limit(1);
-    if (rowsErr) throw rowsErr;
+      // 6) Client notes – best effort
+      try {
+        const rawNotes = String(client.notes || "").trim();
+        if (rawNotes) {
+          const { data: rowIds, error: rowsErr } = await supabase
+            .from("bookings")
+            .select("id")
+            .eq("booking_id", bookingId)
+            .order("start", { ascending: true })
+            .limit(1);
 
-    const bookingRowId = rowIds?.[0]?.id || null;
+          if (rowsErr) throw rowsErr;
 
-    await supabase.from("client_notes").insert([
-      {
-        client_id: clientId,
-        note_content: `Notes added by client: ${rawNotes}`,
-        created_by: "client",
-        booking_id: bookingRowId,
-      },
-    ]);
-  }
-} catch {
-  /* best-effort */
-}
+          const bookingRowId = rowIds?.[0]?.id || null;
 
-      // 7) Log
+          await supabase.from("client_notes").insert([
+            {
+              client_id: clientId,
+              note_content: `Notes added by client: ${rawNotes}`,
+              created_by: "client",
+              booking_id: bookingRowId,
+            },
+          ]);
+        }
+      } catch {
+        /* best-effort */
+      }
+
+      // 7) Log – best effort
       try {
         await SaveBookingsLog({
           action: "created",
@@ -373,7 +620,7 @@ try {
         /* non-fatal */
       }
 
-      // 8) Emails
+      // 8) Emails – best effort
       try {
         const customerEmailToUse = isValidEmail(email) ? email : undefined;
         await sendBookingEmails({
@@ -411,7 +658,8 @@ try {
               className="underline font-semibold"
             >
               click here
-            </a>.
+            </a>
+            .
           </div>
         </>,
         { type: "success", ms: 0 }
@@ -446,131 +694,6 @@ try {
     </div>
   );
 
-  // ----- Selection summary chip bar -----
-  const startDateTime = useMemo(() => {
-    if (!selectedDate || !selectedTime) return null;
-    const d = new Date(selectedDate);
-    d.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
-    return d;
-  }, [selectedDate, selectedTime]);
-
-  function SelectionSummary({ provider, start, onClear }) {
-    if (!provider && !start) return null;
-
-    const dateStr = start
-      ? start.toLocaleDateString(undefined, {
-          weekday: "short",
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-        })
-      : null;
-
-    const timeStr = start
-      ? start.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
-      : null;
-  }
-
-  // ----- Cart (right column / mobile card) -----
-// --- replace the whole CartSection in PublicBookingPage.jsx with this ---
-const CartSection = () => {
-  if (!selectedServices.length) return null;
-
-  return (
-    <section className="w-full min-w-0 bg-neutral-900/90 rounded-2xl shadow p-5 border-2 border-amber-600/40">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-xl font-semibold text-white">Your services</h3>
-      </div>
-
-      {/* NEW: selected stylist chip */}
-      {selectedProvider && (
-        <div className="mb-4">
-          <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded-full border border-neutral-700 bg-amber-600/30 text-amber-100">
-            <span className="opacity-80">Stylist</span>
-            <span className="font-semibold">
-              {selectedProvider.name || selectedProvider.title || "—"}
-            </span>
-          </span>
-        </div>
-      )}
-
-      {!selectedProvider && (
-        <p className="mb-3 text-xs text-amber-300">
-          Select a stylist to see exact time and price.
-        </p>
-      )}
-
-      <ul className="space-y-3">
-        {selectedServices.map((svc) => {
-          const { duration, price } =
-            typeof getEffectivePD === "function"
-              ? getEffectivePD(svc)
-              : { duration: null, price: null };
-
-          const dLabel = selectedProvider ? minsToLabel(duration) : "—";
-          const pLabel = selectedProvider && !(price == null || price === "" || Number(price) === 0 || Number.isNaN(Number(price)))
-            ? money(price)
-            : "TBA";
-
-          return (
-            <li
-              key={svc.id}
-              className="flex items-start justify-between gap-3 bg-neutral-800/70 rounded-xl px-4 py-3"
-            >
-              <div className="min-w-0">
-                <p className="text-base font-medium text-white break-words">
-                  {svc.name}
-                  {svc.is_chemical && (
-                    <span className="ml-2 text-xs px-2 py-0.5 rounded bg-amber-600/30 text-amber-300">
-                      chemical
-                    </span>
-                  )}
-                </p>
-                <p className="text-sm text-gray-300">
-                  {dLabel} {pLabel !== "TBA" ? "• " + pLabel : "• TBA"}
-                </p>
-              </div>
-              <button
-                aria-label={`Remove ${svc.name}`}
-                className="text-white/80 hover:text-white text-lg leading-none shrink-0"
-                onClick={() => toggleService(svc)}
-                title="Remove"
-              >
-                Remove
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-
-      {hasChemical && selectedProvider && (
-        <div className="mt-3 text-sm text-amber-300">
-          Processing time for chemical treatments applied.
-        </div>
-      )}
-
-      <div className="mt-5 border-t border-neutral-700 pt-4">
-        <div className="flex items-center justify-between text-base">
-          <span className="text-gray-300 whitespace-nowrap">Total time</span>
-          <span className="text-white font-medium text-right">
-            {selectedProvider ? minsToLabel(sumActiveDuration) : "—"}
-          </span>
-        </div>
-        <div className="flex items-center justify-between text-lg mt-2">
-          <span className="text-gray-300 whitespace-nowrap">Total price</span>
-          <span className="text-white font-semibold text-right">
-            {hasUnknownPrice ? "TBA" : money(sumPrice)}
-          </span>
-        </div>
-      </div>
-
-      {hasUnknownPrice && (
-        <p className="mt-3 text-xs text-gray-400">Please select a stylist for price.</p>
-      )}
-    </section>
-  );
-};
-
   return (
     <div className="min-h-screen bg-black text-white text-[15px]">
       {header}
@@ -586,69 +709,67 @@ const CartSection = () => {
       />
 
       {/* Brand-themed toast */}
-{toast && (
-  <div className="fixed inset-0 z-[9999] px-3 sm:px-4 flex items-center justify-center">
-    {/* Backdrop – also closes on click */}
-    <div
-      className="absolute inset-0 bg-black/50"
-      aria-hidden="true"
-      onClick={hideToast}
-    />
+      {toast && (
+        <div className="fixed inset-0 z-[9999] px-3 sm:px-4 flex items-center justify-center">
+          {/* Backdrop – also closes on click */}
+          <div
+            className="absolute inset-0 bg-black/50"
+            aria-hidden="true"
+            onClick={hideToast}
+          />
 
-    <div
-      className="relative w-full max-w-full sm:max-w-[520px] md:max-w-[620px] lg:max-w-[680px]
+          <div
+            className="relative w-full max-w-full sm:max-w-[520px] md:max-w-[620px] lg:max-w-[680px]
                  rounded-2xl border shadow-2xl overflow-hidden"
-      role="status"
-      aria-live="polite"
-      style={{
-        background: toast.type === "success" ? BRAND.successBg : BRAND.errorBg,
-        borderColor: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
-        color: toast.type === "success" ? BRAND.successText : BRAND.errorText,
-      }}
-    >
-      <div
-        style={{
-          height: 6,
-          background: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
-        }}
-      />
-      <div
-        className="px-4 py-4 sm:px-6 sm:py-6"
-        style={{
-          paddingTop: "max(1rem, env(safe-area-inset-top))",
-          paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
-          paddingLeft: "max(1rem, env(safe-area-inset-left))",
-          paddingRight: "max(1rem, env(safe-area-inset-right))",
-        }}
-      >
-        <div className="flex items-start gap-3 sm:gap-4">
-          <span className="mt-0.5 text-2xl sm:text-3xl md:text-4xl shrink-0">
-            {toast.type === "success" ? "✅" : "⚠️"}
-          </span>
-          <div className="flex-1 text-base sm:text-lg leading-relaxed">
-            {toast.message}
-          </div>
-
-          {/* Close button */}
-          <button
-            type="button"
-            className="shrink-0 text-white/90 hover:text-white text-2xl sm:text-3xl ml-2"
-            onClick={() => {
-              console.log("X button clicked");
-              hideToast();          // ✅ this is now definitely a function
+            role="status"
+            aria-live="polite"
+            style={{
+              background: toast.type === "success" ? BRAND.successBg : BRAND.errorBg,
+              borderColor: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
+              color: toast.type === "success" ? BRAND.successText : BRAND.errorText,
             }}
-            aria-label="Dismiss"
-            title="Dismiss"
           >
-            ×
-          </button>
+            <div
+              style={{
+                height: 6,
+                background: toast.type === "success" ? BRAND.successEdge : BRAND.errorEdge,
+              }}
+            />
+            <div
+              className="px-4 py-4 sm:px-6 sm:py-6"
+              style={{
+                paddingTop: "max(1rem, env(safe-area-inset-top))",
+                paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
+                paddingLeft: "max(1rem, env(safe-area-inset-left))",
+                paddingRight: "max(1rem, env(safe-area-inset-right))",
+              }}
+            >
+              <div className="flex items-start gap-3 sm:gap-4">
+                <span className="mt-0.5 text-2xl sm:text-3xl md:text-4xl shrink-0">
+                  {toast.type === "success" ? "✅" : "⚠️"}
+                </span>
+                <div className="flex-1 text-base sm:text-lg leading-relaxed">
+                  {toast.message}
+                </div>
+
+                {/* Close button */}
+                <button
+                  type="button"
+                  className="shrink-0 text-white/90 hover:text-white text-2xl sm:text-3xl ml-2"
+                  onClick={() => {
+                    console.log("X button clicked");
+                    hideToast();
+                  }}
+                  aria-label="Dismiss"
+                  title="Dismiss"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
-  </div>
-)}
-
-
+      )}
 
       {/* Mobile cart */}
       <div className="max-w-6xl mx-auto px-4 pt-6 lg:hidden">
@@ -673,7 +794,6 @@ const CartSection = () => {
             <section className="bg-neutral-900/80 rounded-2xl shadow p-5 border border-neutral-800">
               <h2 className="font-semibold mb-4 text-xl text-white">Select services</h2>
 
-              {/* Modular service list (grouped, override-aware) */}
               <ServiceList
                 services={services}
                 selectedService={lastPickedService}
@@ -686,7 +806,9 @@ const CartSection = () => {
                 <span className="text-sm text-gray-300">
                   {selectedServices.length > 0
                     ? selectedProvider
-                      ? `${minsToLabel(sumActiveDuration)} • ${hasUnknownPrice ? "TBA" : money(sumPrice)}`
+                      ? `${minsToLabel(sumActiveDuration)} • ${
+                          hasUnknownPrice ? "TBA" : money(sumPrice)
+                        }`
                       : "Pick a stylist to see time & price"
                     : "Choose one or more services"}
                 </span>
@@ -695,6 +817,7 @@ const CartSection = () => {
                     className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40"
                     disabled={!canContinue}
                     onClick={handleContinue}
+                    type="button"
                   >
                     Continue →
                   </button>
@@ -717,6 +840,7 @@ const CartSection = () => {
                   <button
                     className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-white text-sm"
                     onClick={handleBack}
+                    type="button"
                   >
                     ← Back
                   </button>
@@ -724,6 +848,7 @@ const CartSection = () => {
                     className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-sm"
                     disabled={!canContinue}
                     onClick={handleContinue}
+                    type="button"
                   >
                     Continue →
                   </button>
@@ -751,6 +876,7 @@ const CartSection = () => {
                   <button
                     className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-white text-sm"
                     onClick={handleBack}
+                    type="button"
                   >
                     ← Back
                   </button>
@@ -758,6 +884,7 @@ const CartSection = () => {
                     className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-sm"
                     disabled={!canContinue}
                     onClick={handleContinue}
+                    type="button"
                   >
                     Continue →
                   </button>
@@ -787,6 +914,7 @@ const CartSection = () => {
                 <button
                   className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-white text-sm"
                   onClick={handleBack}
+                  type="button"
                 >
                   ← Back
                 </button>
