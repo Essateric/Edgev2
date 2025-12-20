@@ -376,6 +376,7 @@ function BookingPopUpBody({
           <ActionsBar
             onOpenRepeat={() => setShowRepeat(true)}
             onOpenActions={() => setShowActions(true)}
+            onCancelBooking={handleCancelBooking}
             onClose={onClose}
           />
         </div>

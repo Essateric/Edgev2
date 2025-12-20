@@ -12,6 +12,7 @@ import {
 } from "../../../lib/dates";
 import { v4 as uuidv4 } from "uuid";
 import SaveBookingsLog from "../SaveBookingsLog";
+import { createPortal } from "react-dom";
 
 function patternLabel(pattern, dayOfMonth) {
   switch (pattern) {
@@ -163,8 +164,8 @@ export default function RepeatBookingsModal({
     }));
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+ return createPortal(
+    <div className="fixed inset-0 flex items-center justify-center bg-black/40" style={{ zIndex: 5000 }}>
       <div className="bg-white rounded-lg p-4 w-[95vw] h-[90vh] sm:w-[80vw] sm:h-[80vh] lg:w-[60vw] lg:h-[60vh] overflow-auto">
         <h3 className="text-lg font-semibold text-gray-800 mb-3">Repeat bookings</h3>
 
@@ -233,6 +234,7 @@ export default function RepeatBookingsModal({
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
