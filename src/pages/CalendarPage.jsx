@@ -22,7 +22,6 @@ import AddGridTimeLabels from "../utils/AddGridTimeLabels";
 
 import baseSupabase from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
-import { createClient } from "@supabase/supabase-js";
 
 
 import "react-big-calendar/lib/css/react-big-calendar.css";
@@ -96,33 +95,9 @@ export default function CalendarPage() {
   const auth = useAuth();
   const { currentUser, pageLoading, authLoading } = auth;
 
-  // ✅ FIX: use the context client (token-backed), fallback to base client
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-// Token-backed client for PIN auth (no refresh tokens, no session storage)
-const tokenClient = useMemo(() => {
-  if (!currentUser?.token) return null;
-
-  return createClient(SUPABASE_URL, SUPABASE_ANON, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-    },
-    global: {
-      fetch: (input, init = {}) => {
-        const headers = new Headers(init.headers || {});
-        headers.set("Authorization", `Bearer ${currentUser.token}`);
-        headers.set("apikey", SUPABASE_ANON); // keep apikey for PostgREST
-        return fetch(input, { ...init, headers });
-      },
-    },
-  });
-}, [currentUser?.token, SUPABASE_URL, SUPABASE_ANON]);
-
+  
 // ✅ Use context client first, then token client, then anon client
-const supabase = auth?.supabaseClient || tokenClient || baseSupabase;
+const supabase = auth?.supabaseClient || baseSupabase;
 
 
   const hasUser = !!currentUser;

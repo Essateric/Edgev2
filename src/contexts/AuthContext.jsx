@@ -227,7 +227,8 @@ export const AuthProvider = ({ children }) => {
     // Avoid StrictMode double-create warnings in dev
     if (
       typeof window !== "undefined" &&
-      window.__edgehd_supabase_token_client__
+      window.__edgehd_supabase_token_client__ &&
+      window.__edgehd_supabase_token_client__.__token === currentUser?.token
     ) {
       return window.__edgehd_supabase_token_client__;
     }
@@ -251,17 +252,30 @@ export const AuthProvider = ({ children }) => {
         },
       },
 
+      // Always send the current PIN access token (and apikey) on every request.
+      global: {
+        fetch: async (input, init = {}) => {
+          const headers = new Headers(init.headers || {});
+          const token = await getValidAccessToken();
+          if (token) headers.set("Authorization", `Bearer ${token}`);
+          headers.set("apikey", anon);
+          return fetch(input, { ...init, headers });
+        },
+      },
+
+
       // ✅ important
       accessToken: getValidAccessToken,
     });
 
     if (typeof window !== "undefined") {
+      client.__token = currentUser?.token || null;
       window.__edgehd_supabase_token_client__ = client;
     }
 
     return client;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+ }, [currentUser?.token]);
 
   const cacheStaffPinsFromSupabase = async () => {
     const { data: staffList, error } = await supabase
