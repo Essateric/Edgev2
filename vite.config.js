@@ -19,8 +19,8 @@ export default defineConfig(({ mode }) => ({
       registerType: "autoUpdate",
       includeAssets: [
         "essateric_white.png",
-        "essateric_white_192.png",
-        "essateric_white_512.png",
+        "android-chrome-192x192.png",
+        "android-chrome-512x512.png",
         "screenshots/pwa-desktop.png",
         "screenshots/pwa-mobile.png",
       ],
@@ -34,8 +34,8 @@ export default defineConfig(({ mode }) => ({
         theme_color: "#cd7f32",
         orientation: "portrait",
         icons: [
-          { src: "/essateric_white_192.png", sizes: "192x192", type: "image/png" },
-          { src: "/essateric_white_512.png", sizes: "512x512", type: "image/png" },
+          { src: "/android-chrome-192x192.png", sizes: "192x192", type: "image/png" },
+          { src: "/android-chrome-512x512.png", sizes: "512x512", type: "image/png" },
         ],
       },
       workbox: {
