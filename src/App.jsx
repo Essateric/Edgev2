@@ -21,8 +21,9 @@ function App() {
 
   const path = location.pathname;
 
-  // ✅ Public routes should never be blocked by auth restore
-  const isPublicRoute = path === "/book" || path === "/onlinebookings";
+  // ✅ Public routes should never be blocked by auth restore (support trailing slash/query)
+  const isPublicRoute =
+    path.startsWith("/book") || path.startsWith("/onlinebookings");
 
   // ✅ Treat "/" as part of the login flow when logged out
   // (because your unauth catch-all was rendering <Login /> at "/")
@@ -57,11 +58,18 @@ function App() {
     );
   }
 
+    // If already authenticated and on an auth-only route, send to calendar
+  if (currentUser && isAuthRoute && !isPublicRoute) {
+    return <Navigate to="/calendar" replace />;
+  }
+
   return (
     <>
       <Toaster position="top-right" reverseOrder={false} />
 
       <Routes>
+         {/* Always send base path to PIN/login so landing on the root shows the keypad */}
+        <Route path="/" element={<Navigate to="/login" replace />} />
         {/* ✅ Public routes */}
         <Route path="/book" element={<PublicBookingPage />} />
         <Route path="/onlinebookings" element={<PublicBookingPage />} />
@@ -69,10 +77,7 @@ function App() {
         {/* 🔒 Auth-gated routes */}
         {!currentUser ? (
           <>
-            {/* ✅ Make "/" explicitly go to /login so pathname is correct */}
-            <Route path="/" element={<Navigate to="/login" replace />} />
-
-            <Route path="/login" element={<Login />} />
+              <Route path="/login" element={<Login />} />
             <Route path="/set-pin" element={<SetPin />} />
 
             {/* keep this catch-all AFTER the public routes */}
@@ -81,7 +86,8 @@ function App() {
         ) : (
           <>
             <Route element={<StaffLayout />}>
-              <Route path="/" element={<CalendarPage />} />
+             {/* Send root to calendar when already authenticated */}
+              <Route path="/" element={<Navigate to="/calendar" replace />} />
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/calendar" element={<CalendarPage />} />
 
@@ -117,7 +123,7 @@ function App() {
                   </ProtectedRoute>
                 }
               />
-              <Route path="*" element={<Navigate to="/" replace />} />
+           <Route path="*" element={<Navigate to="/calendar" replace />} />
             </Route>
           </>
         )}
