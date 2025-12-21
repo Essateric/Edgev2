@@ -265,13 +265,15 @@ let refreshToken = u?.refresh_token || null;
     return nextAccess;
   };
 
-  const queueTokenRefresh = () => {
-    if (!refreshInFlightRef.current) {
-      refreshInFlightRef.current = refreshAccessToken().finally(() => {
-        refreshInFlightRef.current = null;
-      });
-    }
-    return refreshInFlightRef.current;
+ const queueTokenRefresh = () => {
+    if (refreshInFlightRef.current) return refreshInFlightRef.current;
+
+    const pending = refreshAccessToken().finally(() => {
+      refreshInFlightRef.current = null;
+    });
+
+    refreshInFlightRef.current = pending;
+    return pending;
   };
 
 
@@ -484,16 +486,11 @@ let refreshToken = u?.refresh_token || null;
             !normalized.offline
           ) {
             try {
-              const p = supabase.auth.setSession({
+               supabase.auth.setSession({
                 access_token: normalized.token,
                 refresh_token: normalized.refresh_token,
-              });
-         withTimeout(p, 6000, "restore setSession").catch((e) => {
-                console.warn(
-                  "[AUTH] seedSupabaseFromStoredUser failed/timeout (ignored)",
-                  e?.message || e
-                );
-              });
+                }).catch(() => {});
+          
             } catch {
               // ignore
             }
