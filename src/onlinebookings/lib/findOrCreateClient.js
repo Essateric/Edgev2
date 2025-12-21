@@ -8,6 +8,16 @@ const normPhone = (s = "") => {
 };
 const isEmail = (s = "") => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s).trim());
 
+const normalizeEmailForMatch = (s = "") => {
+  const trimmed = String(s).trim().toLowerCase();
+  const [local = "", domain = ""] = trimmed.split("@");
+  if (!domain) return trimmed;
+  const withoutTag = local.split("+")[0];
+  const collapsedLocal = withoutTag.replace(/[^a-z0-9]/gi, "");
+  return `${collapsedLocal}@${domain}`;
+};
+const emailDomain = (s = "") => normalizeEmailForMatch(s).split("@")[1] || "";
+
 /**
  * Find a client by email/mobile; create if missing.
  * - For ONLINE bookings we *require* email.
@@ -25,6 +35,10 @@ export async function findOrCreateClient({
   const ln = last_name.trim();
   const em = email.trim().toLowerCase();
   const mo = normPhone(mobile);
+  const emDomain = emailDomain(em);
+  const normalizedInputEmail = normalizeEmailForMatch(em);
+  const fnLower = fn.toLowerCase();
+  const lnLower = ln.toLowerCase();
 
   if (!fn || !ln) {
     throw new Error("First name and last name are required.");
@@ -39,22 +53,24 @@ export async function findOrCreateClient({
   // 1) Look up by email/mobile to avoid duplicates
   let q = supabase.from("clients")
     .select("id, first_name, last_name, email, mobile")
-    .limit(25);
-    const phoneLike = mo ? `%${mo}%` : null;
+    .limit(50);
+  const phoneLike = mo ? `%${mo}%` : null;
+  const ors = [];
 
-if (em && mo) {
-    q = q.or(
-      [
-        `email.ilike.${em}`,
-        `email.eq.${em}`,
-        `mobile.ilike.${phoneLike}`,
-        `mobile.eq.${mo}`,
-      ].join(",")
-    );
-  } else if (em) {
-    q = q.or([`email.ilike.${em}`, `email.eq.${em}`].join(","));
-  } else if (mo) {
-    q = q.or([`mobile.ilike.${phoneLike}`, `mobile.eq.${mo}`].join(","));
+  if (em) {
+    ors.push(`email.ilike.${em}`, `email.eq.${em}`);
+    if (emDomain) {
+      ors.push(`email.ilike.%@${emDomain}`);
+    }
+  }
+  if (mo) {
+    ors.push(`mobile.ilike.${phoneLike}`, `mobile.eq.${mo}`);
+  }
+  if (fn && ln) {
+    ors.push(`and(first_name.ilike.${fn},last_name.ilike.${ln})`);
+  }
+  if (ors.length) {
+    q = q.or(ors.join(","));
   }
 
   const { data: found, error: findErr } = await q;
@@ -63,13 +79,23 @@ if (em && mo) {
  const pickBestMatch = () => {
     if (!Array.isArray(found) || !found.length) return null;
 
-    // 1) exact email (case-insensitive)
-    const byEmail = found.find((r) => r.email && r.email.toLowerCase() === em);
+   // 1) exact email (case-insensitive) or normalized email (e.g. dotted Gmail)
+    const byEmail = found.find((r) => r.email && normalizeEmailForMatch(r.email) === normalizedInputEmail);
     if (byEmail) return byEmail;
 
     // 2) exact digits match
     const byDigits = found.find((r) => normPhone(r.mobile || "") === mo && mo);
     if (byDigits) return byDigits;
+
+    // 3) same names + same email domain
+    const byNameAndDomain = found.find((r) =>
+      r.first_name?.trim().toLowerCase() === fnLower &&
+      r.last_name?.trim().toLowerCase() === lnLower &&
+      emailDomain(r.email) === emDomain
+    );
+    if (byNameAndDomain) return byNameAndDomain;
+
+    // 4) first non-null candidate
 
     // 3) first non-null candidate
     return found[0];

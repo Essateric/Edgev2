@@ -143,15 +143,39 @@ export default function ClientNotesModal({
     return who.name || "Stylist";
   };
 
-  const loadNotes = async (cid) => {
+const loadNotes = async ({ cid, bookingRowId, bookingGroupId }) => {
+    const filters = [];
+    if (cid) filters.push(`client_id.eq.${cid}`);
+    if (bookingRowId) filters.push(`booking_id.eq.${bookingRowId}`);
+    // Some older rows may have booking_id populated with the legacy group id (text)
+    if (bookingGroupId) filters.push(`booking_id.eq.${bookingGroupId}`);
+
+    if (!filters.length) {
+      setNotes([]);
+      return;
+    }
     const res = await db
       .from("client_notes")
       .select("id, client_id, note_content, created_by, created_at, booking_id")
-      .eq("client_id", cid)
+      .or(filters.join(","))
       .order("created_at", { ascending: false });
 
-    if (!res.error) setNotes(res.data || []);
-    else console.error("Error fetching notes:", res.error.message);
+ if (res.error) {
+      console.error("Error fetching notes:", res.error.message);
+      setNotes([]);
+      return;
+    }
+
+    // Deduplicate by id in case multiple filters overlap the same row
+    const unique = [];
+    const seen = new Set();
+    for (const n of res.data || []) {
+      if (n?.id && !seen.has(n.id)) {
+        seen.add(n.id);
+        unique.push(n);
+      }
+    }
+    setNotes(unique);
   };
 
   // -------- resolve correct client + booking ids on open --------
@@ -268,7 +292,7 @@ export default function ClientNotesModal({
       loadNotes(effectiveClientId);
       setNotesPage(1);
     }
-  }, [isOpen, effectiveClientId]);
+ }, [isOpen, effectiveClientId, effectiveBookingRowId, bookingId]);
 
   // --- Load history (bookings) when opened ---
   useEffect(() => {
@@ -408,7 +432,11 @@ export default function ClientNotesModal({
     }
 
     setNoteContent("");
-    await loadNotes(effectiveClientId);
+        await loadNotes({
+      cid: effectiveClientId,
+      bookingRowId: effectiveBookingRowId,
+      bookingGroupId: !isUuid(bookingId) ? bookingId : null,
+    });
     setNotesPage(1);
   };
 

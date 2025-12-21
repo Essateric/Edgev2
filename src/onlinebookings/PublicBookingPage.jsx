@@ -21,12 +21,14 @@ import useSlots from "./hooks/useSlots";
 import { sendBookingEmails } from "./lib/email";
 import SaveBookingsLog from "../components/bookings/SaveBookingsLog";
 import { safeInsertBookings } from "./api";
+import { findOrCreateClient } from "./lib/findOrCreateClient";
 
 /* Config + helpers */
 import { BRAND } from "../config/brand";
 import { MIN_NOTICE_HOURS, BUSINESS } from "./config";
 import { money } from "./lib/bookingUtils";
 import { isValidEmail, uniqById, minsToLabel } from "./helpers";
+
 
 /* ---------- local helpers ---------- */
 const initialClient = {
