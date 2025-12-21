@@ -17,9 +17,7 @@ export function useClientNotes({ isOpen, clientId, groupRowIds, supabase }) {
           .order("created_at", { ascending: false });
         if (error) throw error;
 
-        const groupIds = new Set(groupRowIds || []);
-        const filtered = (data || []).filter(n => !n.booking_id || groupIds.has(n.booking_id));
-        if (on) setNotes(filtered);
+ if (on) setNotes(data || []);
       } catch {
         if (on) setNotes([]);
       } finally {
@@ -27,7 +25,7 @@ export function useClientNotes({ isOpen, clientId, groupRowIds, supabase }) {
       }
     })();
     return () => { on = false; };
-  }, [isOpen, clientId, supabase, JSON.stringify(groupRowIds || []), ]);
+}, [isOpen, clientId, supabase, JSON.stringify(groupRowIds || []) ]);
 
   return { notes, loading, setNotes };
 }

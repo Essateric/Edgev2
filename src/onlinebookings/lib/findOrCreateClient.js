@@ -1,8 +1,11 @@
 // lib/findOrCreateClient.js
 import { supabase } from "../../supabaseClient.js";
 
-// very simple normalizer—tune as you like
-const normPhone = (s = "") => s.replace(/[^\d+]/g, "");
+const normPhone = (s = "") => {
+  const digits = String(s).replace(/[^\d]/g, "");
+  if (!digits) return "";
+  return String(s).trim().startsWith("+") ? `+${digits}` : digits;
+};
 const isEmail = (s = "") => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s).trim());
 
 /**
@@ -36,18 +39,45 @@ export async function findOrCreateClient({
   // 1) Look up by email/mobile to avoid duplicates
   let q = supabase.from("clients")
     .select("id, first_name, last_name, email, mobile")
-    .limit(1);
+    .limit(25);
+    const phoneLike = mo ? `%${mo}%` : null;
 
-  if (em && mo) q = q.or(`email.eq.${em},mobile.eq.${mo}`);
-  else if (em)  q = q.eq("email", em);
-  else if (mo)  q = q.eq("mobile", mo);
+if (em && mo) {
+    q = q.or(
+      [
+        `email.ilike.${em}`,
+        `email.eq.${em}`,
+        `mobile.ilike.${phoneLike}`,
+        `mobile.eq.${mo}`,
+      ].join(",")
+    );
+  } else if (em) {
+    q = q.or([`email.ilike.${em}`, `email.eq.${em}`].join(","));
+  } else if (mo) {
+    q = q.or([`mobile.ilike.${phoneLike}`, `mobile.eq.${mo}`].join(","));
+  }
 
   const { data: found, error: findErr } = await q;
   if (findErr) throw findErr;
 
-  if (found?.length) {
-    // ✅ Update any missing fields on the existing client (non-destructive)
-    const existing = found[0];
+ const pickBestMatch = () => {
+    if (!Array.isArray(found) || !found.length) return null;
+
+    // 1) exact email (case-insensitive)
+    const byEmail = found.find((r) => r.email && r.email.toLowerCase() === em);
+    if (byEmail) return byEmail;
+
+    // 2) exact digits match
+    const byDigits = found.find((r) => normPhone(r.mobile || "") === mo && mo);
+    if (byDigits) return byDigits;
+
+    // 3) first non-null candidate
+    return found[0];
+  };
+
+  const existing = pickBestMatch();
+
+  if (existing?.id) {
     const patch = {};
     if (!existing.first_name && fn) patch.first_name = fn;
     if (!existing.last_name  && ln) patch.last_name  = ln;

@@ -69,10 +69,19 @@ const toDate = (v) => (v instanceof Date ? v : new Date(v));
 // Defensive cancelled check (handles "cancelled", "canceled", whitespace, case)
 const isCancelledStatus = (status) => {
   const s = String(status || "").trim().toLowerCase();
-  return s === "cancelled" || s === "canceled" || s.startsWith("cancel");
+  return (
+    s === "cancelled" ||
+    s === "canceled" ||
+    s.startsWith("cancel") ||
+    s.includes("cancelled") || // client_cancelled, etc.
+    s.includes("canceled")
+  );
 };
 
-const isConfirmedStatus = (status) => String(status || "").trim().toLowerCase() === "confirmed";
+const isConfirmedStatus = (status) => {
+  const s = String(status || "").trim().toLowerCase();
+  return s === "confirmed" || s.startsWith("confirm") || s.includes("confirmed");
+};
 
 export default function CalendarPage() {
   const [stylistList, setStylistList] = useState([]);
