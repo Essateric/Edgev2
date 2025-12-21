@@ -122,6 +122,49 @@ export const AuthProvider = ({ children }) => {
 
   // Prevent multiple refresh calls at once
   const refreshInFlightRef = useRef(null);
+   // Avoid spamming redirects/logouts on repeated failures
+  const authLossHandledRef = useRef(false);
+
+  useEffect(() => {
+    if (currentUser) authLossHandledRef.current = false;
+  }, [currentUser]);
+
+  const clearCachedUsers = () => {
+    try {
+      localStorage.removeItem("offlineUser");
+      localStorage.removeItem("currentUser");
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleAuthLoss = (reason) => {
+    if (authLossHandledRef.current) return;
+    authLossHandledRef.current = true;
+
+    console.warn("[AUTH] clearing session after auth loss:", reason);
+
+    try {
+      supabase.auth.stopAutoRefresh();
+    } catch {
+      // ignore
+    }
+
+    setCurrentUser(null);
+    clearCachedUsers();
+    clearSupabaseAuthStorage();
+    refreshInFlightRef.current = null;
+
+    try {
+      supabase.auth.signOut({ scope: "local" }).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    if (typeof window !== "undefined") {
+      window.location.replace("/login");
+    }
+  };
 
   const decodeJwtPayload = (token) => {
     try {
@@ -149,7 +192,18 @@ export const AuthProvider = ({ children }) => {
     const u = currentUserRef.current;
 
     if (!url || !anon) throw new Error("Missing Supabase env (URL/ANON)");
-    if (!u?.refresh_token) throw new Error("Missing refresh_token");
+let refreshToken = u?.refresh_token || null;
+
+    if (!refreshToken) {
+      try {
+        const session = await supabase.auth.getSession();
+        refreshToken = session?.data?.session?.refresh_token || null;
+      } catch {
+        refreshToken = null;
+      }
+    }
+
+    if (!refreshToken) throw new Error("Missing refresh_token");
 
     const resp = await fetch(`${url}/auth/v1/token?grant_type=refresh_token`, {
       method: "POST",
@@ -158,7 +212,7 @@ export const AuthProvider = ({ children }) => {
         Authorization: `Bearer ${anon}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ refresh_token: u.refresh_token }),
+ body: JSON.stringify({ refresh_token: refreshToken }),
     });
 
     const json = await resp.json().catch(() => ({}));
@@ -192,8 +246,34 @@ export const AuthProvider = ({ children }) => {
       return next;
     });
 
+    try {
+      const p = supabase.auth.setSession({
+        access_token: nextAccess,
+        refresh_token: nextRefresh,
+      });
+      withTimeout(p, 4000, "setSession after refresh").catch((e) => {
+        console.warn(
+          "[AUTH] setSession after refresh failed/timeout (ignored)",
+          e?.message || e
+        );
+      });
+      supabase.auth.startAutoRefresh?.();
+    } catch {
+      // ignore
+    }
+
     return nextAccess;
   };
+
+  const queueTokenRefresh = () => {
+    if (!refreshInFlightRef.current) {
+      refreshInFlightRef.current = refreshAccessToken().finally(() => {
+        refreshInFlightRef.current = null;
+      });
+    }
+    return refreshInFlightRef.current;
+  };
+
 
   const getValidAccessToken = async () => {
     const u = currentUserRef.current;
@@ -206,17 +286,53 @@ export const AuthProvider = ({ children }) => {
     // expiring/expired: refresh once
     if (!u.refresh_token) return u.token;
 
-    if (!refreshInFlightRef.current) {
-      refreshInFlightRef.current = refreshAccessToken().finally(() => {
-        refreshInFlightRef.current = null;
-      });
-    }
-
-    try {
-      return await refreshInFlightRef.current;
+  try {
+      return await queueTokenRefresh();
     } catch (e) {
       console.warn("[AUTH] token refresh failed:", e?.message || e);
-      return u.token; // may still 401, but at least logged
+      if (!u?.offline) handleAuthLoss("token refresh failure");
+      return null;
+    }
+};
+
+  const buildAuthHeaders = async (incomingHeaders = {}) => {
+    const headers = new Headers(incomingHeaders || {});
+    const anon = getSupabaseAnonKey();
+    if (anon) headers.set("apikey", anon);
+
+    try {
+      const token = await getValidAccessToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+    } catch {
+      // handled by caller
+    }
+
+    return headers;
+  };
+
+  const authFetchWithRetry = async (input, init = {}, attempt = 0) => {
+    const headers = await buildAuthHeaders(init.headers);
+    const response = await fetch(input, { ...init, headers });
+
+    const shouldRetry =
+      attempt === 0 &&
+      response?.status === 401 &&
+      typeof navigator !== "undefined" &&
+      navigator.onLine &&
+      currentUserRef.current &&
+      !currentUserRef.current.offline;
+
+    if (!shouldRetry) return response;
+
+    try {
+      const nextToken = await queueTokenRefresh();
+      const retryHeaders = await buildAuthHeaders(init.headers);
+      if (nextToken) retryHeaders.set("Authorization", `Bearer ${nextToken}`);
+      return fetch(input, { ...init, headers: retryHeaders });
+    } catch (e) {
+      console.warn("[AUTH] retry after 401 failed:", e?.message || e);
+      handleAuthLoss("unauthorized after refresh");
+      return response;
     }
   };
 
@@ -254,19 +370,24 @@ export const AuthProvider = ({ children }) => {
 
       // Always send the current PIN access token (and apikey) on every request.
       global: {
-        fetch: async (input, init = {}) => {
-          const headers = new Headers(init.headers || {});
-          const token = await getValidAccessToken();
-          if (token) headers.set("Authorization", `Bearer ${token}`);
-          headers.set("apikey", anon);
-          return fetch(input, { ...init, headers });
-        },
+       fetch: (input, init = {}) => authFetchWithRetry(input, init),
       },
 
 
       // ✅ important
       accessToken: getValidAccessToken,
     });
+
+    if (currentUser?.token && currentUser?.refresh_token) {
+      try {
+        client.auth.setSession({
+          access_token: currentUser.token,
+          refresh_token: currentUser.refresh_token,
+        });
+      } catch {
+        // ignore
+      }
+    }
 
     if (typeof window !== "undefined") {
       client.__token = currentUser?.token || null;
@@ -367,7 +488,7 @@ export const AuthProvider = ({ children }) => {
                 access_token: normalized.token,
                 refresh_token: normalized.refresh_token,
               });
-              withTimeout(p, 2500, "restore setSession").catch((e) => {
+         withTimeout(p, 6000, "restore setSession").catch((e) => {
                 console.warn(
                   "[AUTH] seedSupabaseFromStoredUser failed/timeout (ignored)",
                   e?.message || e

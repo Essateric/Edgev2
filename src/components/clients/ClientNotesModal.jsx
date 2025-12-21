@@ -52,10 +52,12 @@ export default function ClientNotesModal({
   const [notesPage, setNotesPage] = useState(1);
 
   // 🔹 current signed-in user (PIN auth etc)
-  const { currentUser, supabaseClient } = useAuth();
+  const { currentUser, supabaseClient, authLoading } = useAuth();
 
   // ✅ IMPORTANT: use token-backed client when available (same behavior as BookingPopUp)
   const db = supabaseClient || baseSupabase;
+   const notesDb = supabaseClient || null; // client_notes SELECT requires authenticated role
+  const notesClientReady = !!notesDb && !!currentUser?.token && !authLoading;
 
   // Internal: resolved IDs (fixes “wrong id passed in” issues)
   const [effectiveClientId, setEffectiveClientId] = useState(null);

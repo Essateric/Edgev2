@@ -5,7 +5,7 @@ import { VitePWA } from "vite-plugin-pwa";
 const DEV_CSP =
   "default-src 'self'; " +
   "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'; " +
-  "connect-src 'self' http://localhost:* ws://localhost:* https://vmtcofezozrblfxudauk.supabase.co https://vmtcofezozrblfxudauk.functions.supabase.co; " +
+   "connect-src 'self' http://localhost:* ws://localhost:* https://vmtcofezozrblfxudauk.supabase.co https://vmtcofezozrblfxudauk.functions.supabase.co wss://vmtcofezozrblfxudauk.supabase.co; " +
   "img-src 'self' data: blob: https:; " +
   "style-src 'self' 'unsafe-inline'; " +
   "font-src 'self' data:; " +
