@@ -389,12 +389,27 @@ export const AuthProvider = ({ children }) => {
         }
 
         // 4) Private routes: best-effort Supabase session
-        const { data } = await withTimeout(
+const { data, error } = await withTimeout(
           supabase.auth.getSession(),
           5000,
           "supabase.auth.getSession"
         );
         if (cancelled) return;
+
+         if (error) {
+          console.warn("[AUTH] getSession error, clearing Supabase auth storage", error);
+          try {
+            supabase.auth.stopAutoRefresh();
+          } catch {
+            // ignore
+          }
+          clearSupabaseAuthStorage();
+          setCurrentUser(null);
+          localStorage.removeItem("offlineUser");
+          localStorage.removeItem("currentUser");
+          warmPinCache().catch(() => {});
+          return;
+        }
 
         const session = data?.session ?? null;
 

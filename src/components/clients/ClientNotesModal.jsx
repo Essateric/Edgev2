@@ -289,7 +289,7 @@ const loadNotes = async ({ cid, bookingRowId, bookingGroupId }) => {
   // Notes on open
   useEffect(() => {
     if (isOpen && effectiveClientId) {
-      loadNotes(effectiveClientId);
+      loadNotes({ cid: effectiveClientId });
       setNotesPage(1);
     }
  }, [isOpen, effectiveClientId, effectiveBookingRowId, bookingId]);
