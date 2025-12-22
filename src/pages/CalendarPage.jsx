@@ -97,10 +97,15 @@ const hasReminderConfirmation = (booking = {}) => {
 export default function CalendarPage() {
   const [stylistList, setStylistList] = useState([]);
 
-  const mapBookingRowToEvent = (b) => {
+  const mapBookingRowToEvent = (b, fallbackConfirmed = false) => {
     const stylistRow = stylistList.find((s) => s.id === b.resource_id);
     const start = b.start ?? b.start_time;
     const end = b.end ?? b.end_time;
+
+      // When realtime updates don’t include booking_confirmations, keep the
+    // previously-known confirmation flag so the green indicator isn’t lost.
+    const confirmed_via_reminder =
+      hasReminderConfirmation(b) || fallbackConfirmed || false;
 
     return {
       ...b,
@@ -109,6 +114,7 @@ export default function CalendarPage() {
       resourceId: b.resource_id,
       stylistName: stylistRow?.title || "Unknown Stylist", // ✅ FIX: stylistList uses `title`
       title: b.title || "No Service Name",
+       confirmed_via_reminder,
     };
   };
 
@@ -363,16 +369,48 @@ const supabase = auth?.supabaseClient || baseSupabase;
           const row = payload.new;
           if (!row?.id) return;
 
-          setEvents((prev) => {
-            const idx = prev.findIndex((e) => e.id === row.id);
-            const mapped = mapBookingRowToEvent(row);
+         const applyRealtimeUpdate = async () => {
+            setEvents((prev) => {
+              const idx = prev.findIndex((e) => e.id === row.id);
+              const mapped = mapBookingRowToEvent(
+                row,
+                idx !== -1 ? prev[idx]?.confirmed_via_reminder : false
+              );
 
-            if (idx === -1) return [...prev, mapped];
+              if (idx === -1) return [...prev, mapped];
 
-            const copy = prev.slice();
-            copy[idx] = { ...copy[idx], ...mapped };
-            return copy;
-          });
+              const copy = prev.slice();
+              copy[idx] = { ...copy[idx], ...mapped };
+              return copy;
+            });
+
+            // Fetch latest confirmation state so delayed SMS replies still show green.
+            try {
+              const { data, error } = await supabase
+                .from("booking_confirmations")
+                .select("response, responded_at")
+                .eq("booking_id", row.id)
+                .order("responded_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+              if (error) throw error;
+
+              const confirmedFromReply = !!(
+                data?.responded_at &&
+                String(data?.response || "").toLowerCase().startsWith("confirm")
+              );
+
+              setEvents((prev) =>
+                prev.map((e) =>
+                  e.id === row.id ? { ...e, confirmed_via_reminder: confirmedFromReply } : e
+                )
+              );
+            } catch (err) {
+              console.warn("[Calendar] failed to refresh reminder confirmation", err?.message);
+            }
+          };
+             applyRealtimeUpdate();
         }
       )
       .subscribe();
