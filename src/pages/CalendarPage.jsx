@@ -83,6 +83,17 @@ const isConfirmedStatus = (status) => {
   return s === "confirmed" || s.startsWith("confirm") || s.includes("confirmed");
 };
 
+
+const hasReminderConfirmation = (booking = {}) => {
+  const confirmations = booking.booking_confirmations;
+  if (!Array.isArray(confirmations)) return false;
+  return confirmations.some(
+    (c) =>
+      String(c?.response || "").toLowerCase().startsWith("confirm") &&
+      !!c?.responded_at
+  );
+};
+
 export default function CalendarPage() {
   const [stylistList, setStylistList] = useState([]);
 
@@ -254,8 +265,15 @@ const supabase = auth?.supabaseClient || baseSupabase;
         // ---------- BOOKINGS ----------
         dbgLog("bookings query: BEFORE", { runId });
         const { data: bookingsData, error: bErr } = await supabase
-          .from("bookings")
-          .select("*");
+         .from("bookings")
+          .select(`
+            *,
+            booking_confirmations (
+              response,
+              responded_at
+            )
+          `);
+
         dbgLog("bookings query: AFTER", {
           runId,
           error: bErr ? bErr.message : null,
@@ -285,6 +303,7 @@ const supabase = auth?.supabaseClient || baseSupabase;
             const stylistRow = staff.find((s) => s.id === b.resource_id);
             const start = b.start ?? b.start_time;
             const end = b.end ?? b.end_time;
+            const confirmed_via_reminder = hasReminderConfirmation(b);
             return {
               ...b,
               start: new Date(start),
@@ -292,6 +311,7 @@ const supabase = auth?.supabaseClient || baseSupabase;
               resourceId: b.resource_id,
               stylistName: stylistRow?.name || "Unknown Stylist",
               title: b.title || "No Service Name",
+              confirmed_via_reminder,
             };
           })
         );

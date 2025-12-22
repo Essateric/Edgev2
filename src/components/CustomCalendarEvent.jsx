@@ -35,6 +35,8 @@ export default function CustomCalendarEvent({
         onDragEnd={handleDragEnd}
         className={`${rbcClassName ?? ""} rbc-event-content text-white text-center flex items-center justify-center h-full`}
         style={rbcStyle}
+        
+        title={event.confirmed_via_reminder ? "Client confirmed via reminder" : undefined}
       >
         <span className="font-semibold">
           {event.title || (event.isUnavailable ? "Unavailable" : "Salon Closed")}
@@ -47,6 +49,7 @@ export default function CustomCalendarEvent({
   const fontSize = Math.min(18, Math.max(10, mins * 0.4));
   const durationLabel =
     mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60 ? `${mins % 60}m` : ""}` : `${Math.round(mins)}m`;
+     const reminderConfirmed = !!event.confirmed_via_reminder;
 
   return (
     <div
@@ -61,8 +64,15 @@ export default function CustomCalendarEvent({
         overflow: "hidden",
         whiteSpace: "normal",
         textOverflow: "ellipsis",
+         borderLeft: reminderConfirmed ? "3px solid #14b8a6" : rbcStyle?.borderLeft,
       }}
+      title={reminderConfirmed ? "Client confirmed via reminder" : undefined}
     >
+    {reminderConfirmed && (
+        <div className="absolute left-[2px] top-[2px] text-[11px] leading-none text-teal-100 font-semibold">
+          ✓
+        </div>
+      )}
       <div className="absolute top-[2px] right-[4px] text-[10px] font-semibold">{durationLabel}</div>
       <div className="flex-1 flex flex-col items-center justify-center text-center">
         <span className="font-semibold break-words">{title}</span>
