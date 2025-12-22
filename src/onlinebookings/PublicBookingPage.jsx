@@ -21,7 +21,6 @@ import useSlots from "./hooks/useSlots";
 import { sendBookingEmails } from "./lib/email";
 import SaveBookingsLog from "../components/bookings/SaveBookingsLog";
 import { safeInsertBookings } from "./api";
-import { findOrCreateClient } from "./lib/findOrCreateClient";
 
 /* Config + helpers */
 import { BRAND } from "../config/brand";
@@ -41,6 +40,15 @@ const initialClient = {
 
 const normalizePhone = (s = "") => String(s).replace(/[^\d]/g, "");
 const normName = (s = "") => String(s || "").trim().toLowerCase();
+const normalizeEmailForMatch = (s = "") => {
+  const trimmed = String(s).trim().toLowerCase();
+  const [local = "", domain = ""] = trimmed.split("@");
+  if (!domain) return trimmed;
+  const withoutTag = local.split("+")[0];
+  const collapsedLocal = withoutTag.replace(/[^a-z0-9]/gi, "");
+  return `${collapsedLocal}@${domain}`;
+};
+const emailDomain = (s = "") => normalizeEmailForMatch(s).split("@")[1] || "";
 
 /**
  * Find-or-create client ID for PUBLIC bookings.
@@ -58,25 +66,54 @@ async function findOrCreateClientId({ first, last, email, mobileN }) {
   const lastN = String(last || "").trim();
   const emailN = String(email || "").trim().toLowerCase();
   const mobileNN = normalizePhone(mobileN || "");
+  const normalizedEmail = normalizeEmailForMatch(emailN);
+  const emDomain = emailDomain(emailN);
 
   if (!firstN || !lastN) throw new Error("First name and last name are required.");
   if (!emailN && !mobileNN) throw new Error("Email or mobile is required.");
 
   // 1) EMAIL path (preferred)
   if (emailN) {
-    const { data: existing, error: findErr } = await supabase
+  const emailFilters = [`email.ilike.${emailN}`, `email.eq.${emailN}`];
+    if (emDomain) emailFilters.push(`email.ilike.%@${emDomain}`);
+
+    const { data: candidates, error: findErr } = await supabase
       .from("clients")
       .select("id, first_name, last_name, email, mobile")
-      .ilike("email", emailN)
-      .maybeSingle();
+.or(emailFilters.join(","))
+      .limit(50);
 
     if (findErr) throw findErr;
+
+    const pickExisting = () => {
+      if (!Array.isArray(candidates) || !candidates.length) return null;
+
+      // Exact/normalized email match (handles dotted Gmail variants)
+      const byEmail = candidates.find(
+        (r) => r.email && normalizeEmailForMatch(r.email) === normalizedEmail
+      );
+      if (byEmail) return byEmail;
+
+      // Same domain and matching names as a fallback
+      const byDomainAndName = candidates.find(
+        (r) =>
+          emailDomain(r.email) === emDomain &&
+          normName(r.first_name) === normName(firstN) &&
+          normName(r.last_name) === normName(lastN)
+      );
+      if (byDomainAndName) return byDomainAndName;
+
+      return candidates[0];
+    };
+
+    const existing = pickExisting();
 
     if (existing?.id) {
       // Patch missing bits (non-destructive)
       const patch = {};
       if (!existing.first_name && firstN) patch.first_name = firstN;
       if (!existing.last_name && lastN) patch.last_name = lastN;
+       if (!existing.email && emailN) patch.email = emailN;
       if (!existing.mobile && mobileNN) patch.mobile = mobileNN;
 
       if (Object.keys(patch).length) {
