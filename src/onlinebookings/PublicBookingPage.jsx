@@ -1,5 +1,5 @@
 // src/onlinebookings/PublicBookingPage.jsx
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { supabase } from "../supabaseClient";
 
@@ -208,6 +208,7 @@ async function findOrCreateClientId({ first, last, email, mobileN }) {
 
 export default function PublicBookingPage() {
   const [step, setStep] = useState(1);
+  const savingRef = useRef(false);
 
   // Selection state
   const [selectedServices, setSelectedServices] = useState([]);
@@ -484,6 +485,9 @@ export default function PublicBookingPage() {
       return;
     }
 
+     if (savingRef.current) return;
+    savingRef.current = true;
+
     setSaving(true);
     try {
       // 1) Names/contact
@@ -622,34 +626,6 @@ if (rawNotes) {
         })
       );
 
-      // 6) Client notes – best effort
-      try {
-        const rawNotes = String(client.notes || "").trim();
-        if (rawNotes) {
-          const { data: rowIds, error: rowsErr } = await supabase
-            .from("bookings")
-            .select("id")
-            .eq("booking_id", bookingId)
-            .order("start", { ascending: true })
-            .limit(1);
-
-          if (rowsErr) throw rowsErr;
-
-          const bookingRowId = rowIds?.[0]?.id || null;
-
-          await supabase.from("client_notes").insert([
-            {
-              client_id: clientId,
-              note_content: `Notes added by client: ${rawNotes}`,
-              created_by: "client",
-              booking_id: bookingRowId,
-            },
-          ]);
-        }
-      } catch {
-        /* best-effort */
-      }
-
       // 7) Log – best effort
       try {
         await SaveBookingsLog({
@@ -728,6 +704,7 @@ if (rawNotes) {
       alert("Couldn't save booking. Please try again.");
     } finally {
       setSaving(false);
+       savingRef.current = false;
     }
   }
 
