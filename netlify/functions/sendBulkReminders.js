@@ -11,14 +11,25 @@ const supabaseAdmin = () => {
 
 const getBaseUrl = () => {
   // Netlify provides URL / DEPLOY_PRIME_URL. Use your own if you prefer.
-  return (
-    process.env.PUBLIC_SITE_URL ||
-    process.env.URL ||
-    process.env.DEPLOY_PRIME_URL
-  );
+  return process.env.PUBLIC_SITE_URL || process.env.URL || process.env.DEPLOY_PRIME_URL;
 };
 
 const mask = (v) => (v ? `${String(v).slice(0, 5)}…` : "none");
+
+const maskPhone = (v) => {
+  const s = String(v || "").replace(/[^\d+]/g, "");
+  if (!s) return "none";
+  if (s.length <= 4) return `${s[0]}…`;
+  return `${s.slice(0, 3)}…${s.slice(-2)}`;
+};
+
+// ✅ IMPORTANT: Netlify env values sometimes get saved with quotes / spaces.
+// This prevents Twilio SDK using bad values like `"ACxxx"` or `ACxxx `.
+const cleanEnv = (v) =>
+  String(v ?? "")
+    .trim()
+    .replace(/^"(.*)"$/, "$1")
+    .replace(/^'(.*)'$/, "$1");
 
 const normalizeUkMobileToE164 = (raw) => {
   const s = String(raw || "").trim();
@@ -41,11 +52,7 @@ const isUuid = (v) =>
 const resolveBookingUuid = async (sb, b, groupKey) => {
   // 1) if b.id is a real bookings.id, use it
   if (isUuid(b?.id)) {
-    const { data, error } = await sb
-      .from("bookings")
-      .select("id")
-      .eq("id", b.id)
-      .maybeSingle();
+    const { data, error } = await sb.from("bookings").select("id").eq("id", b.id).maybeSingle();
     if (error) throw error;
     if (data?.id) return data.id;
   }
@@ -53,11 +60,7 @@ const resolveBookingUuid = async (sb, b, groupKey) => {
   // 2) try any alternate uuid fields if you ever pass them
   const alt = b?.booking_uuid || b?.bookingId || b?.booking_row_id;
   if (isUuid(alt)) {
-    const { data, error } = await sb
-      .from("bookings")
-      .select("id")
-      .eq("id", alt)
-      .maybeSingle();
+    const { data, error } = await sb.from("bookings").select("id").eq("id", alt).maybeSingle();
     if (error) throw error;
     if (data?.id) return data.id;
   }
@@ -86,6 +89,14 @@ export const handler = async (event) => {
     return { statusCode: 405, body: "Method not allowed" };
   }
 
+  const logAuditReminder = async (sb, payload) => {
+    try {
+      await sb.from("audit_events").insert([payload]);
+    } catch (err) {
+      console.warn("[sendBulkReminders] audit insert failed (ignored)", err?.message);
+    }
+  };
+
   try {
     const body = JSON.parse(event.body || "{}");
 
@@ -103,12 +114,14 @@ export const handler = async (event) => {
     if (!bookings.length) return { statusCode: 400, body: "No bookings provided" };
 
     const formatDate = (iso) =>
-      new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: timezone })
-        .format(new Date(iso));
+      new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: timezone }).format(
+        new Date(iso)
+      );
 
     const formatTime = (iso) =>
-      new Intl.DateTimeFormat("en-GB", { timeStyle: "short", timeZone: timezone })
-        .format(new Date(iso));
+      new Intl.DateTimeFormat("en-GB", { timeStyle: "short", timeZone: timezone }).format(
+        new Date(iso)
+      );
 
     const renderBase = (tpl, b) =>
       String(tpl || "")
@@ -119,10 +132,10 @@ export const handler = async (event) => {
 
     const senders = {
       email: async (b, text) => {
-        const user = process.env.BOOKING_EMAIL_USER || process.env.EMAIL_USER;
-        const pass = process.env.BOOKING_EMAIL_PASS || process.env.EMAIL_PASS;
+        const user = cleanEnv(process.env.BOOKING_EMAIL_USER || process.env.EMAIL_USER);
+        const pass = cleanEnv(process.env.BOOKING_EMAIL_PASS || process.env.EMAIL_PASS);
 
-        const from = process.env.FROM_EMAIL || process.env.EMAIL_FROM || user;
+        const from = cleanEnv(process.env.FROM_EMAIL || process.env.EMAIL_FROM || user);
 
         if (!user || !pass) throw new Error("BOOKING_EMAIL_USER/BOOKING_EMAIL_PASS not set");
         if (!b?.client?.email) throw new Error("Missing client email");
@@ -144,65 +157,91 @@ export const handler = async (event) => {
       },
 
       sms: async (b, text) => {
-        const sid = process.env.TWILIO_ACCOUNT_SID;
-        const token = process.env.TWILIO_AUTH_TOKEN;
-        const messagingSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
-    const fromNumber = process.env.TWILIO_FROM_NUMBER;
-        const senderMode = messagingSid ? "messagingService" : fromNumber ? "fromNumber" : "missing";
-        console.log("[sendBulkReminders] SMS sender mode:", senderMode, "from:", mask(fromNumber), "msid:", mask(messagingSid));
+        const sid = cleanEnv(process.env.TWILIO_ACCOUNT_SID);
+        const token = cleanEnv(process.env.TWILIO_AUTH_TOKEN);
+        const messagingSid = cleanEnv(process.env.TWILIO_MESSAGING_SERVICE_SID);
+        const fromNumber = cleanEnv(process.env.TWILIO_FROM_NUMBER);
 
-          if (!messagingSid && !fromNumber) {
-          throw new Error(
-            "TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM_NUMBER must be set to send SMS"
-          );
-        }
-         if (!messagingSid && !fromNumber) {
-          throw new Error(
-            "TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM_NUMBER must be set to send SMS"
-          );
+        if (!sid || !token) throw new Error("TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN not set");
+        if (!messagingSid && !fromNumber) {
+          throw new Error("TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM_NUMBER must be set to send SMS");
         }
         if (!b?.client?.phone) throw new Error("Missing client phone");
 
-        const { default: twilio } = await import("twilio");
-        const client = twilio(sid, token);
+        const senderMode = messagingSid ? "messagingService" : "fromNumber";
+        console.log(
+          "[sendBulkReminders] SMS sender mode:",
+          senderMode,
+          "sid:",
+          mask(sid),
+          "tokenLen:",
+          token.length,
+          "from:",
+          maskPhone(fromNumber),
+          "msid:",
+          mask(messagingSid)
+        );
+
+        const twilio = (await import("twilio")).default;
+        const client = twilio(sid, token, { accountSid: sid });
 
         await client.messages.create({
           body: text,
           to: normalizeUkMobileToE164(b.client.phone),
-             // Prefer Messaging Service, fallback to explicit From number if provided
-          ...(messagingSid ? { messagingServiceSid: messagingSid } : {}),
-          ...(messagingSid ? {} : { from: fromNumber }),
+          // Prefer Messaging Service, fallback to explicit From number if provided
+          ...(messagingSid ? { messagingServiceSid: messagingSid } : { from: fromNumber }),
         });
 
         return true;
       },
 
       whatsapp: async (b, text) => {
-        const sid = process.env.TWILIO_ACCOUNT_SID;
-        const token = process.env.TWILIO_AUTH_TOKEN;
-        const whatsappFrom = process.env.TWILIO_WHATSAPP_FROM;
-        const messagingSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
-        console.log("[sendBulkReminders] WA sender mode:", waSenderMode, "from:", mask(whatsappFrom), "msid:", mask(messagingSid));
-        const mask = (v) => (v ? `${String(v).slice(0, 5)}…` : "none");
-console.log("[sendBulkReminders] SMS sender mode:", senderMode, "from:", mask(fromNumber), "msid:", mask(messagingSid));
-const waSenderMode = whatsappFrom ? "whatsappFrom" : messagingSid ? "messagingService" : "missing";
-console.log("[sendBulkReminders] WA sender mode:", waSenderMode, "from:", mask(whatsappFrom), "msid:", mask(messagingSid));
-
-
+        const sid = cleanEnv(process.env.TWILIO_ACCOUNT_SID);
+        const token = cleanEnv(process.env.TWILIO_AUTH_TOKEN);
+        const whatsappFromRaw = cleanEnv(process.env.TWILIO_WHATSAPP_FROM);
+        const messagingSid = cleanEnv(process.env.TWILIO_MESSAGING_SERVICE_SID);
 
         if (!sid || !token) throw new Error("TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN not set");
         if (!b?.client?.phone) throw new Error("Missing client phone");
 
+        const waSenderMode = whatsappFromRaw
+          ? "whatsappFrom"
+          : messagingSid
+          ? "messagingService"
+          : "missing";
+
+        console.log(
+          "[sendBulkReminders] WA sender mode:",
+          waSenderMode,
+          "sid:",
+          mask(sid),
+          "tokenLen:",
+          token.length,
+          "from:",
+          maskPhone(whatsappFromRaw),
+          "msid:",
+          mask(messagingSid)
+        );
+
         const e164 = normalizeUkMobileToE164(b.client.phone);
         const to = `whatsapp:${e164}`;
 
-        const { default: twilio } = await import("twilio");
-        const client = twilio(sid, token);
+        // Ensure correct prefix for WhatsApp From
+        const whatsappFrom =
+          whatsappFromRaw && whatsappFromRaw.startsWith("whatsapp:")
+            ? whatsappFromRaw
+            : whatsappFromRaw
+            ? `whatsapp:${whatsappFromRaw}`
+            : null;
+
+        const twilio = (await import("twilio")).default;
+        const client = twilio(sid, token, { accountSid: sid });
 
         const payload = {
           body: text,
           to,
-          ...(whatsappFrom ? { from: whatsappFrom } : messagingSid ? { messagingServiceSid: messagingSid } : {}),
+          ...(whatsappFrom ? { from: whatsappFrom } : {}),
+          ...(!whatsappFrom && messagingSid ? { messagingServiceSid: messagingSid } : {}),
         };
 
         if (!payload.from && !payload.messagingServiceSid) {
@@ -217,11 +256,12 @@ console.log("[sendBulkReminders] WA sender mode:", waSenderMode, "from:", mask(w
     const baseUrl = getBaseUrl();
     // ✅ Only required if you're sending LINKS (we keep links for WhatsApp)
     if (!baseUrl && channel === "whatsapp") {
-      throw new Error("Missing PUBLIC_SITE_URL (or Netlify URL/DEPLOY_PRIME_URL) for WhatsApp confirm/cancel links");
+      throw new Error(
+        "Missing PUBLIC_SITE_URL (or Netlify URL/DEPLOY_PRIME_URL) for WhatsApp confirm/cancel links"
+      );
     }
 
     // ✅ Group SMS/WhatsApp so you do NOT spam clients with multiple texts for the same booking block
-    // 🔧 small fix: do NOT require id to be a bookings.id uuid (sometimes it’s the block id)
     const groups = new Map();
     for (const b of bookings) {
       const groupKey = String(b.booking_id || b?.id || "");
@@ -248,15 +288,13 @@ console.log("[sendBulkReminders] WA sender mode:", waSenderMode, "from:", mask(w
         // 🔧 FIX: ensure booking_id is the REAL bookings.id uuid (FK-safe)
         const bookingUuid = await resolveBookingUuid(sb, repBooking, groupKey);
 
-        const { error: insErr } = await sb
-          .from("booking_confirmations")
-          .insert({
-            booking_id: bookingUuid,
-            token,
-            client_phone: e164,
-            channel: "sms",
-            expires_at: expiresAt.toISOString(),
-          });
+        const { error: insErr } = await sb.from("booking_confirmations").insert({
+          booking_id: bookingUuid,
+          token,
+          client_phone: e164,
+          channel: "sms",
+          expires_at: expiresAt.toISOString(),
+        });
 
         if (insErr) throw insErr;
 
@@ -272,25 +310,25 @@ console.log("[sendBulkReminders] WA sender mode:", waSenderMode, "from:", mask(w
         // 🔧 FIX: ensure booking_id is the REAL bookings.id uuid (FK-safe)
         const bookingUuid = await resolveBookingUuid(sb, repBooking, groupKey);
 
-        const { error: insErr } = await sb
-          .from("booking_confirmations")
-          .insert({
-            booking_id: bookingUuid,
-            token,
-            client_phone: e164,
-            channel: "whatsapp",
-            expires_at: expiresAt.toISOString(),
-          });
+        const { error: insErr } = await sb.from("booking_confirmations").insert({
+          booking_id: bookingUuid,
+          token,
+          client_phone: e164,
+          channel: "whatsapp",
+          expires_at: expiresAt.toISOString(),
+        });
 
         if (insErr) throw insErr;
 
-        const confirmUrl = `${baseUrl}/.netlify/functions/bookingResponse?token=${encodeURIComponent(token)}&r=confirm`;
-        const cancelUrl = `${baseUrl}/.netlify/functions/bookingResponse?token=${encodeURIComponent(token)}&r=cancel`;
+        const confirmUrl = `${baseUrl}/.netlify/functions/bookingResponse?token=${encodeURIComponent(
+          token
+        )}&r=confirm`;
+        const cancelUrl = `${baseUrl}/.netlify/functions/bookingResponse?token=${encodeURIComponent(
+          token
+        )}&r=cancel`;
 
         if (text.includes("{{confirm_url}}") || text.includes("{{cancel_url}}")) {
-          text = text
-            .replaceAll("{{confirm_url}}", confirmUrl)
-            .replaceAll("{{cancel_url}}", cancelUrl);
+          text = text.replaceAll("{{confirm_url}}", confirmUrl).replaceAll("{{cancel_url}}", cancelUrl);
         } else {
           text += `\n\nConfirm: ${confirmUrl}\nCancel: ${cancelUrl}`;
         }
@@ -298,7 +336,31 @@ console.log("[sendBulkReminders] WA sender mode:", waSenderMode, "from:", mask(w
 
       const fn = senders[channel];
       if (!fn) throw new Error("Unsupported channel");
+
       await fn(repBooking, text);
+
+      // ✅ Audit (best-effort) — keep your existing audit logic
+      try {
+        const bookingUuid = await resolveBookingUuid(sb, repBooking, groupKey).catch(() => null);
+        await logAuditReminder(sb, {
+          entity_type: "booking",
+          entity_id: bookingUuid,
+          booking_id: repBooking.booking_id || groupKey || null,
+          action: "reminder_sent",
+          reason: channel,
+          source: "system",
+          details: {
+            channel,
+            booking_id_text: repBooking.booking_id || groupKey || null,
+            start_time: repBooking.start_time || null,
+            client_phone_masked: maskPhone(repBooking?.client?.phone),
+            template_preview: String(text || "").slice(0, 160),
+            sent_at: new Date().toISOString(),
+          },
+        });
+      } catch (auditErr) {
+        console.warn("[sendBulkReminders] failed to write audit (ignored)", auditErr?.message);
+      }
     };
 
     for (const [groupKey, items] of groups.entries()) {
@@ -329,11 +391,10 @@ console.log("[sendBulkReminders] WA sender mode:", waSenderMode, "from:", mask(w
       }),
     };
   } catch (e) {
-  return {
-    statusCode: 400,
-    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
-    body: JSON.stringify({ message: e?.message || "Bad request" }),
-  };
-}
-
+    return {
+      statusCode: 400,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      body: JSON.stringify({ message: e?.message || "Bad request" }),
+    };
+  }
 };
