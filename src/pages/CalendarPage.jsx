@@ -462,7 +462,7 @@ const supabase = auth?.supabaseClient || baseSupabase;
 
           const row = payload.new;
           if (!row?.id) return;
-const applyRealtimeUpdate = async () => {
+  const applyRealtimeUpdate = async () => {
             setEvents((prev) => {
               const idx = prev.findIndex((e) => e.id === row.id);
               const mapped = mapBookingRowToEvent(
@@ -500,9 +500,23 @@ const applyRealtimeUpdate = async () => {
         }
       )
       .subscribe();
+       // Also listen for booking confirmation responses so long-lived tabs update automatically.
+    const confirmationsChannel = supabase
+      .channel("realtime:booking_confirmations")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "booking_confirmations" },
+        (payload) => {
+          const bookingId = payload.new?.booking_id || payload.old?.booking_id;
+          if (!bookingId) return;
+          refreshBookingBlock(bookingId);
+        }
+      )
+      .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
+      supabase.removeChannel(confirmationsChannel);
     };
   }, [supabase, currentUser?.id, stylistList]); // keep stylistList so names update
 

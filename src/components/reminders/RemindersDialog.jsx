@@ -246,7 +246,45 @@ export default function RemindersDialog({
         byKey.set(row.id, existing);
       }
 
-      const mapped = Array.from(byKey.values());
+    let mapped = Array.from(byKey.values());
+
+      // Load latest reminder audit (best-effort)
+      try {
+        const bookingUuids = mapped.map((r) => r.booking_uuid).filter(Boolean);
+
+        if (bookingUuids.length) {
+          const { data: reminders, error: reminderErr } = await db
+            .from("audit_events")
+            .select("entity_id, action, reason, created_at, details")
+            .in("entity_id", bookingUuids)
+            .eq("action", "reminder_sent")
+            .order("created_at", { ascending: false });
+
+          if (reminderErr) throw reminderErr;
+
+          const latestByBooking = new Map();
+          for (const r of reminders || []) {
+            if (!latestByBooking.has(r.entity_id)) latestByBooking.set(r.entity_id, r);
+          }
+
+          mapped = mapped.map((r) => {
+            const reminder = latestByBooking.get(r.booking_uuid);
+            if (!reminder) return r;
+
+            const details = reminder.details || {};
+            return {
+              ...r,
+              lastReminder: {
+                channel: reminder.reason || details.channel || null,
+                sentAt: reminder.created_at || details.sent_at || null,
+                staff: details.staff_name || details.staff_email || null,
+              },
+            };
+          });
+        }
+      } catch (remErr) {
+        console.warn("[RemindersDialog] failed to load reminder history", remErr?.message);
+      }
       const now = new Date();
 
       // ✅ Preselect ONLY contactable: not cancelled AND not past
@@ -340,6 +378,11 @@ export default function RemindersDialog({
         channel: normalizedChannel,
         template,
         timezone: "Europe/London",
+          actor: {
+          id: currentUser?.id || null,
+          email: currentUser?.email || null,
+          name: currentUser?.name || null,
+        },
         bookings: selected.map((b) => ({
           id: b.booking_uuid,       // ✅ FK-safe uuid
           booking_id: b.booking_id, // optional group id
@@ -362,6 +405,7 @@ export default function RemindersDialog({
       }
 
       setResult(json);
+        fetchBookings(); // refresh table so latest reminder metadata shows up
     } catch (e) {
       console.error(e);
       setError(e?.message || "Failed to send reminders");
@@ -497,6 +541,10 @@ export default function RemindersDialog({
                 <th className="p-2 text-left w-10">Sel</th>
                 <th className="p-2 text-left">Client</th>
                 <th className="p-2 text-left">Contact</th>
+                  <th className="p-2 text-left">Reminder</th>
+                <th className="p-2 text-left">Channel</th>
+                <th className="p-2 text-left">Sent</th>
+                <th className="p-2 text-left">Staff</th>
                 <th className="p-2 text-left">Appointment</th>
               </tr>
             </thead>
@@ -561,6 +609,20 @@ export default function RemindersDialog({
                       <div className="text-gray-500">{b.client.phone || "—"}</div>
                     </td>
 
+                     <td className="p-2 whitespace-nowrap">
+                      <div>{b.lastReminder ? "Sent" : "—"}</div>
+                    </td>
+                    <td className="p-2 whitespace-nowrap">
+                      {b.lastReminder?.channel ? b.lastReminder.channel.toUpperCase() : "—"}
+                    </td>
+                    <td className="p-2 whitespace-nowrap">
+                      {b.lastReminder?.sentAt ? fmtDateUK(b.lastReminder.sentAt) : "—"}
+                      {b.lastReminder?.sentAt && (
+                        <div className="text-gray-500">{fmtTimeUK(b.lastReminder.sentAt)}</div>
+                      )}
+                    </td>
+                    <td className="p-2 whitespace-nowrap">{b.lastReminder?.staff || "—"}</td>
+
                     <td className="p-2 whitespace-nowrap">
                       <div>{fmtDateUK(b.start_time)}</div>
                       <div className="text-gray-500">{fmtTimeUK(b.start_time)}</div>
@@ -571,7 +633,7 @@ export default function RemindersDialog({
 
               {!filtered.length && (
                 <tr>
-                  <td colSpan={4} className="p-6 text-center text-gray-500 text-sm">
+                  <td colSpan={8} className="p-6 text-center text-gray-500 text-sm">
                     No bookings in range.
                   </td>
                 </tr>

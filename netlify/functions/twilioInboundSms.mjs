@@ -179,11 +179,19 @@ export const handler = async (event) => {
         })
         .eq("id", conf.id);
 
-      return {
-        statusCode: 200,
-        headers: { "Content-Type": "text/xml", "Cache-Control": "no-store" },
-        body: twiml(`Thanks ${nameLabel}, your appointment on ${startLabel} at The Edge HD Salon has been confirmed ✅`),
-      };
+const smsText = [
+  "🤖 Automated message: replies are handled by our friendly robot haha",
+  `✅ Thanks ${nameLabel}, your appointment on ${startLabel} at The Edge HD Salon has been confirmed!`,
+  "✨ From the Edge HD Salon Team",
+].join("\n\n");
+
+return {
+  statusCode: 200,
+  headers: { "Content-Type": "text/xml", "Cache-Control": "no-store" },
+  body: twiml(smsText),
+};
+
+
     }
 
         // Use a visible cancelled status so the slot turns red on the calendar instead of disappearing

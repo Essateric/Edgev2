@@ -104,6 +104,10 @@ export const handler = async (event) => {
     const template = body.template;
     const bookings = Array.isArray(body.bookings) ? body.bookings : [];
     const timezone = body.timezone || "Europe/London";
+     const actor = body.actor || {};
+    const actorName = String(actor.name || actor.email || "").trim() || null;
+    const actorEmail = String(actor.email || "").trim() || null;
+    const actorId = actor.id || null;
 
     if (channel === "whats_app") channel = "whatsapp";
     if (!["email", "sms", "whatsapp"].includes(channel)) {
@@ -348,7 +352,7 @@ export const handler = async (event) => {
           booking_id: repBooking.booking_id || groupKey || null,
           action: "reminder_sent",
           reason: channel,
-          source: "system",
+        source: actorName ? "staff" : "system",
           details: {
             channel,
             booking_id_text: repBooking.booking_id || groupKey || null,
@@ -356,6 +360,9 @@ export const handler = async (event) => {
             client_phone_masked: maskPhone(repBooking?.client?.phone),
             template_preview: String(text || "").slice(0, 160),
             sent_at: new Date().toISOString(),
+              staff_id: actorId,
+            staff_name: actorName,
+            staff_email: actorEmail,
           },
         });
       } catch (auditErr) {
