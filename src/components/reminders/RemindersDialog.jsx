@@ -147,6 +147,31 @@ const isFinalResponse = (resp) => {
   return r === "confirmed" || r === "cancelled";
 };
 
+const uniq = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
+
+const pickLatestByTime = (items, getTimeIso) => {
+  let best = null;
+  let bestT = 0;
+
+  for (const it of items || []) {
+    const iso = getTimeIso(it);
+    const t = new Date(iso || 0).getTime();
+    if (!Number.isFinite(t)) continue;
+    if (!best || t > bestT) {
+      best = it;
+      bestT = t;
+    }
+  }
+  return best;
+};
+
+// Treat "confirmed" on bookings table as final too
+const isBookingConfirmed = (row) => {
+  const a = String(row?.status || "").trim().toLowerCase();
+  const b = String(row?.booking_confirmation_status || "").trim().toLowerCase();
+  return a === "confirmed" || b === "confirmed";
+};
+
 export default function RemindersDialog({
   isOpen,
   onClose,
@@ -157,12 +182,16 @@ export default function RemindersDialog({
   const { currentUser, supabaseClient, baseSupabaseClient } = useAuth();
   const db = supabaseClient || baseSupabaseClient;
 
-  const baseDate = defaultWeekFromDate ? new Date(defaultWeekFromDate) : new Date();
+  const baseDate = defaultWeekFromDate
+    ? new Date(defaultWeekFromDate)
+    : new Date();
 
   const defaultFrom = mondayStartOfWeek(baseDate);
   const defaultTo = endOfWeekFrom(defaultFrom);
 
-  const [from, setFrom] = useState(initialFrom ? new Date(initialFrom) : defaultFrom);
+  const [from, setFrom] = useState(
+    initialFrom ? new Date(initialFrom) : defaultFrom
+  );
   const [to, setTo] = useState(initialTo ? new Date(initialTo) : defaultTo);
 
   const [channel, setChannel] = useState("email");
@@ -186,7 +215,9 @@ export default function RemindersDialog({
     setSearch("");
     setTemplate(REMINDER_DEFAULT_TEMPLATE);
 
-    const base = initialFrom ? new Date(initialFrom) : mondayStartOfWeek(baseDate);
+    const base = initialFrom
+      ? new Date(initialFrom)
+      : mondayStartOfWeek(baseDate);
     base.setHours(0, 0, 0, 0);
 
     const end = initialTo ? new Date(initialTo) : endOfWeekFrom(base);
@@ -226,6 +257,7 @@ export default function RemindersDialog({
 
     try {
       // ✅ We keep cancelled + past visible. We only disable sending/selecting.
+      // IMPORTANT: also pull booking.confirmation_status so "confirmed" bookings are not selectable
       const { data, error: bookingsErr } = await db
         .from("bookings")
         .select(
@@ -238,6 +270,10 @@ export default function RemindersDialog({
             start,
             end,
             status,
+            confirmation_status,
+            client_response,
+            confirmed_at,
+            cancelled_at,
             clients:client_id ( id, first_name, last_name, mobile, email )
           `
         )
@@ -260,14 +296,37 @@ export default function RemindersDialog({
           (b.booking_id && String(b.booking_id).trim()) ||
           `${clientKey}__${minuteKey(b.start)}`;
 
+        const slotUuid = b.id;
+
+        // Base confirmation derived from BOOKINGS row (so confirmed bookings are treated as final
+        // even if booking_confirmations has no row)
+        const baseConfirmStatus = deriveConfirmationStatus(
+          b.confirmation_status ?? b.status ?? b.client_response
+        );
+
         const row = {
           id: String(key), // group key for selection
-          booking_uuid: b.id, // real uuid (FK-safe)
+          booking_uuid: slotUuid, // primary uuid (aligned to earliest slot)
           booking_id: b.booking_id || null,
           start_time: b.start,
           end_time: b.end || null,
           title: b.title || "Appointment",
           status: b.status || null,
+          booking_confirmation_status: b.confirmation_status || null,
+          client_response: b.client_response || null,
+          confirmed_at: b.confirmed_at || null,
+          cancelled_at: b.cancelled_at || null,
+
+          // IMPORTANT: keep ALL slot UUIDs that got grouped into this row
+          slot_uuids: uniq([slotUuid]),
+
+          // Base confirmation (may get overridden by booking_confirmations query)
+          confirmation: {
+            status: baseConfirmStatus || "pending",
+            respondedAt: b.confirmed_at || b.cancelled_at || null,
+            response: b.client_response ?? b.confirmation_status ?? null,
+          },
+
           client: {
             id: c.id || b.client_id || null,
             first_name: getClientFirstName(c, clientName),
@@ -284,6 +343,9 @@ export default function RemindersDialog({
           continue;
         }
 
+        // Merge slot UUIDs (so confirmations/reminders attached to any slot are detected)
+        existing.slot_uuids = uniq([...(existing.slot_uuids || []), slotUuid]);
+
         // Keep earliest start and latest end
         if (new Date(row.start_time) < new Date(existing.start_time)) {
           existing.start_time = row.start_time;
@@ -296,45 +358,90 @@ export default function RemindersDialog({
           existing.end_time = row.end_time;
         }
 
-        // ✅ If ANY slot is cancelled, treat the whole block as cancelled
-        if (isCancelledStatus(row.status) || isCancelledStatus(existing.status)) {
+        // ✅ If ANY slot is cancelled, treat the whole block as cancelled (wins)
+        const existingCancelled = isCancelledStatus(existing.status) || isCancelledStatus(existing.booking_confirmation_status);
+        const rowCancelled = isCancelledStatus(row.status) || isCancelledStatus(row.booking_confirmation_status);
+
+        if (existingCancelled || rowCancelled) {
           existing.status = "cancelled";
+          existing.booking_confirmation_status = "cancelled";
+          existing.confirmation = {
+            status: "cancelled",
+            respondedAt: existing.respondedAt || row.respondedAt || null,
+            response: "cancelled",
+          };
+        } else {
+          // ✅ Else, if ANY slot is confirmed, treat the whole block as confirmed
+          const existingConf = isBookingConfirmed(existing);
+          const rowConf = isBookingConfirmed(row);
+
+          if (existingConf || rowConf) {
+            existing.status = "confirmed";
+            existing.booking_confirmation_status = "confirmed";
+            existing.confirmation = {
+              status: "confirmed",
+              respondedAt:
+                existing.confirmation?.respondedAt ||
+                row.confirmation?.respondedAt ||
+                existing.confirmed_at ||
+                row.confirmed_at ||
+                null,
+              response: "confirmed",
+            };
+          } else {
+            // keep as-is (pending/other)
+            if (!existing.booking_confirmation_status && row.booking_confirmation_status) {
+              existing.booking_confirmation_status = row.booking_confirmation_status;
+            }
+          }
         }
+
+        // prefer any non-null confirmed/cancel timestamps
+        existing.confirmed_at = existing.confirmed_at || row.confirmed_at || null;
+        existing.cancelled_at = existing.cancelled_at || row.cancelled_at || null;
 
         byKey.set(row.id, existing);
       }
 
       let mapped = Array.from(byKey.values());
 
+      // Collect ALL slot UUIDs across the grouped rows
+      const allSlotUuids = uniq(
+        mapped.flatMap((r) => (r.slot_uuids?.length ? r.slot_uuids : [r.booking_uuid]))
+      );
+
       // Load latest reminder audit (best-effort)
       try {
-        const bookingUuids = mapped.map((r) => r.booking_uuid).filter(Boolean);
-
-        if (bookingUuids.length) {
+        if (allSlotUuids.length) {
           const { data: reminders, error: reminderErr } = await db
             .from("audit_events")
             .select("entity_id, action, reason, created_at, details")
-            .in("entity_id", bookingUuids)
+            .in("entity_id", allSlotUuids)
             .eq("action", "reminder_sent")
             .order("created_at", { ascending: false });
 
           if (reminderErr) throw reminderErr;
 
-          const latestByBooking = new Map();
+          // Latest per slot UUID
+          const latestBySlot = new Map();
           for (const r of reminders || []) {
-            if (!latestByBooking.has(r.entity_id)) latestByBooking.set(r.entity_id, r);
+            if (!latestBySlot.has(r.entity_id)) latestBySlot.set(r.entity_id, r);
           }
 
-          mapped = mapped.map((r) => {
-            const reminder = latestByBooking.get(r.booking_uuid);
-            if (!reminder) return r;
+          // For each grouped row, pick the latest reminder across its slots
+          mapped = mapped.map((row) => {
+            const slots = row.slot_uuids?.length ? row.slot_uuids : [row.booking_uuid];
+            const candidates = slots.map((id) => latestBySlot.get(id)).filter(Boolean);
 
-            const details = reminder.details || {};
+            const latest = pickLatestByTime(candidates, (x) => x.created_at);
+            if (!latest) return row;
+
+            const details = latest.details || {};
             return {
-              ...r,
+              ...row,
               lastReminder: {
-                channel: reminder.reason || details.channel || null,
-                sentAt: reminder.created_at || details.sent_at || null,
+                channel: latest.reason || details.channel || null,
+                sentAt: latest.created_at || details.sent_at || null,
                 staff: details.staff_name || details.staff_email || null,
               },
             };
@@ -345,42 +452,46 @@ export default function RemindersDialog({
       }
 
       // Load latest confirmation response (best-effort)
+      // IMPORTANT: if none exists, DO NOT overwrite bookings.confirmation_status-derived state
       try {
-        const bookingUuids = mapped.map((r) => r.booking_uuid).filter(Boolean);
-
-        if (bookingUuids.length) {
+        if (allSlotUuids.length) {
           const { data: confirmations, error: confirmationErr } = await db
             .from("booking_confirmations")
-            .select("booking_id, response, responded_at")
-            .in("booking_id", bookingUuids)
-            .order("responded_at", { ascending: false });
+            .select("booking_id, response, responded_at, created_at")
+            .in("booking_id", allSlotUuids)
+            .order("responded_at", { ascending: false })
+            .order("created_at", { ascending: false });
 
           if (confirmationErr) throw confirmationErr;
 
-          const latestByBooking = new Map();
+          // Latest per slot UUID
+          const latestBySlot = new Map();
           for (const c of confirmations || []) {
-            if (!latestByBooking.has(c.booking_id)) latestByBooking.set(c.booking_id, c);
+            if (!latestBySlot.has(c.booking_id)) latestBySlot.set(c.booking_id, c);
           }
 
-          mapped = mapped.map((r) => {
-            const confirmation = latestByBooking.get(r.booking_uuid);
-            if (!confirmation) {
-              return {
-                ...r,
-                confirmation: { status: "pending", respondedAt: null, response: null },
-              };
-            }
+          mapped = mapped.map((row) => {
+            const slots = row.slot_uuids?.length ? row.slot_uuids : [row.booking_uuid];
+            const candidates = slots.map((id) => latestBySlot.get(id)).filter(Boolean);
+
+            const latest = pickLatestByTime(
+              candidates,
+              (x) => x.responded_at || x.created_at
+            );
+
+            // No DB confirmation row -> keep whatever we already derived from bookings table
+            if (!latest) return row;
 
             const confirmationStatus = deriveConfirmationStatus(
-              confirmation.response ?? confirmation.status
+              latest.response ?? latest.status
             );
 
             return {
-              ...r,
+              ...row,
               confirmation: {
                 status: confirmationStatus,
-                respondedAt: confirmation.responded_at || confirmation.created_at || null,
-                response: confirmation.response ?? confirmation.status ?? null,
+                respondedAt: latest.responded_at || latest.created_at || null,
+                response: latest.response ?? latest.status ?? null,
               },
             };
           });
@@ -395,21 +506,25 @@ export default function RemindersDialog({
       // Ensure a default confirmation so downstream checks don’t break.
       mapped = mapped.map((r) => ({
         ...r,
-        confirmation:
-          r.confirmation || { status: "pending", respondedAt: null, response: null },
+        confirmation: r.confirmation || { status: "pending", respondedAt: null, response: null },
       }));
 
-      // ✅ Preselect only contactable bookings (not cancelled/past/responded)
       const now = new Date();
+
+      // ✅ Preselect only contactable bookings (not cancelled/past/responded/confirmed)
       const selectable = mapped.filter((r) => {
         const confirmationStatus = deriveConfirmationStatus(
           r.confirmation?.status ?? r.confirmation?.response ?? r.confirmation
         );
 
+        const responded = isFinalResponse(confirmationStatus);
+        const confirmedByBooking = isBookingConfirmed(r);
+
         return (
           !isCancelledStatus(r.status) &&
           !isPastBooking(r.start_time, now) &&
-          !isFinalResponse(confirmationStatus)
+          !responded &&
+          !confirmedByBooking
         );
       });
 
@@ -448,10 +563,14 @@ export default function RemindersDialog({
       const confirmationStatus = deriveConfirmationStatus(
         r.confirmation?.status ?? r.confirmation?.response ?? r.confirmation
       );
+      const responded = isFinalResponse(confirmationStatus);
+      const confirmedByBooking = isBookingConfirmed(r);
+
       return (
         !isCancelledStatus(r.status) &&
         !isPastBooking(r.start_time, now) &&
-        !isFinalResponse(confirmationStatus)
+        !responded &&
+        !confirmedByBooking
       );
     });
   }, [filtered]);
@@ -462,7 +581,8 @@ export default function RemindersDialog({
   );
 
   const allSelectableSelected =
-    filteredSelectable.length > 0 && filteredSelectable.every((r) => selectedIds.has(r.id));
+    filteredSelectable.length > 0 &&
+    filteredSelectable.every((r) => selectedIds.has(r.id));
 
   const toggleAll = (checked) => {
     if (checked) setSelectedIds(new Set(filteredSelectable.map((r) => r.id)));
@@ -480,23 +600,25 @@ export default function RemindersDialog({
       let selected = rows.filter((r) => selectedIds.has(r.id));
       const now = new Date();
 
-      // ✅ Hard block: never send to cancelled OR past OR responded
+      // ✅ Hard block: never send to cancelled OR past OR responded OR confirmed
       selected = selected.filter((r) => {
         const confirmationStatus = deriveConfirmationStatus(
           r.confirmation?.status ?? r.confirmation?.response ?? r.confirmation
         );
-        const responded =
-          confirmationStatus === "confirmed" || confirmationStatus === "cancelled";
+        const responded = isFinalResponse(confirmationStatus);
+        const confirmedByBooking = isBookingConfirmed(r);
+
         return (
           !isCancelledStatus(r.status) &&
           !isPastBooking(r.start_time, now) &&
-          !responded
+          !responded &&
+          !confirmedByBooking
         );
       });
 
       if (!selected.length) {
         throw new Error(
-          "No contactable bookings selected (cancelled/past/responded bookings can’t be contacted)."
+          "No contactable bookings selected (cancelled/past/responded/confirmed bookings can’t be contacted)."
         );
       }
 
@@ -524,7 +646,7 @@ export default function RemindersDialog({
           name: currentUser?.name || null,
         },
         bookings: selected.map((b) => ({
-          id: b.booking_uuid, // ✅ FK-safe uuid
+          id: b.booking_uuid, // ✅ FK-safe uuid (earliest slot UUID for the group)
           booking_id: b.booking_id, // optional group id
           start_time: b.start_time,
           end_time: b.end_time,
@@ -584,7 +706,10 @@ export default function RemindersDialog({
             >
               {loading ? "Loading..." : "Refresh"}
             </button>
-            <button className="px-3 py-1.5 text-xs sm:text-sm rounded border" onClick={onClose}>
+            <button
+              className="px-3 py-1.5 text-xs sm:text-sm rounded border"
+              onClick={onClose}
+            >
               Close
             </button>
           </div>
@@ -691,11 +816,19 @@ export default function RemindersDialog({
               {filtered.map((b) => {
                 const cancelled = isCancelledStatus(b.status);
                 const past = isPastBooking(b.start_time, new Date());
-                const confirmationStatus = b.confirmation?.status || "pending";
+
+                // Prefer explicit confirmation response; otherwise fallback to bookings table status/confirmation_status
+                const confirmationStatus = deriveConfirmationStatus(
+                  b.confirmation?.status ?? b.confirmation?.response ?? b.confirmation
+                );
+
+                const bookingConf = isBookingConfirmed(b);
 
                 const rowStatus =
                   confirmationStatus !== "pending"
                     ? confirmationStatus
+                    : bookingConf
+                    ? "confirmed"
                     : cancelled
                     ? "cancelled"
                     : "pending";
