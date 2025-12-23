@@ -18,6 +18,8 @@ const getBaseUrl = () => {
   );
 };
 
+const mask = (v) => (v ? `${String(v).slice(0, 5)}…` : "none");
+
 const normalizeUkMobileToE164 = (raw) => {
   const s = String(raw || "").trim();
   if (!s) throw new Error("Invalid client phone");

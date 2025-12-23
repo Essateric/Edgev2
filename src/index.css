@@ -98,8 +98,9 @@ body {
 }
 
 .rbc-time-view {
-  overflow-x: hidden !important;
-  overflow-y: hidden !important;
+  /* Let the page/body scroll; keep the calendar itself unscrolled */
+  overflow-x: visible !important;
+  overflow-y: visible !important;
 }
 
 .panel-white {
@@ -166,8 +167,9 @@ body {
 /* Keep the grid/table background white */
 .rbc-time-content {
   background-color: white !important;
-  max-height: 85vh;
-  overflow-y: auto;
+  /* Let the root .rbc-time-view handle scrolling so DnD math stays correct */
+  max-height: none;
+  overflow: visible;
 }
 
 /* Optional: maintain white background inside each cell */
@@ -315,6 +317,18 @@ body {
   position: relative;
 }
 
+/* Put the vertical scroll on the root element RBC measures for DnD */
+.rbc-time-view {
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+}
+
+/* Put the vertical scroll on the root element RBC measures for DnD */
+.rbc-time-view {
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+}
+
 /* --------------------------------------- */
 /* DnD behavior: keep others opaque + hide source while dragging */
 /* --------------------------------------- */
@@ -366,4 +380,3 @@ body {
 .modal-panel--xl {
   overflow: visible !important;
 }
-
