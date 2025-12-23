@@ -80,9 +80,38 @@ const isCancelledStatus = (status) => {
   return s === "cancelled" || s === "canceled" || s.startsWith("cancel");
 };
 
+const getConfirmationStatus = (response) => {
+  const s = String(response || "").trim().toLowerCase();
+  if (!s) return "pending";
+
+  if (s.startsWith("confirm") || s === "yes" || s === "y" || s === "ok" || s === "okay") {
+    return "confirmed";
+  }
+
+  if (s.startsWith("cancel") || s === "no") {
+    return "cancelled";
+  }
+
+  return "pending";
+};
+
 const isPastBooking = (startIso, now = new Date()) => {
   const d = new Date(startIso);
   return Number.isFinite(d.getTime()) && d.getTime() < now.getTime();
+};
+
+
+const normalizeResponse = (resp) => {
+  const s = String(resp || "").trim().toLowerCase();
+  if (!s) return null;
+  if (s.startsWith("confirm")) return "confirmed";
+  if (s.startsWith("cancel")) return "cancelled";
+  return s;
+};
+
+const isFinalResponse = (resp) => {
+  const r = normalizeResponse(resp);
+  return r === "confirmed" || r === "cancelled";
 };
 
 export default function RemindersDialog({
@@ -285,12 +314,64 @@ export default function RemindersDialog({
       } catch (remErr) {
         console.warn("[RemindersDialog] failed to load reminder history", remErr?.message);
       }
+      
+      // Load latest confirmation response (best-effort)
+      try {
+        const bookingUuids = mapped.map((r) => r.booking_uuid).filter(Boolean);
+
+        if (bookingUuids.length) {
+          const { data: confirmations, error: confirmationErr } = await db
+            .from("booking_confirmations")
+            .select("booking_id, response, responded_at")
+            .in("booking_id", bookingUuids)
+            .order("responded_at", { ascending: false });
+
+          if (confirmationErr) throw confirmationErr;
+
+          const latestByBooking = new Map();
+          for (const c of confirmations || []) {
+            if (!latestByBooking.has(c.booking_id)) latestByBooking.set(c.booking_id, c);
+          }
+
+          mapped = mapped.map((r) => {
+            const confirmation = latestByBooking.get(r.booking_uuid);
+            if (!confirmation) {
+              return {
+                ...r,
+                confirmation: { status: "pending", respondedAt: null, response: null },
+              };
+            }
+
+            return {
+              ...r,
+              confirmation: {
+                status: getConfirmationStatus(confirmation.response),
+                respondedAt: confirmation.responded_at || null,
+                response: confirmation.response || null,
+              },
+            };
+          });
+        }
+      } catch (confirmationErr) {
+        console.warn(
+          "[RemindersDialog] failed to load booking confirmations",
+          confirmationErr?.message
+        );
+      }
+
+      // Ensure a default confirmation so downstream checks don’t break.
+      mapped = mapped.map((r) => ({
+        ...r,
+        confirmation: r.confirmation || { status: "pending", respondedAt: null, response: null },
+      }));
+
       const now = new Date();
 
-      // ✅ Preselect ONLY contactable: not cancelled AND not past
-      const selectable = mapped.filter(
-        (r) => !isCancelledStatus(r.status) && !isPastBooking(r.start_time, now)
-      );
+ const selectable = mapped.filter((r) => {
+        const confirmationStatus = r.confirmation?.status;
+        const responded = confirmationStatus === "confirmed" || confirmationStatus === "cancelled";
+        return !isCancelledStatus(r.status) && !isPastBooking(r.start_time, now) && !responded;
+      });
 
       setRows(mapped);
       setSelectedIds(new Set(selectable.map((x) => x.id)));
@@ -322,12 +403,15 @@ export default function RemindersDialog({
     });
   }, [rows, search]);
 
-  const filteredSelectable = useMemo(() => {
-    const now = new Date();
-    return filtered.filter(
-      (r) => !isCancelledStatus(r.status) && !isPastBooking(r.start_time, now)
-    );
-  }, [filtered]);
+ const filteredSelectable = useMemo(() => {
+        const now = new Date();
+        return filtered.filter(
+          (r) =>
+            !isCancelledStatus(r.status) &&
+            !isPastBooking(r.start_time, now) &&
+            !isFinalResponse(r.lastResponse?.status)
+        );
+      }, [filtered]);
 
   const allSelectableSelected =
     filteredSelectable.length > 0 &&
@@ -350,13 +434,15 @@ export default function RemindersDialog({
       const now = new Date();
 
       // ✅ Hard block: never send to cancelled OR past
-      selected = selected.filter(
-        (r) => !isCancelledStatus(r.status) && !isPastBooking(r.start_time, now)
-      );
+          selected = selected.filter((r) => {
+        const confirmationStatus = r.confirmation?.status;
+        const responded = confirmationStatus === "confirmed" || confirmationStatus === "cancelled";
+        return !isCancelledStatus(r.status) && !isPastBooking(r.start_time, now) && !responded;
+      });
 
       if (!selected.length) {
         throw new Error(
-          "No contactable bookings selected (cancelled/past bookings can’t be contacted)."
+         "No contactable bookings selected (cancelled/past/responded bookings can’t be contacted)."
         );
       }
 
@@ -541,7 +627,8 @@ export default function RemindersDialog({
                 <th className="p-2 text-left w-10">Sel</th>
                 <th className="p-2 text-left">Client</th>
                 <th className="p-2 text-left">Contact</th>
-                  <th className="p-2 text-left">Reminder</th>
+                   <th className="p-2 text-left">Status</th>
+                <th className="p-2 text-left">Reminder</th>
                 <th className="p-2 text-left">Channel</th>
                 <th className="p-2 text-left">Sent</th>
                 <th className="p-2 text-left">Staff</th>
@@ -553,18 +640,40 @@ export default function RemindersDialog({
               {filtered.map((b) => {
                 const cancelled = isCancelledStatus(b.status);
                 const past = isPastBooking(b.start_time, new Date());
-                const disabled = cancelled || past;
+                 const finalResponse = isFinalResponse(b.lastResponse?.status);
+                 const confirmationStatus = b.confirmation?.status || "pending";
+                const rowStatus =
+                  confirmationStatus !== "pending" ? confirmationStatus : cancelled ? "cancelled" : "pending";
+                const responded = rowStatus === "confirmed" || rowStatus === "cancelled";
+                const disabled = cancelled || past || responded;
                 const checked = selectedIds.has(b.id);
+
+                 let statusClass = "bg-gray-50";
+                if (rowStatus === "confirmed") statusClass = "bg-green-50 border-l-4 border-green-500";
+                if (rowStatus === "cancelled") statusClass = "bg-pink-50 border-l-4 border-pink-500";
+                if (past && !responded) statusClass = "bg-gray-50";
+  
+                const responseLabel =
+                  b.lastResponse?.status === "confirmed"
+                    ? "Confirmed"
+                    : b.lastResponse?.status === "cancelled"
+                    ? "Cancelled"
+                    : "No response";
+
 
                 return (
                   <tr
                     key={String(b.id)}
-                    className={`border-t align-top ${
-                      cancelled ? "bg-red-50 opacity-70" : past ? "bg-gray-50 opacity-70" : ""
-                    }`}
+            className={`border-t align-top ${statusClass} ${
+                      disabled ? "opacity-70" : ""
+                    } ${past && !responded ? "bg-gray-50" : ""}`}
                     title={
                       cancelled
                         ? "Cancelled booking (cannot send reminders)"
+                     : responded && rowStatus === "confirmed"
+                        ? "Client confirmed (reminders disabled)"
+                        : responded && rowStatus === "cancelled"
+                        ? "Client cancelled (reminders disabled)"
                         : past
                         ? "Past booking (cannot send reminders)"
                         : ""
@@ -609,7 +718,21 @@ export default function RemindersDialog({
                       <div className="text-gray-500">{b.client.phone || "—"}</div>
                     </td>
 
-                     <td className="p-2 whitespace-nowrap">
+                   <td className="p-2 whitespace-nowrap">
+                      <span
+                        className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border ${
+                          rowStatus === "confirmed"
+                            ? "bg-green-100 text-green-800 border-green-200"
+                            : rowStatus === "cancelled"
+                            ? "bg-pink-100 text-pink-800 border-pink-200"
+                            : "bg-gray-100 text-gray-700 border-gray-200"
+                        }`}
+                      >
+                        {rowStatus === "pending" ? "PENDING" : rowStatus.toUpperCase()}
+                      </span>
+                    </td>
+
+                    <td className="p-2 whitespace-nowrap">
                       <div>{b.lastReminder ? "Sent" : "—"}</div>
                     </td>
                     <td className="p-2 whitespace-nowrap">
@@ -633,7 +756,7 @@ export default function RemindersDialog({
 
               {!filtered.length && (
                 <tr>
-                  <td colSpan={8} className="p-6 text-center text-gray-500 text-sm">
+                  <td colSpan={9} className="p-6 text-center text-gray-500 text-sm">
                     No bookings in range.
                   </td>
                 </tr>

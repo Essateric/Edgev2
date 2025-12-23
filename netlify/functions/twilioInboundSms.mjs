@@ -180,7 +180,7 @@ export const handler = async (event) => {
         .eq("id", conf.id);
 
 const smsText = [
-  "🤖 Automated message: replies are handled by our friendly robot haha",
+  "🤖 Automated message: replies are handled by our friendly robot",
   `✅ Thanks ${nameLabel}, your appointment on ${startLabel} at The Edge HD Salon has been confirmed!`,
   "✨ From the Edge HD Salon Team",
 ].join("\n\n");
@@ -227,7 +227,7 @@ return {
     return {
       statusCode: 200,
       headers: { "Content-Type": "text/xml", "Cache-Control": "no-store" },
-      body: twiml("Your appointment has been cancelled."),
+      body: twiml("Your appointment at The Edge HD salon has now been cancelled."),
     };
   } catch (e) {
     console.error("[twilioSmsReply] error", e);
