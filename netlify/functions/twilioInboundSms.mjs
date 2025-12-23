@@ -181,10 +181,10 @@ export const handler = async (event) => {
 
 const whatsappUrl =
   "https://bit.ly/EdgeWhatsAppChannel"
-  
+
 const smsText = [
   "🤖 Automated message: replies are handled by our friendly robot haha",
-  `✅ Thanks ${nameLabel}, your appointment on ${startLabel} at The Edge HD Salon has been confirmed!`,
+  `✅ Thanks ${nameLabel}, your appointment on ${startLabel} has been confirmed!`,
   `👉 Join our WhatsApp channel: ${whatsappUrl}`,
   "💈 From the Edge HD Salon Team",
 ].join("\n\n");

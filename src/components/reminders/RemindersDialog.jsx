@@ -403,16 +403,22 @@ export default function RemindersDialog({
     });
   }, [rows, search]);
 
- const filteredSelectable = useMemo(() => {
-        const now = new Date();
-        return filtered.filter(
-          (r) =>
-            !isCancelledStatus(r.status) &&
-            !isPastBooking(r.start_time, now) &&
-            !isFinalResponse(r.lastResponse?.status)
-        );
-      }, [filtered]);
+const filteredSelectable = useMemo(() => {
+    const now = new Date();
+    return filtered.filter((r) => {
+      const confirmationStatus = r.confirmation?.status;
+      return (
+        !isCancelledStatus(r.status) &&
+        !isPastBooking(r.start_time, now) &&
+        !isFinalResponse(confirmationStatus)
+      );
+    });
+  }, [filtered]);
 
+  const selectedInFiltered = useMemo(
+    () => filteredSelectable.filter((r) => selectedIds.has(r.id)).length,
+    [filteredSelectable, selectedIds]
+  );
   const allSelectableSelected =
     filteredSelectable.length > 0 &&
     filteredSelectable.every((r) => selectedIds.has(r.id));
@@ -601,7 +607,7 @@ export default function RemindersDialog({
               checked={allSelectableSelected}
               onChange={(e) => toggleAll(e.target.checked)}
             />
-            <span>Select all ({filteredSelectable.length})</span>
+            <span>Select all ({filteredSelectable})</span>
           </label>
 
           <button
@@ -640,10 +646,13 @@ export default function RemindersDialog({
               {filtered.map((b) => {
                 const cancelled = isCancelledStatus(b.status);
                 const past = isPastBooking(b.start_time, new Date());
-                 const finalResponse = isFinalResponse(b.lastResponse?.status);
-                 const confirmationStatus = b.confirmation?.status || "pending";
+   const confirmationStatus = b.confirmation?.status || "pending";
                 const rowStatus =
-                  confirmationStatus !== "pending" ? confirmationStatus : cancelled ? "cancelled" : "pending";
+                   confirmationStatus !== "pending"
+                    ? confirmationStatus
+                    : cancelled
+                    ? "cancelled"
+                    : "pending";
                 const responded = rowStatus === "confirmed" || rowStatus === "cancelled";
                 const disabled = cancelled || past || responded;
                 const checked = selectedIds.has(b.id);
@@ -652,14 +661,6 @@ export default function RemindersDialog({
                 if (rowStatus === "confirmed") statusClass = "bg-green-50 border-l-4 border-green-500";
                 if (rowStatus === "cancelled") statusClass = "bg-pink-50 border-l-4 border-pink-500";
                 if (past && !responded) statusClass = "bg-gray-50";
-  
-                const responseLabel =
-                  b.lastResponse?.status === "confirmed"
-                    ? "Confirmed"
-                    : b.lastResponse?.status === "cancelled"
-                    ? "Cancelled"
-                    : "No response";
-
 
                 return (
                   <tr
