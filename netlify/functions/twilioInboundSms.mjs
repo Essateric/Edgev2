@@ -96,10 +96,10 @@ export const handler = async (event) => {
       };
     }
 
-    // 🔧 Keep existing logic, but support either `start` or `start_time` (common schema mismatch)
+    // 🔧 Keep existing logic, but support either `start`
     const { data: booking, error: bErr } = await sb
       .from("bookings")
-      .select("id, booking_id, client_id, client_name, start, start_time")
+      .select("id, booking_id, client_id, client_name, star")
       .eq("id", conf.booking_id)
       .maybeSingle();
 
@@ -146,7 +146,7 @@ export const handler = async (event) => {
       clientLastName = parts.slice(1).join(" ");
     }
 
-    const startIso = booking.start_time || booking.start || null;
+    const startIso = booking.start || null;
     const startLabel = startIso ? `${formatDate(startIso)} at ${formatTime(startIso)}` : "your appointment";
     const nameLabel = clientFirstName || "there";
 
