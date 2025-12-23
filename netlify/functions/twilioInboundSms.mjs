@@ -182,14 +182,17 @@ export const handler = async (event) => {
       return {
         statusCode: 200,
         headers: { "Content-Type": "text/xml", "Cache-Control": "no-store" },
-        body: twiml(`Thanks ${nameLabel}, your appointment on ${startLabel} has been confirmed ✅`),
+        body: twiml(`Thanks ${nameLabel}, your appointment on ${startLabel} at The Edge HD Salon has been confirmed ✅`),
       };
     }
+
+        // Use a visible cancelled status so the slot turns red on the calendar instead of disappearing
+    const cancelledStatus = "client_cancelled";
 
     // cancel
     const { error: upErr } = await sb
       .from("bookings")
-      .update({ status: "cancelled", confirmation_status: "cancelled" })
+      .update({ status: cancelledStatus, confirmation_status: "cancelled" })
       .in("id", affectedIds);
     if (upErr) throw upErr;
 

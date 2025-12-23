@@ -375,6 +375,77 @@ const supabase = auth?.supabaseClient || baseSupabase;
       return { confirmedFromReply, idsArray };
     };
 
+    const refreshBookingBlock = async (bookingRowId) => {
+      if (!bookingRowId) return;
+
+      try {
+        const { data: primary, error: primaryErr } = await supabase
+          .from("bookings")
+          .select("*")
+          .eq("id", bookingRowId)
+          .maybeSingle();
+
+        if (primaryErr) throw primaryErr;
+        if (!primary) return;
+
+        const rows = [primary];
+        const ids = new Set([primary.id]);
+
+        if (primary.booking_id) {
+          const { data: siblings, error: siblingErr } = await supabase
+            .from("bookings")
+            .select("*")
+            .eq("booking_id", primary.booking_id);
+
+          if (siblingErr) throw siblingErr;
+          for (const r of siblings || []) {
+            if (r?.id && !ids.has(r.id)) {
+              ids.add(r.id);
+              rows.push(r);
+            }
+          }
+        }
+
+        let idsArray = Array.from(ids);
+        let confirmedFromReply = false;
+
+        try {
+          const confirmation = await fetchLatestConfirmation(primary);
+          if (confirmation) {
+            confirmedFromReply = confirmation.confirmedFromReply;
+            idsArray = confirmation.idsArray;
+          }
+        } catch (err) {
+          console.warn("[Calendar] confirmation refresh failed", err?.message);
+        }
+
+        setEvents((prev) => {
+          const mapped = rows.map((r) => mapBookingRowToEvent(r, confirmedFromReply));
+          const idsSet = new Set(idsArray);
+          const updated = prev.map((ev) =>
+            idsSet.has(ev.id) || (primary.booking_id && ev.booking_id === primary.booking_id)
+              ? {
+                  ...ev,
+                  ...(mapped.find((m) => m.id === ev.id) ||
+                    mapped.find((m) => primary.booking_id && m.booking_id === ev.booking_id) ||
+                    ev),
+                  confirmed_via_reminder: confirmedFromReply,
+                }
+              : ev
+          );
+
+          for (const m of mapped) {
+            if (!updated.some((u) => u.id === m.id)) {
+              updated.push({ ...m, confirmed_via_reminder: confirmedFromReply });
+            }
+          }
+
+          return updated;
+        });
+      } catch (err) {
+        console.warn("[Calendar] failed to refresh booking block", err?.message);
+      }
+    };
 
     const channel = supabase
       .channel("realtime:bookings")
