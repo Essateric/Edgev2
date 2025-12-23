@@ -74,7 +74,7 @@ export const handler = async (event) => {
 
     const { data: booking, error: bErr } = await sb
       .from("bookings")
-      .select("id, booking_id, client_id")
+      .select("id, booking_id, client_id, client_name, start")
       .eq("id", conf.booking_id)
       .maybeSingle();
 
@@ -96,6 +96,46 @@ export const handler = async (event) => {
       affectedIds = (allSlots || []).map((x) => x.id);
     }
 
+    // Try to load client details for a friendlier reply
+    let clientFirstName = "";
+    let clientLastName = "";
+
+    if (booking.client_id) {
+      try {
+        const { data: clientRow, error: cErr } = await sb
+          .from("clients")
+          .select("first_name, last_name")
+          .eq("id", booking.client_id)
+          .maybeSingle();
+        if (cErr) throw cErr;
+        clientFirstName = clientRow?.first_name || "";
+        clientLastName = clientRow?.last_name || "";
+      } catch (e) {
+        // fallback to booking.client_name below
+      }
+    }
+
+    if (!clientFirstName && booking.client_name) {
+      const parts = String(booking.client_name).trim().split(" ");
+      clientFirstName = parts[0] || "";
+      clientLastName = parts.slice(1).join(" ");
+    }
+
+    const formatDate = (iso) =>
+      new Intl.DateTimeFormat("en-GB", {
+        dateStyle: "medium",
+        timeZone: "Europe/London",
+      }).format(new Date(iso));
+
+    const formatTime = (iso) =>
+      new Intl.DateTimeFormat("en-GB", {
+        timeStyle: "short",
+        timeZone: "Europe/London",
+      }).format(new Date(iso));
+
+    const startLabel = booking?.start ? `${formatDate(booking.start)} at ${formatTime(booking.start)}` : "your appointment";
+  const nameLabel = clientFirstName || "there";
+
     if (response === "confirm") {
       const { error: upErr } = await sb
         .from("bookings")
@@ -115,8 +155,11 @@ export const handler = async (event) => {
         response: "confirm",
         inbound_message_sid: messageSid || null,
       }).eq("id", conf.id);
-
-      return { statusCode: 200, headers: { "Content-Type": "text/xml" }, body: twiml("Thanks! Your appointment is confirmed ✅") };
+   return {
+        statusCode: 200,
+        headers: { "Content-Type": "text/xml" },
+        body: twiml(`Thanks ${nameLabel}, your appointment on ${startLabel} has been confirmed ✅`),
+      };
     }
 
     // cancel

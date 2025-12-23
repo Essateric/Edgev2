@@ -145,9 +145,20 @@ export const handler = async (event) => {
         const sid = process.env.TWILIO_ACCOUNT_SID;
         const token = process.env.TWILIO_AUTH_TOKEN;
         const messagingSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+    const fromNumber = process.env.TWILIO_FROM_NUMBER;
+        const senderMode = messagingSid ? "messagingService" : fromNumber ? "fromNumber" : "missing";
+        console.log("[sendBulkReminders] SMS sender mode:", senderMode, "from:", mask(fromNumber), "msid:", mask(messagingSid));
 
-        if (!sid || !token) throw new Error("TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN not set");
-        if (!messagingSid) throw new Error("TWILIO_MESSAGING_SERVICE_SID not set (needed for SMS)");
+          if (!messagingSid && !fromNumber) {
+          throw new Error(
+            "TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM_NUMBER must be set to send SMS"
+          );
+        }
+         if (!messagingSid && !fromNumber) {
+          throw new Error(
+            "TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM_NUMBER must be set to send SMS"
+          );
+        }
         if (!b?.client?.phone) throw new Error("Missing client phone");
 
         const { default: twilio } = await import("twilio");
@@ -156,7 +167,9 @@ export const handler = async (event) => {
         await client.messages.create({
           body: text,
           to: normalizeUkMobileToE164(b.client.phone),
-          messagingServiceSid: messagingSid,
+             // Prefer Messaging Service, fallback to explicit From number if provided
+          ...(messagingSid ? { messagingServiceSid: messagingSid } : {}),
+          ...(messagingSid ? {} : { from: fromNumber }),
         });
 
         return true;
@@ -165,9 +178,15 @@ export const handler = async (event) => {
       whatsapp: async (b, text) => {
         const sid = process.env.TWILIO_ACCOUNT_SID;
         const token = process.env.TWILIO_AUTH_TOKEN;
-
         const whatsappFrom = process.env.TWILIO_WHATSAPP_FROM;
         const messagingSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+        console.log("[sendBulkReminders] WA sender mode:", waSenderMode, "from:", mask(whatsappFrom), "msid:", mask(messagingSid));
+        const mask = (v) => (v ? `${String(v).slice(0, 5)}…` : "none");
+console.log("[sendBulkReminders] SMS sender mode:", senderMode, "from:", mask(fromNumber), "msid:", mask(messagingSid));
+const waSenderMode = whatsappFrom ? "whatsappFrom" : messagingSid ? "messagingService" : "missing";
+console.log("[sendBulkReminders] WA sender mode:", waSenderMode, "from:", mask(whatsappFrom), "msid:", mask(messagingSid));
+
+
 
         if (!sid || !token) throw new Error("TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN not set");
         if (!b?.client?.phone) throw new Error("Missing client phone");

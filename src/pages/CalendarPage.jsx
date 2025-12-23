@@ -83,21 +83,10 @@ const isConfirmedStatus = (status) => {
   return s === "confirmed" || s.startsWith("confirm") || s.includes("confirmed");
 };
 
-
-const hasReminderConfirmation = (booking = {}) => {
-  const confirmations = booking.booking_confirmations;
-  if (!Array.isArray(confirmations)) return false;
-  return confirmations.some(
-    (c) =>
-      String(c?.response || "").toLowerCase().startsWith("confirm") &&
-      !!c?.responded_at
-  );
-};
-
 export default function CalendarPage() {
   const [stylistList, setStylistList] = useState([]);
 
-  const mapBookingRowToEvent = (b, fallbackConfirmed = false) => {
+ const mapBookingRowToEvent = (b, fallbackConfirmed = false) => {
     const stylistRow = stylistList.find((s) => s.id === b.resource_id);
     const start = b.start ?? b.start_time;
     const end = b.end ?? b.end_time;
@@ -114,7 +103,7 @@ export default function CalendarPage() {
       resourceId: b.resource_id,
       stylistName: stylistRow?.title || "Unknown Stylist", // ✅ FIX: stylistList uses `title`
       title: b.title || "No Service Name",
-       confirmed_via_reminder,
+      confirmed_via_reminder,
     };
   };
 
@@ -271,15 +260,8 @@ const supabase = auth?.supabaseClient || baseSupabase;
         // ---------- BOOKINGS ----------
         dbgLog("bookings query: BEFORE", { runId });
         const { data: bookingsData, error: bErr } = await supabase
-         .from("bookings")
-          .select(`
-            *,
-            booking_confirmations (
-              response,
-              responded_at
-            )
-          `);
-
+          .from("bookings")
+          .select("*");
         dbgLog("bookings query: AFTER", {
           runId,
           error: bErr ? bErr.message : null,
@@ -309,7 +291,6 @@ const supabase = auth?.supabaseClient || baseSupabase;
             const stylistRow = staff.find((s) => s.id === b.resource_id);
             const start = b.start ?? b.start_time;
             const end = b.end ?? b.end_time;
-            const confirmed_via_reminder = hasReminderConfirmation(b);
             return {
               ...b,
               start: new Date(start),
@@ -317,7 +298,6 @@ const supabase = auth?.supabaseClient || baseSupabase;
               resourceId: b.resource_id,
               stylistName: stylistRow?.name || "Unknown Stylist",
               title: b.title || "No Service Name",
-              confirmed_via_reminder,
             };
           })
         );
@@ -353,6 +333,49 @@ const supabase = auth?.supabaseClient || baseSupabase;
     if (!currentUser?.id) return;
     if (!supabase) return;
 
+    const fetchLatestConfirmation = async (bookingRow) => {
+      // Check the specific row plus any sibling rows in the same booking block.
+      const idsToCheck = new Set([bookingRow?.id].filter(Boolean));
+
+      if (bookingRow?.booking_id) {
+        try {
+          const { data: groupRows, error: groupErr } = await supabase
+            .from("bookings")
+            .select("id")
+            .eq("booking_id", bookingRow.booking_id);
+
+          if (groupErr) throw groupErr;
+          for (const r of groupRows || []) {
+            if (r?.id) idsToCheck.add(r.id);
+          }
+        } catch (e) {
+          console.warn("[Calendar] failed to load booking group ids", e?.message);
+        }
+      }
+
+      if (!idsToCheck.size) return null;
+
+      const idsArray = Array.from(idsToCheck);
+
+      const { data, error } = await supabase
+        .from("booking_confirmations")
+        .select("response, responded_at, booking_id")
+        .in("booking_id", idsArray)
+        .order("responded_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      const confirmedFromReply = !!(
+        data?.responded_at &&
+        String(data?.response || "").toLowerCase().startsWith("confirm")
+      );
+
+      return { confirmedFromReply, idsArray };
+    };
+
+
     const channel = supabase
       .channel("realtime:bookings")
       .on(
@@ -368,8 +391,7 @@ const supabase = auth?.supabaseClient || baseSupabase;
 
           const row = payload.new;
           if (!row?.id) return;
-
-         const applyRealtimeUpdate = async () => {
+const applyRealtimeUpdate = async () => {
             setEvents((prev) => {
               const idx = prev.findIndex((e) => e.id === row.id);
               const mapped = mapBookingRowToEvent(
@@ -386,31 +408,24 @@ const supabase = auth?.supabaseClient || baseSupabase;
 
             // Fetch latest confirmation state so delayed SMS replies still show green.
             try {
-              const { data, error } = await supabase
-                .from("booking_confirmations")
-                .select("response, responded_at")
-                .eq("booking_id", row.id)
-                .order("responded_at", { ascending: false })
-                .limit(1)
-                .maybeSingle();
-
-              if (error) throw error;
-
-              const confirmedFromReply = !!(
-                data?.responded_at &&
-                String(data?.response || "").toLowerCase().startsWith("confirm")
-              );
+              const confirmation = await fetchLatestConfirmation(row);
+              if (!confirmation) return;
+              const { confirmedFromReply, idsArray } = confirmation;
 
               setEvents((prev) =>
                 prev.map((e) =>
-                  e.id === row.id ? { ...e, confirmed_via_reminder: confirmedFromReply } : e
+                  idsArray.includes(e.id) ||
+                  (row.booking_id && e.booking_id && e.booking_id === row.booking_id)
+                    ? { ...e, confirmed_via_reminder: confirmedFromReply }
+                    : e
                 )
               );
             } catch (err) {
               console.warn("[Calendar] failed to refresh reminder confirmation", err?.message);
             }
           };
-             applyRealtimeUpdate();
+
+            applyRealtimeUpdate();
         }
       )
       .subscribe();
