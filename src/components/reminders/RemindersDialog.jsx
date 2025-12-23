@@ -95,6 +95,34 @@ const getConfirmationStatus = (response) => {
   return "pending";
 };
 
+// Confirmation responses may come back as strings ("confirmed"), booleans, or even
+// structured objects ({ status: "confirmed" }). Normalise them so selection logic
+// doesn’t miss confirmed/cancelled states.
+const normalizeConfirmationInput = (input) => {
+  if (!input && input !== false) return null;
+
+  if (typeof input === "string") return input;
+
+  if (typeof input === "boolean") return input ? "confirmed" : "cancelled";
+
+  if (typeof input === "object") {
+    const candidate =
+      input.status ||
+      input.response ||
+      input.reply ||
+      input.choice ||
+      input.value;
+    if (candidate) return normalizeConfirmationInput(candidate);
+  }
+
+  return String(input || "");
+};
+
+const deriveConfirmationStatus = (input) => {
+  const normalized = normalizeConfirmationInput(input);
+  return getConfirmationStatus(normalized);
+};
+
 const isPastBooking = (startIso, now = new Date()) => {
   const d = new Date(startIso);
   return Number.isFinite(d.getTime()) && d.getTime() < now.getTime();
@@ -110,7 +138,7 @@ const normalizeResponse = (resp) => {
 };
 
 const isFinalResponse = (resp) => {
-  const r = normalizeResponse(resp);
+  const r = normalizeResponse(deriveConfirmationStatus(resp));
   return r === "confirmed" || r === "cancelled";
 };
 
@@ -342,12 +370,16 @@ export default function RemindersDialog({
               };
             }
 
+             const confirmationStatus = deriveConfirmationStatus(
+              confirmation.response ?? confirmation.status
+            );
+
             return {
               ...r,
               confirmation: {
-                status: getConfirmationStatus(confirmation.response),
-                respondedAt: confirmation.responded_at || null,
-                response: confirmation.response || null,
+    status: confirmationStatus,
+                respondedAt: confirmation.responded_at || confirmation.created_at || null,
+                response: confirmation.response ?? confirmation.status ?? null,
               },
             };
           });
@@ -368,10 +400,9 @@ export default function RemindersDialog({
       const now = new Date();
 
  const selectable = mapped.filter((r) => {
-        const confirmationStatus = r.confirmation?.status;
-        const responded = confirmationStatus === "confirmed" || confirmationStatus === "cancelled";
-        return !isCancelledStatus(r.status) && !isPastBooking(r.start_time, now) && !responded;
-      });
+        const confirmationStatus = deriveConfirmationStatus(
+          r.confirmation?.status ?? r.confirmation?.response ?? r.confirmation
+        );
 
       setRows(mapped);
       setSelectedIds(new Set(selectable.map((x) => x.id)));
@@ -406,7 +437,9 @@ export default function RemindersDialog({
 const filteredSelectable = useMemo(() => {
     const now = new Date();
     return filtered.filter((r) => {
-      const confirmationStatus = r.confirmation?.status;
+      const confirmationStatus = deriveConfirmationStatus(
+        r.confirmation?.status ?? r.confirmation?.response ?? r.confirmation
+      );
       return (
         !isCancelledStatus(r.status) &&
         !isPastBooking(r.start_time, now) &&
@@ -419,6 +452,7 @@ const filteredSelectable = useMemo(() => {
     () => filteredSelectable.filter((r) => selectedIds.has(r.id)).length,
     [filteredSelectable, selectedIds]
   );
+
   const allSelectableSelected =
     filteredSelectable.length > 0 &&
     filteredSelectable.every((r) => selectedIds.has(r.id));
@@ -441,7 +475,9 @@ const filteredSelectable = useMemo(() => {
 
       // ✅ Hard block: never send to cancelled OR past
           selected = selected.filter((r) => {
-        const confirmationStatus = r.confirmation?.status;
+          const confirmationStatus = deriveConfirmationStatus(
+          r.confirmation?.status ?? r.confirmation?.response ?? r.confirmation
+        );
         const responded = confirmationStatus === "confirmed" || confirmationStatus === "cancelled";
         return !isCancelledStatus(r.status) && !isPastBooking(r.start_time, now) && !responded;
       });
