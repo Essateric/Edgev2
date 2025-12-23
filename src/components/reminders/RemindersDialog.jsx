@@ -84,7 +84,13 @@ const getConfirmationStatus = (response) => {
   const s = String(response || "").trim().toLowerCase();
   if (!s) return "pending";
 
-  if (s.startsWith("confirm") || s === "yes" || s === "y" || s === "ok" || s === "okay") {
+  if (
+    s.startsWith("confirm") ||
+    s === "yes" ||
+    s === "y" ||
+    s === "ok" ||
+    s === "okay"
+  ) {
     return "confirmed";
   }
 
@@ -128,7 +134,6 @@ const isPastBooking = (startIso, now = new Date()) => {
   return Number.isFinite(d.getTime()) && d.getTime() < now.getTime();
 };
 
-
 const normalizeResponse = (resp) => {
   const s = String(resp || "").trim().toLowerCase();
   if (!s) return null;
@@ -152,16 +157,12 @@ export default function RemindersDialog({
   const { currentUser, supabaseClient, baseSupabaseClient } = useAuth();
   const db = supabaseClient || baseSupabaseClient;
 
-  const baseDate = defaultWeekFromDate
-    ? new Date(defaultWeekFromDate)
-    : new Date();
+  const baseDate = defaultWeekFromDate ? new Date(defaultWeekFromDate) : new Date();
 
   const defaultFrom = mondayStartOfWeek(baseDate);
   const defaultTo = endOfWeekFrom(defaultFrom);
 
-  const [from, setFrom] = useState(
-    initialFrom ? new Date(initialFrom) : defaultFrom
-  );
+  const [from, setFrom] = useState(initialFrom ? new Date(initialFrom) : defaultFrom);
   const [to, setTo] = useState(initialTo ? new Date(initialTo) : defaultTo);
 
   const [channel, setChannel] = useState("email");
@@ -225,7 +226,7 @@ export default function RemindersDialog({
 
     try {
       // ✅ We keep cancelled + past visible. We only disable sending/selecting.
-      const { data, error } = await db
+      const { data, error: bookingsErr } = await db
         .from("bookings")
         .select(
           `
@@ -244,7 +245,7 @@ export default function RemindersDialog({
         .lte("start", toDate.toISOString())
         .order("start", { ascending: true });
 
-      if (error) throw error;
+      if (bookingsErr) throw bookingsErr;
 
       // ✅ One row per APPOINTMENT (grouped by booking_id, fallback to client+minute)
       const byKey = new Map();
@@ -260,8 +261,8 @@ export default function RemindersDialog({
           `${clientKey}__${minuteKey(b.start)}`;
 
         const row = {
-          id: String(key),      // group key for selection
-          booking_uuid: b.id,   // real uuid (FK-safe)
+          id: String(key), // group key for selection
+          booking_uuid: b.id, // real uuid (FK-safe)
           booking_id: b.booking_id || null,
           start_time: b.start,
           end_time: b.end || null,
@@ -303,7 +304,7 @@ export default function RemindersDialog({
         byKey.set(row.id, existing);
       }
 
-    let mapped = Array.from(byKey.values());
+      let mapped = Array.from(byKey.values());
 
       // Load latest reminder audit (best-effort)
       try {
@@ -342,7 +343,7 @@ export default function RemindersDialog({
       } catch (remErr) {
         console.warn("[RemindersDialog] failed to load reminder history", remErr?.message);
       }
-      
+
       // Load latest confirmation response (best-effort)
       try {
         const bookingUuids = mapped.map((r) => r.booking_uuid).filter(Boolean);
@@ -370,14 +371,14 @@ export default function RemindersDialog({
               };
             }
 
-             const confirmationStatus = deriveConfirmationStatus(
+            const confirmationStatus = deriveConfirmationStatus(
               confirmation.response ?? confirmation.status
             );
 
             return {
               ...r,
               confirmation: {
-    status: confirmationStatus,
+                status: confirmationStatus,
                 respondedAt: confirmation.responded_at || confirmation.created_at || null,
                 response: confirmation.response ?? confirmation.status ?? null,
               },
@@ -394,15 +395,23 @@ export default function RemindersDialog({
       // Ensure a default confirmation so downstream checks don’t break.
       mapped = mapped.map((r) => ({
         ...r,
-        confirmation: r.confirmation || { status: "pending", respondedAt: null, response: null },
+        confirmation:
+          r.confirmation || { status: "pending", respondedAt: null, response: null },
       }));
 
+      // ✅ Preselect only contactable bookings (not cancelled/past/responded)
       const now = new Date();
-
- const selectable = mapped.filter((r) => {
+      const selectable = mapped.filter((r) => {
         const confirmationStatus = deriveConfirmationStatus(
           r.confirmation?.status ?? r.confirmation?.response ?? r.confirmation
         );
+
+        return (
+          !isCancelledStatus(r.status) &&
+          !isPastBooking(r.start_time, now) &&
+          !isFinalResponse(confirmationStatus)
+        );
+      });
 
       setRows(mapped);
       setSelectedIds(new Set(selectable.map((x) => x.id)));
@@ -426,15 +435,14 @@ export default function RemindersDialog({
     if (!q) return rows;
 
     return rows.filter((b) => {
-      const name = `${b.client.first_name || ""} ${b.client.last_name || ""}`
-        .toLowerCase();
+      const name = `${b.client.first_name || ""} ${b.client.last_name || ""}`.toLowerCase();
       const email = (b.client.email || "").toLowerCase();
       const phone = (b.client.phone || "").toLowerCase();
       return name.includes(q) || email.includes(q) || phone.includes(q);
     });
   }, [rows, search]);
 
-const filteredSelectable = useMemo(() => {
+  const filteredSelectable = useMemo(() => {
     const now = new Date();
     return filtered.filter((r) => {
       const confirmationStatus = deriveConfirmationStatus(
@@ -454,8 +462,7 @@ const filteredSelectable = useMemo(() => {
   );
 
   const allSelectableSelected =
-    filteredSelectable.length > 0 &&
-    filteredSelectable.every((r) => selectedIds.has(r.id));
+    filteredSelectable.length > 0 && filteredSelectable.every((r) => selectedIds.has(r.id));
 
   const toggleAll = (checked) => {
     if (checked) setSelectedIds(new Set(filteredSelectable.map((r) => r.id)));
@@ -473,18 +480,23 @@ const filteredSelectable = useMemo(() => {
       let selected = rows.filter((r) => selectedIds.has(r.id));
       const now = new Date();
 
-      // ✅ Hard block: never send to cancelled OR past
-          selected = selected.filter((r) => {
-          const confirmationStatus = deriveConfirmationStatus(
+      // ✅ Hard block: never send to cancelled OR past OR responded
+      selected = selected.filter((r) => {
+        const confirmationStatus = deriveConfirmationStatus(
           r.confirmation?.status ?? r.confirmation?.response ?? r.confirmation
         );
-        const responded = confirmationStatus === "confirmed" || confirmationStatus === "cancelled";
-        return !isCancelledStatus(r.status) && !isPastBooking(r.start_time, now) && !responded;
+        const responded =
+          confirmationStatus === "confirmed" || confirmationStatus === "cancelled";
+        return (
+          !isCancelledStatus(r.status) &&
+          !isPastBooking(r.start_time, now) &&
+          !responded
+        );
       });
 
       if (!selected.length) {
         throw new Error(
-         "No contactable bookings selected (cancelled/past/responded bookings can’t be contacted)."
+          "No contactable bookings selected (cancelled/past/responded bookings can’t be contacted)."
         );
       }
 
@@ -506,13 +518,13 @@ const filteredSelectable = useMemo(() => {
         channel: normalizedChannel,
         template,
         timezone: "Europe/London",
-          actor: {
+        actor: {
           id: currentUser?.id || null,
           email: currentUser?.email || null,
           name: currentUser?.name || null,
         },
         bookings: selected.map((b) => ({
-          id: b.booking_uuid,       // ✅ FK-safe uuid
+          id: b.booking_uuid, // ✅ FK-safe uuid
           booking_id: b.booking_id, // optional group id
           start_time: b.start_time,
           end_time: b.end_time,
@@ -533,7 +545,7 @@ const filteredSelectable = useMemo(() => {
       }
 
       setResult(json);
-        fetchBookings(); // refresh table so latest reminder metadata shows up
+      fetchBookings(); // refresh table so latest reminder metadata shows up
     } catch (e) {
       console.error(e);
       setError(e?.message || "Failed to send reminders");
@@ -572,10 +584,7 @@ const filteredSelectable = useMemo(() => {
             >
               {loading ? "Loading..." : "Refresh"}
             </button>
-            <button
-              className="px-3 py-1.5 text-xs sm:text-sm rounded border"
-              onClick={onClose}
-            >
+            <button className="px-3 py-1.5 text-xs sm:text-sm rounded border" onClick={onClose}>
               Close
             </button>
           </div>
@@ -643,7 +652,7 @@ const filteredSelectable = useMemo(() => {
               checked={allSelectableSelected}
               onChange={(e) => toggleAll(e.target.checked)}
             />
-            <span>Select all ({filteredSelectable})</span>
+            <span>Select all ({selectedInFiltered} selected)</span>
           </label>
 
           <button
@@ -669,7 +678,7 @@ const filteredSelectable = useMemo(() => {
                 <th className="p-2 text-left w-10">Sel</th>
                 <th className="p-2 text-left">Client</th>
                 <th className="p-2 text-left">Contact</th>
-                   <th className="p-2 text-left">Status</th>
+                <th className="p-2 text-left">Status</th>
                 <th className="p-2 text-left">Reminder</th>
                 <th className="p-2 text-left">Channel</th>
                 <th className="p-2 text-left">Sent</th>
@@ -682,32 +691,36 @@ const filteredSelectable = useMemo(() => {
               {filtered.map((b) => {
                 const cancelled = isCancelledStatus(b.status);
                 const past = isPastBooking(b.start_time, new Date());
-   const confirmationStatus = b.confirmation?.status || "pending";
+                const confirmationStatus = b.confirmation?.status || "pending";
+
                 const rowStatus =
-                   confirmationStatus !== "pending"
+                  confirmationStatus !== "pending"
                     ? confirmationStatus
                     : cancelled
                     ? "cancelled"
                     : "pending";
+
                 const responded = rowStatus === "confirmed" || rowStatus === "cancelled";
                 const disabled = cancelled || past || responded;
                 const checked = selectedIds.has(b.id);
 
-                 let statusClass = "bg-gray-50";
-                if (rowStatus === "confirmed") statusClass = "bg-green-50 border-l-4 border-green-500";
-                if (rowStatus === "cancelled") statusClass = "bg-pink-50 border-l-4 border-pink-500";
+                let statusClass = "bg-gray-50";
+                if (rowStatus === "confirmed")
+                  statusClass = "bg-green-50 border-l-4 border-green-500";
+                if (rowStatus === "cancelled")
+                  statusClass = "bg-pink-50 border-l-4 border-pink-500";
                 if (past && !responded) statusClass = "bg-gray-50";
 
                 return (
                   <tr
                     key={String(b.id)}
-            className={`border-t align-top ${statusClass} ${
+                    className={`border-t align-top ${statusClass} ${
                       disabled ? "opacity-70" : ""
                     } ${past && !responded ? "bg-gray-50" : ""}`}
                     title={
                       cancelled
                         ? "Cancelled booking (cannot send reminders)"
-                     : responded && rowStatus === "confirmed"
+                        : responded && rowStatus === "confirmed"
                         ? "Client confirmed (reminders disabled)"
                         : responded && rowStatus === "cancelled"
                         ? "Client cancelled (reminders disabled)"
@@ -755,7 +768,7 @@ const filteredSelectable = useMemo(() => {
                       <div className="text-gray-500">{b.client.phone || "—"}</div>
                     </td>
 
-                   <td className="p-2 whitespace-nowrap">
+                    <td className="p-2 whitespace-nowrap">
                       <span
                         className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border ${
                           rowStatus === "confirmed"
