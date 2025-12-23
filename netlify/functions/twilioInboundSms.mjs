@@ -179,10 +179,14 @@ export const handler = async (event) => {
         })
         .eq("id", conf.id);
 
+const whatsappUrl =
+  "https://bit.ly/EdgeWhatsAppChannel"
+  
 const smsText = [
-  "🤖 Automated message: replies are handled by our friendly robot",
+  "🤖 Automated message: replies are handled by our friendly robot haha",
   `✅ Thanks ${nameLabel}, your appointment on ${startLabel} at The Edge HD Salon has been confirmed!`,
-  "✨ From the Edge HD Salon Team",
+  `👉 Join our WhatsApp channel: ${whatsappUrl}`,
+  "💈 From the Edge HD Salon Team",
 ].join("\n\n");
 
 return {
@@ -190,9 +194,7 @@ return {
   headers: { "Content-Type": "text/xml", "Cache-Control": "no-store" },
   body: twiml(smsText),
 };
-
-
-    }
+   }
 
         // Use a visible cancelled status so the slot turns red on the calendar instead of disappearing
     const cancelledStatus = "client_cancelled";
