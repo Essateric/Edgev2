@@ -99,7 +99,7 @@ export const handler = async (event) => {
     // 🔧 Keep existing logic, but support either `start`
     const { data: booking, error: bErr } = await sb
       .from("bookings")
-      .select("id, booking_id, client_id, client_name, star")
+      .select("id, booking_id, client_id, client_name, start")
       .eq("id", conf.booking_id)
       .maybeSingle();
 
