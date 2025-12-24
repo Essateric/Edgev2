@@ -5,6 +5,8 @@ import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 import { REMINDER_DEFAULT_TEMPLATE } from "../../utils/Reminders.js";
 
+const PAGE_SIZE = 8;
+
 // ---- Date helpers (prevents off-by-one with <input type="date">)
 const dateToInputValue = (date) => {
   const d = new Date(date);
@@ -173,7 +175,9 @@ const pickLatestByTime = (items, getTimeIso) => {
 // Treat "confirmed" on bookings table as final too
 const isBookingConfirmed = (row) => {
   const a = String(row?.status || "").trim().toLowerCase();
-  const b = String(row?.booking_confirmation_status || "").trim().toLowerCase();
+  const b = String(row?.booking_confirmation_status || "")
+    .trim()
+    .toLowerCase();
   return a === "confirmed" || b === "confirmed";
 };
 
@@ -186,7 +190,6 @@ export default function RemindersDialog({
 }) {
   const { currentUser, supabaseClient, baseSupabaseClient } = useAuth();
   const db = supabaseClient || baseSupabaseClient;
-   const PAGE_SIZE = 8;
 
   const baseDate = defaultWeekFromDate
     ? new Date(defaultWeekFromDate)
@@ -212,6 +215,7 @@ export default function RemindersDialog({
   const [search, setSearch] = useState("");
   const [result, setResult] = useState(null);
   const [page, setPage] = useState(1);
+
   // reset range + template on open
   useEffect(() => {
     if (!isOpen) return;
@@ -251,7 +255,9 @@ export default function RemindersDialog({
       setLoading(false);
       setRows([]);
       setSelectedIds(new Set());
-      setError("Reminders need an online login (offline mode can’t send reminders).");
+      setError(
+        "Reminders need an online login (offline mode can’t send reminders)."
+      );
       return;
     }
 
@@ -280,7 +286,7 @@ export default function RemindersDialog({
             client_response,
             confirmed_at,
             cancelled_at,
-             source,
+            source,
             clients:client_id ( id, first_name, last_name, mobile, email )
           `
         )
@@ -305,8 +311,7 @@ export default function RemindersDialog({
 
         const slotUuid = b.id;
 
-        // Base confirmation derived from BOOKINGS row (so confirmed bookings are treated as final
-        // even if booking_confirmations has no row)
+        // Base confirmation derived from BOOKINGS row
         const baseConfirmStatus = deriveConfirmationStatus(
           b.confirmation_status ?? b.status ?? b.client_response
         );
@@ -361,21 +366,31 @@ export default function RemindersDialog({
         }
         if (
           row.end_time &&
-          (!existing.end_time || new Date(row.end_time) > new Date(existing.end_time))
+          (!existing.end_time ||
+            new Date(row.end_time) > new Date(existing.end_time))
         ) {
           existing.end_time = row.end_time;
         }
 
         // ✅ If ANY slot is cancelled, treat the whole block as cancelled (wins)
-        const existingCancelled = isCancelledStatus(existing.status) || isCancelledStatus(existing.booking_confirmation_status);
-        const rowCancelled = isCancelledStatus(row.status) || isCancelledStatus(row.booking_confirmation_status);
+        const existingCancelled =
+          isCancelledStatus(existing.status) ||
+          isCancelledStatus(existing.booking_confirmation_status);
+        const rowCancelled =
+          isCancelledStatus(row.status) ||
+          isCancelledStatus(row.booking_confirmation_status);
 
         if (existingCancelled || rowCancelled) {
           existing.status = "cancelled";
           existing.booking_confirmation_status = "cancelled";
           existing.confirmation = {
             status: "cancelled",
-            respondedAt: existing.respondedAt || row.respondedAt || null,
+            respondedAt:
+              existing.confirmation?.respondedAt ||
+              row.confirmation?.respondedAt ||
+              existing.cancelled_at ||
+              row.cancelled_at ||
+              null,
             response: "cancelled",
           };
         } else {
@@ -415,7 +430,9 @@ export default function RemindersDialog({
 
       // Collect ALL slot UUIDs across the grouped rows
       const allSlotUuids = uniq(
-        mapped.flatMap((r) => (r.slot_uuids?.length ? r.slot_uuids : [r.booking_uuid]))
+        mapped.flatMap((r) =>
+          r.slot_uuids?.length ? r.slot_uuids : [r.booking_uuid]
+        )
       );
 
       // Load latest reminder audit (best-effort)
@@ -438,8 +455,12 @@ export default function RemindersDialog({
 
           // For each grouped row, pick the latest reminder across its slots
           mapped = mapped.map((row) => {
-            const slots = row.slot_uuids?.length ? row.slot_uuids : [row.booking_uuid];
-            const candidates = slots.map((id) => latestBySlot.get(id)).filter(Boolean);
+            const slots = row.slot_uuids?.length
+              ? row.slot_uuids
+              : [row.booking_uuid];
+            const candidates = slots
+              .map((id) => latestBySlot.get(id))
+              .filter(Boolean);
 
             const latest = pickLatestByTime(candidates, (x) => x.created_at);
             if (!latest) return row;
@@ -456,7 +477,10 @@ export default function RemindersDialog({
           });
         }
       } catch (remErr) {
-        console.warn("[RemindersDialog] failed to load reminder history", remErr?.message);
+        console.warn(
+          "[RemindersDialog] failed to load reminder history",
+          remErr?.message
+        );
       }
 
       // Load latest confirmation response (best-effort)
@@ -479,8 +503,12 @@ export default function RemindersDialog({
           }
 
           mapped = mapped.map((row) => {
-            const slots = row.slot_uuids?.length ? row.slot_uuids : [row.booking_uuid];
-            const candidates = slots.map((id) => latestBySlot.get(id)).filter(Boolean);
+            const slots = row.slot_uuids?.length
+              ? row.slot_uuids
+              : [row.booking_uuid];
+            const candidates = slots
+              .map((id) => latestBySlot.get(id))
+              .filter(Boolean);
 
             const latest = pickLatestByTime(
               candidates,
@@ -515,12 +543,11 @@ export default function RemindersDialog({
       mapped = mapped.map((r) => ({
         ...r,
         confirmation:
-          r.confirmation ||
-          normalizeConfirmation({
+          r.confirmation || {
             status: isOnlineBooking(r.source) ? "confirmed" : "pending",
             respondedAt: null,
             response: null,
-          }),
+          },
       }));
 
       const now = new Date();
@@ -544,7 +571,7 @@ export default function RemindersDialog({
 
       setRows(mapped);
       setSelectedIds(new Set(selectable.map((x) => x.id)));
-       setPage(1);
+      setPage(1);
     } catch (e) {
       console.error(e);
       setRows([]);
@@ -572,7 +599,10 @@ export default function RemindersDialog({
     });
   }, [rows, search]);
 
-   const totalPages = useMemo(() => Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)), [filtered.length]);
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)),
+    [filtered.length]
+  );
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -586,16 +616,21 @@ export default function RemindersDialog({
   const paginated = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
     return filtered.slice(start, start + PAGE_SIZE);
-  }, [filtered, page, PAGE_SIZE]);
+  }, [filtered, page]);
+
+  const showingFrom = paginated.length ? (page - 1) * PAGE_SIZE + 1 : 0;
+  const showingTo = paginated.length ? showingFrom + paginated.length - 1 : 0;
 
   const filteredSelectable = useMemo(() => {
     const now = new Date();
     return paginated.filter((r) => {
       const confirmationStatus = deriveConfirmationStatus(r.confirmation?.status);
+      const bookingConf = isBookingConfirmed(r);
       return (
         !isCancelledStatus(r.status) &&
         !isPastBooking(r.start_time, now) &&
-        !isFinalResponse(confirmationStatus)
+        !isFinalResponse(confirmationStatus) &&
+        !bookingConf
       );
     });
   }, [paginated]);
@@ -610,13 +645,18 @@ export default function RemindersDialog({
     filteredSelectable.every((r) => selectedIds.has(r.id));
 
   const toggleAll = (checked) => {
-  const next = new Set(selectedIds);
+    const next = new Set(selectedIds);
     if (checked) {
       filteredSelectable.forEach((r) => next.add(r.id));
     } else {
       filteredSelectable.forEach((r) => next.delete(r.id));
     }
     setSelectedIds(next);
+  };
+
+  const changePage = (next) => {
+    if (next < 1 || next > totalPages) return;
+    setPage(next);
   };
 
   const onSend = async () => {
@@ -792,7 +832,9 @@ export default function RemindersDialog({
           </div>
 
           <div className="lg:col-span-3">
-            <label className="block text-xs lg:text-lg mb-1">Message template</label>
+            <label className="block text-xs lg:text-lg mb-1">
+              Message template
+            </label>
             <textarea
               className="border rounded px-3 py-2 w-full min-h-[110px] text-lg"
               value={template}
@@ -813,7 +855,7 @@ export default function RemindersDialog({
           <label className="flex items-center gap-2 text-xs lg:text-lg whitespace-nowrap">
             <input
               type="checkbox"
-               className="h-5 w-5"
+              className="h-5 w-5"
               checked={allSelectableSelected}
               onChange={(e) => toggleAll(e.target.checked)}
             />
@@ -831,94 +873,272 @@ export default function RemindersDialog({
 
         {error && (
           <div className="px-4 pb-2">
-            <div className="p-3 bg-red-50 text-red-700 rounded text-lg">{error}</div>
+            <div className="p-3 bg-red-50 text-red-700 rounded text-lg">
+              {error}
+            </div>
           </div>
         )}
 
         {/* Table */}
-       <div className="p-4 border-t">
-          <table className="min-w-full text-xs lg:text-lg">
-            <thead className="bg-gray-50 sticky top-0">
-              <tr>
-                <th className="p-2 text-left w-10">Sel</th>
-                <th className="p-2 text-left">Client</th>
-                <th className="p-2 text-left">Contact</th>
-                <th className="p-2 text-left">Status</th>
-                              <th className="p-2 text-left">Channel</th>
-                <th className="p-2 text-left">Sent</th>
-                <th className="p-2 text-left">Staff</th>
-                <th className="p-2 text-left">Appointment</th>
-              </tr>
-            </thead>
+        <div className="p-4 border-t space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-gray-700">
+            <div>
+              Showing {showingFrom ? `${showingFrom}-${showingTo}` : "0"} of{" "}
+              {filtered.length} bookings
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                className="px-3 py-1.5 rounded border text-sm disabled:opacity-50"
+                onClick={() => changePage(page - 1)}
+                disabled={page === 1}
+              >
+                Previous
+              </button>
+              <span className="px-2">
+                Page {page} of {totalPages}
+              </span>
+              <button
+                className="px-3 py-1.5 rounded border text-sm disabled:opacity-50"
+                onClick={() => changePage(page + 1)}
+                disabled={page === totalPages}
+              >
+                Next
+              </button>
+            </div>
+          </div>
 
-            <tbody>
-              {paginated.map((b) => {
-                const cancelled = isCancelledStatus(b.status);
-                const past = isPastBooking(b.start_time, new Date());
+          {/* Desktop table */}
+          <div className="hidden lg:block overflow-hidden rounded-xl border">
+            <div className="max-h-[50vh] overflow-y-auto">
+              <table className="w-full table-fixed text-sm">
+                <thead className="bg-gray-50 sticky top-0 z-10">
+                  <tr>
+                    <th className="p-2 text-left w-12">Sel</th>
+                    <th className="p-2 text-left w-[18%]">Client</th>
+                    <th className="p-2 text-left w-[20%]">Contact</th>
+                    <th className="p-2 text-left w-[12%]">Status</th>
+                    <th className="p-2 text-left w-[10%]">Channel</th>
+                    <th className="p-2 text-left w-[16%]">Sent</th>
+                    <th className="p-2 text-left w-[12%]">Staff</th>
+                    <th className="p-2 text-left w-[12%]">Appointment</th>
+                  </tr>
+                </thead>
 
-                // Prefer explicit confirmation response; otherwise fallback to bookings table status/confirmation_status
-                const confirmationStatus = deriveConfirmationStatus(
-                  b.confirmation?.status ?? b.confirmation?.response ?? b.confirmation
-                );
+                <tbody>
+                  {paginated.map((b) => {
+                    const cancelled = isCancelledStatus(b.status);
+                    const past = isPastBooking(b.start_time, new Date());
 
-                const bookingConf = isBookingConfirmed(b);
+                    // Prefer explicit confirmation response; otherwise fallback to bookings table status/confirmation_status
+                    const confirmationStatus = deriveConfirmationStatus(
+                      b.confirmation?.status ??
+                        b.confirmation?.response ??
+                        b.confirmation
+                    );
 
-                const rowStatus =
-                  confirmationStatus !== "pending"
-                    ? confirmationStatus
-                    : bookingConf
-                    ? "confirmed"
-                    : cancelled
-                    ? "cancelled"
-                    : "pending";
+                    const bookingConf = isBookingConfirmed(b);
 
-                const responded = rowStatus === "confirmed" || rowStatus === "cancelled";
-                const disabled = cancelled || past || responded;
-                const checked = selectedIds.has(b.id);
+                    const rowStatus =
+                      confirmationStatus !== "pending"
+                        ? confirmationStatus
+                        : bookingConf
+                        ? "confirmed"
+                        : cancelled
+                        ? "cancelled"
+                        : "pending";
 
-                let statusClass = "bg-gray-50";
-                if (rowStatus === "confirmed")
-                  statusClass = "bg-green-50 border-l-4 border-green-500";
-                if (rowStatus === "cancelled")
-                  statusClass = "bg-pink-50 border-l-4 border-pink-500";
-                if (past && !responded) statusClass = "bg-gray-50";
+                    const responded =
+                      rowStatus === "confirmed" || rowStatus === "cancelled";
+                    const disabled = cancelled || past || responded;
+                    const checked = selectedIds.has(b.id);
 
-                return (
-                  <tr
-                    key={String(b.id)}
-                    className={`border-t align-top ${statusClass} ${
-                      disabled ? "opacity-70" : ""
-                    } ${past && !responded ? "bg-gray-50" : ""}`}
-                    title={
-                      cancelled
-                        ? "Cancelled booking (cannot send reminders)"
-                        : responded && rowStatus === "confirmed"
-                        ? "Client confirmed (reminders disabled)"
-                        : responded && rowStatus === "cancelled"
-                        ? "Client cancelled (reminders disabled)"
-                        : past
-                        ? "Past booking (cannot send reminders)"
-                        : ""
-                    }
-                  >
-                    <td className="p-2">
-                      <input
-                        type="checkbox"
-                        className="h-5 w-5"
-                        disabled={disabled}
-                        checked={disabled ? false : checked}
-                        onChange={(e) => {
-                          const next = new Set(selectedIds);
-                          if (e.target.checked) next.add(b.id);
-                          else next.delete(b.id);
-                          setSelectedIds(next);
-                        }}
-                      />
-                    </td>
+                    let statusClass = "bg-white";
+                    if (rowStatus === "confirmed")
+                      statusClass = "bg-green-50 border-l-4 border-green-500";
+                    if (rowStatus === "cancelled")
+                      statusClass = "bg-pink-50 border-l-4 border-pink-500";
+                    if (past && !responded) statusClass = "bg-gray-50";
 
-                    <td className="p-2 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
-                        <span>
+                    return (
+                      <tr
+                        key={String(b.id)}
+                        className={`border-t align-top ${statusClass} ${
+                          disabled ? "opacity-70" : ""
+                        }`}
+                        title={
+                          cancelled
+                            ? "Cancelled booking (cannot send reminders)"
+                            : responded && rowStatus === "confirmed"
+                            ? "Client confirmed (reminders disabled)"
+                            : responded && rowStatus === "cancelled"
+                            ? "Client cancelled (reminders disabled)"
+                            : past
+                            ? "Past booking (cannot send reminders)"
+                            : ""
+                        }
+                      >
+                        <td className="p-2 align-top">
+                          <input
+                            type="checkbox"
+                            className="h-5 w-5"
+                            disabled={disabled}
+                            checked={disabled ? false : checked}
+                            onChange={(e) => {
+                              const next = new Set(selectedIds);
+                              if (e.target.checked) next.add(b.id);
+                              else next.delete(b.id);
+                              setSelectedIds(next);
+                            }}
+                          />
+                        </td>
+
+                        <td className="p-2 align-top">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">
+                              {b.client.first_name} {b.client.last_name}
+                            </span>
+
+                            {cancelled && (
+                              <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
+                                CANCELLED
+                              </span>
+                            )}
+
+                            {past && !cancelled && (
+                              <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 border-gray-200">
+                                PAST
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        <td className="p-2 align-top">
+                          <div className="break-words">
+                            {b.client.email || "—"}
+                          </div>
+                          <div className="text-gray-500">
+                            {b.client.phone || "—"}
+                          </div>
+                        </td>
+
+                        <td className="p-2 align-top">
+                          <span
+                            className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border ${
+                              rowStatus === "confirmed"
+                                ? "bg-green-100 text-green-800 border-green-200"
+                                : rowStatus === "cancelled"
+                                ? "bg-pink-100 text-pink-800 border-pink-200"
+                                : "bg-gray-100 text-gray-700 border-gray-200"
+                            }`}
+                          >
+                            {rowStatus === "pending"
+                              ? "PENDING"
+                              : rowStatus.toUpperCase()}
+                          </span>
+                        </td>
+
+                        <td className="p-2 align-top whitespace-nowrap">
+                          {b.lastReminder?.channel
+                            ? b.lastReminder.channel.toUpperCase()
+                            : "—"}
+                        </td>
+                        <td className="p-2 align-top whitespace-nowrap">
+                          {b.lastReminder?.sentAt ? (
+                            <div>
+                              <div>{fmtDateUK(b.lastReminder.sentAt)}</div>
+                              <div className="text-gray-500">
+                                {fmtTimeUK(b.lastReminder.sentAt)}
+                              </div>
+                            </div>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="p-2 align-top whitespace-nowrap">
+                          {b.lastReminder?.staff || "—"}
+                        </td>
+                        <td className="p-2 align-top whitespace-nowrap">
+                          <div className="font-medium">
+                            {fmtDateUK(b.start_time)}
+                          </div>
+                          <div className="text-gray-500">
+                            {fmtTimeUK(b.start_time)}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {!filtered.length && (
+                    <tr>
+                      <td
+                        colSpan={8}
+                        className="p-6 text-center text-gray-500 text-base"
+                      >
+                        No bookings in range.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Mobile cards */}
+          <div className="lg:hidden space-y-3">
+            {paginated.map((b) => {
+              const cancelled = isCancelledStatus(b.status);
+              const past = isPastBooking(b.start_time, new Date());
+
+              const confirmationStatus = deriveConfirmationStatus(
+                b.confirmation?.status ?? b.confirmation?.response ?? b.confirmation
+              );
+              const bookingConf = isBookingConfirmed(b);
+
+              const rowStatus =
+                confirmationStatus !== "pending"
+                  ? confirmationStatus
+                  : bookingConf
+                  ? "confirmed"
+                  : cancelled
+                  ? "cancelled"
+                  : "pending";
+
+              const responded = rowStatus === "confirmed" || rowStatus === "cancelled";
+              const disabled = cancelled || past || responded;
+              const checked = selectedIds.has(b.id);
+
+              let statusClass = "bg-white";
+              if (rowStatus === "confirmed")
+                statusClass = "bg-green-50 border-l-4 border-green-500";
+              if (rowStatus === "cancelled")
+                statusClass = "bg-pink-50 border-l-4 border-pink-500";
+              if (past && !responded) statusClass = "bg-gray-50";
+
+              return (
+                <div
+                  key={String(b.id)}
+                  className={`border rounded-xl p-3 shadow-sm ${statusClass} ${
+                    disabled ? "opacity-70" : ""
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      className="h-5 w-5 mt-1"
+                      disabled={disabled}
+                      checked={disabled ? false : checked}
+                      onChange={(e) => {
+                        const next = new Set(selectedIds);
+                        if (e.target.checked) next.add(b.id);
+                        else next.delete(b.id);
+                        setSelectedIds(next);
+                      }}
+                    />
+
+                    <div className="flex-1 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold text-base">
                           {b.client.first_name} {b.client.last_name}
                         </span>
 
@@ -929,63 +1149,65 @@ export default function RemindersDialog({
                         )}
 
                         {past && !cancelled && (
-                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 border-gray-200">
                             PAST
                           </span>
                         )}
+
+                        <span
+                          className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border ${
+                            rowStatus === "confirmed"
+                              ? "bg-green-100 text-green-800 border-green-200"
+                              : rowStatus === "cancelled"
+                              ? "bg-pink-100 text-pink-800 border-pink-200"
+                              : "bg-gray-100 text-gray-700 border-gray-200"
+                          }`}
+                        >
+                          {rowStatus === "pending"
+                            ? "PENDING"
+                            : rowStatus.toUpperCase()}
+                        </span>
                       </div>
-                    </td>
 
-                    <td className="p-2">
-                      <div className="truncate max-w-[180px]">{b.client.email || "—"}</div>
-                      <div className="text-gray-500">{b.client.phone || "—"}</div>
-                    </td>
+                      <div className="text-sm">
+                        <div className="break-words">{b.client.email || "—"}</div>
+                        <div className="text-gray-500">{b.client.phone || "—"}</div>
+                      </div>
 
-                    <td className="p-2 whitespace-nowrap">
-                      <span
-                        className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border ${
-                          rowStatus === "confirmed"
-                            ? "bg-green-100 text-green-800 border-green-200"
-                            : rowStatus === "cancelled"
-                            ? "bg-pink-100 text-pink-800 border-pink-200"
-                            : "bg-gray-100 text-gray-700 border-gray-200"
-                        }`}
-                      >
-                        {rowStatus === "pending" ? "PENDING" : rowStatus.toUpperCase()}
-                      </span>
-                    </td>
+                      <div className="text-sm">
+                        <div className="font-medium">{fmtDateUK(b.start_time)}</div>
+                        <div className="text-gray-500">{fmtTimeUK(b.start_time)}</div>
+                      </div>
 
-                    <td className="p-2 whitespace-nowrap">
-                      <div>{b.lastReminder ? "Sent" : "—"}</div>
-                    </td>
-                    <td className="p-2 whitespace-nowrap">
-                      {b.lastReminder?.channel ? b.lastReminder.channel.toUpperCase() : "—"}
-                    </td>
-                    <td className="p-2 whitespace-nowrap">
-                      {b.lastReminder?.sentAt ? fmtDateUK(b.lastReminder.sentAt) : "—"}
-                      {b.lastReminder?.sentAt && (
-                        <div className="text-gray-500">{fmtTimeUK(b.lastReminder.sentAt)}</div>
-                      )}
-                    </td>
-                    <td className="p-2 whitespace-nowrap">{b.lastReminder?.staff || "—"}</td>
+                      <div className="text-xs text-gray-600">
+                        <div>
+                          Last reminder:{" "}
+                          {b.lastReminder?.channel
+                            ? b.lastReminder.channel.toUpperCase()
+                            : "—"}
+                        </div>
+                        {b.lastReminder?.sentAt ? (
+                          <div>
+                            {fmtDateUK(b.lastReminder.sentAt)} •{" "}
+                            {fmtTimeUK(b.lastReminder.sentAt)}
+                          </div>
+                        ) : null}
+                        {b.lastReminder?.staff ? (
+                          <div>Staff: {b.lastReminder.staff}</div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
 
-                    <td className="p-2 whitespace-nowrap">
-                      <div>{fmtDateUK(b.start_time)}</div>
-                      <div className="text-gray-500">{fmtTimeUK(b.start_time)}</div>
-                    </td>
-                  </tr>
-                );
-              })}
-
-              {!filtered.length && (
-                <tr>
-                  <td colSpan={9} className="p-6 text-center text-gray-500 text-lg">
-                    No bookings in range.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+            {!filtered.length && (
+              <div className="p-6 text-center text-gray-500 text-base border rounded-xl">
+                No bookings in range.
+              </div>
+            )}
+          </div>
         </div>
 
         {result && (
