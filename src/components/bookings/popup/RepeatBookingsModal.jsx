@@ -13,6 +13,31 @@ import { v4 as uuidv4 } from "uuid";
 import SaveBookingsLog from "../SaveBookingsLog";
 import { createPortal } from "react-dom";
 
+const DEFAULT_TIMEOUT_MS = 15000;
+
+const withTimeout = async (promiseOrBuilder, label, ms = DEFAULT_TIMEOUT_MS) => {
+  const controller = new AbortController();
+
+  // If this is a Supabase/PostgREST builder, attach an AbortSignal
+  let runner = promiseOrBuilder;
+  if (runner && typeof runner.abortSignal === "function") {
+    runner = runner.abortSignal(controller.signal);
+  }
+
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => {
+      controller.abort();
+      reject(
+        new Error(`${label} timed out. Please check your connection and try again.`)
+      );
+    }, ms);
+  });
+
+  return await Promise.race([runner, timeoutPromise]);
+};
+
+
+
 function patternLabel(pattern, dayOfMonth) {
   switch (pattern) {
     case "weekly":
@@ -92,13 +117,19 @@ export default function RepeatBookingsModal({
       return;
     }
 
+    if (!Array.isArray(blueprint.items) || blueprint.items.length === 0) {
+      setErrorMsg("No services found to repeat for this booking.");
+      return;
+    }
     setSaving(true);
 
     const created = [];
     const skipped = [];
+     const failed = [];
 
     try {
-      const total = Math.max(1, Number(repeatCount) || 0);
+      const total = Math.max(1, parseInt(String(repeatCount), 10) || 0);
+
 
       for (let i = 0; i < total; i++) {
         const occBase = generateOccurrenceBase(i);
@@ -106,23 +137,31 @@ export default function RepeatBookingsModal({
         // overlap check (start < newEnd AND end > newStart)
         let conflict = false;
 
-        for (const item of blueprint.items || []) {
-          const sStart = new Date(occBase.getTime() + item.offsetMin * 60000);
-          const sEnd = new Date(sStart.getTime() + item.duration * 60000);
+        try {
+          for (const item of blueprint.items || []) {
+            const sStart = new Date(occBase.getTime() + item.offsetMin * 60000);
+            const sEnd = new Date(sStart.getTime() + item.duration * 60000);
 
-          const { data: overlaps, error: overlapErr } = await supabaseClient
-            .from("bookings")
-            .select("id")
-            .eq("resource_id", booking.resource_id)
-            .lt("start", toLocalSQL(sEnd))
-            .gt("end", toLocalSQL(sStart));
+            const { data: overlaps, error: overlapErr } = await withTimeout(
+              supabaseClient
+                .from("bookings")
+                .select("id")
+                .eq("resource_id", booking.resource_id)
+                .lt("start", toLocalSQL(sEnd))
+                .gt("end", toLocalSQL(sStart)),
+              "Check for conflicts"
+            );
 
-          if (overlapErr) throw overlapErr;
+            if (overlapErr) throw overlapErr;
 
-          if (overlaps?.length) {
-            conflict = true;
-            break;
+            if (overlaps?.length) {
+              conflict = true;
+              break;
+            }
           }
+        } catch (e) {
+          failed.push({ when: occBase, reason: e?.message || "Conflict check failed" });
+          continue;
         }
 
         if (conflict) {
@@ -150,43 +189,45 @@ export default function RepeatBookingsModal({
             status: "confirmed",
           };
         });
-
-        const { data: inserted, error: insErr } = await supabaseClient
-          .from("bookings")
-          .insert(rows)
-          .select("*");
+ try {
+          const { data: inserted, error: insErr } = await withTimeout(
+            supabaseClient.from("bookings").insert(rows).select("*"),
+            "Create repeat bookings"
+          );
 
         if (insErr) throw insErr;
 
-        created.push({ when: occBase, rows: inserted });
+      created.push({ when: occBase, rows: inserted });
+        } catch (e) {
+          failed.push({ when: occBase, reason: e?.message || "Insert failed" });
+          continue;
+        }
 
         // non-fatal logging
         try {
           const firstItem = blueprint.items?.[0];
           if (firstItem && rows[0]) {
-            await SaveBookingsLog({
-              action: "created",
-              booking_id: newBookingId,
-              client_id: booking.client_id,
-              client_name: booking.client_name,
-              stylist_id: booking.resource_id,
-              stylist_name: stylist?.title || stylist?.name || "Unknown",
-              service: {
-                name: firstItem.title,
-                category: firstItem.category,
-                price: firstItem.price,
-                duration: firstItem.duration,
-              },
-              start: rows[0].start,
-              end: rows[0].end,
-              logged_by: null,
-              reason: `Repeat Booking: ${patternLabel(
-                repeatPattern,
-                repeatDayOfMonth
-              )}`,
-              before_snapshot: null,
-              after_snapshot: rows[0],
-            });
+            SaveBookingsLog({
+  action: "created",
+  booking_id: newBookingId,
+  client_id: booking.client_id,
+  client_name: booking.client_name,
+  stylist_id: booking.resource_id,
+  stylist_name: stylist?.title || stylist?.name || "Unknown",
+  service: {
+    name: firstItem.title,
+    category: firstItem.category,
+    price: firstItem.price,
+    duration: firstItem.duration,
+  },
+  start: rows[0].start,
+  end: rows[0].end,
+  logged_by: null,
+  reason: `Repeat Booking: ${patternLabel(repeatPattern, repeatDayOfMonth)}`,
+  before_snapshot: null,
+  after_snapshot: rows[0],
+}).catch(() => {});
+
           }
         } catch (err) {
           /* non-fatal */
@@ -200,6 +241,12 @@ export default function RepeatBookingsModal({
           created.length === 1 ? "booking" : "bookings"
         } created.`,
         skipped.length ? `${skipped.length} skipped due to conflicts.` : "",
+         failed.length
+          ? `${failed.length} not created due to errors: ${failed
+              .map((f) => f.reason)
+              .filter(Boolean)
+              .join("; ")}`
+          : "",
       ]
         .filter(Boolean)
         .join(" ");
