@@ -10,9 +10,10 @@ const daysOfWeek = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function CalendarModal({ isOpen, onClose, onDateSelect }) {
   const today = new Date();
+   const baseYear = today.getFullYear();
   const [selectedDate, setSelectedDate] = useState(today);
   const [currentMonth, setCurrentMonth] = useState(today.getMonth());
-  const [currentYear, setCurrentYear] = useState(today.getFullYear());
+const [currentYear, setCurrentYear] = useState(baseYear);
 
   const getDaysInMonth = (month, year) =>
     new Date(year, month + 1, 0).getDate();
@@ -36,13 +37,15 @@ export default function CalendarModal({ isOpen, onClose, onDateSelect }) {
   const firstDay = getFirstDayOfMonth(currentMonth, currentYear);
   const emptyDays = Array.from({ length: firstDay });
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+   const nextYear = baseYear + 1;
+  const yearOptions = Array.from({ length: 7 }, (_, i) => nextYear - i);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-2xl shadow-lg w-full max-w-md p-6">
         {/* 🔥 Header */}
 <div className="flex justify-center items-center mb-4">
-  <h2 className="text-xl font-semibold">Select Date</h2>
+  <h2 className="text-xl font-semibold text-black">Select Date</h2>
 </div>
 
 <div className="flex justify-center gap-4 mb-4">
@@ -50,7 +53,7 @@ export default function CalendarModal({ isOpen, onClose, onDateSelect }) {
   <select
     value={currentMonth}
     onChange={(e) => setCurrentMonth(Number(e.target.value))}
-    className="border border-black rounded px-2 py-1"
+     className="border border-black rounded px-2 py-1 bg-white text-gray-900"
   >
     {months.map((month, idx) => (
       <option key={month} value={idx}>
@@ -63,9 +66,9 @@ export default function CalendarModal({ isOpen, onClose, onDateSelect }) {
   <select
     value={currentYear}
     onChange={(e) => setCurrentYear(Number(e.target.value))}
-    className="border border-black rounded px-2 py-1"
-  >
-    {Array.from({ length: 6 }, (_, i) => currentYear - i).map((year) => (
+     className="border border-black rounded px-2 py-1 bg-white text-gray-900"
+>
+    {yearOptions.map((year) => (
       <option key={year} value={year}>
         {year}
       </option>
