@@ -80,6 +80,11 @@ const isCancelledStatus = (status) => {
   return s === "cancelled" || s === "canceled" || s.startsWith("cancel");
 };
 
+const isOnlineBooking = (source) => {
+  const s = String(source || "").trim().toLowerCase();
+  return s === "public" || s === "online" || s.includes("online_booking");
+};
+
 const getConfirmationStatus = (response) => {
   const s = String(response || "").trim().toLowerCase();
   if (!s) return "pending";
@@ -181,6 +186,7 @@ export default function RemindersDialog({
 }) {
   const { currentUser, supabaseClient, baseSupabaseClient } = useAuth();
   const db = supabaseClient || baseSupabaseClient;
+   const PAGE_SIZE = 8;
 
   const baseDate = defaultWeekFromDate
     ? new Date(defaultWeekFromDate)
@@ -205,7 +211,7 @@ export default function RemindersDialog({
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [search, setSearch] = useState("");
   const [result, setResult] = useState(null);
-
+  const [page, setPage] = useState(1);
   // reset range + template on open
   useEffect(() => {
     if (!isOpen) return;
@@ -274,6 +280,7 @@ export default function RemindersDialog({
             client_response,
             confirmed_at,
             cancelled_at,
+             source,
             clients:client_id ( id, first_name, last_name, mobile, email )
           `
         )
@@ -312,6 +319,7 @@ export default function RemindersDialog({
           end_time: b.end || null,
           title: b.title || "Appointment",
           status: b.status || null,
+          source: b.source || null,
           booking_confirmation_status: b.confirmation_status || null,
           client_response: b.client_response || null,
           confirmed_at: b.confirmed_at || null,
@@ -506,7 +514,13 @@ export default function RemindersDialog({
       // Ensure a default confirmation so downstream checks don’t break.
       mapped = mapped.map((r) => ({
         ...r,
-        confirmation: r.confirmation || { status: "pending", respondedAt: null, response: null },
+        confirmation:
+          r.confirmation ||
+          normalizeConfirmation({
+            status: isOnlineBooking(r.source) ? "confirmed" : "pending",
+            respondedAt: null,
+            response: null,
+          }),
       }));
 
       const now = new Date();
@@ -530,6 +544,7 @@ export default function RemindersDialog({
 
       setRows(mapped);
       setSelectedIds(new Set(selectable.map((x) => x.id)));
+       setPage(1);
     } catch (e) {
       console.error(e);
       setRows([]);
@@ -557,23 +572,33 @@ export default function RemindersDialog({
     });
   }, [rows, search]);
 
+   const totalPages = useMemo(() => Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)), [filtered.length]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+    if (page < 1) setPage(1);
+  }, [page, totalPages]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search]);
+
+  const paginated = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return filtered.slice(start, start + PAGE_SIZE);
+  }, [filtered, page, PAGE_SIZE]);
+
   const filteredSelectable = useMemo(() => {
     const now = new Date();
-    return filtered.filter((r) => {
-      const confirmationStatus = deriveConfirmationStatus(
-        r.confirmation?.status ?? r.confirmation?.response ?? r.confirmation
-      );
-      const responded = isFinalResponse(confirmationStatus);
-      const confirmedByBooking = isBookingConfirmed(r);
-
+    return paginated.filter((r) => {
+      const confirmationStatus = deriveConfirmationStatus(r.confirmation?.status);
       return (
         !isCancelledStatus(r.status) &&
         !isPastBooking(r.start_time, now) &&
-        !responded &&
-        !confirmedByBooking
+        !isFinalResponse(confirmationStatus)
       );
     });
-  }, [filtered]);
+  }, [paginated]);
 
   const selectedInFiltered = useMemo(
     () => filteredSelectable.filter((r) => selectedIds.has(r.id)).length,
@@ -585,8 +610,13 @@ export default function RemindersDialog({
     filteredSelectable.every((r) => selectedIds.has(r.id));
 
   const toggleAll = (checked) => {
-    if (checked) setSelectedIds(new Set(filteredSelectable.map((r) => r.id)));
-    else setSelectedIds(new Set());
+  const next = new Set(selectedIds);
+    if (checked) {
+      filteredSelectable.forEach((r) => next.add(r.id));
+    } else {
+      filteredSelectable.forEach((r) => next.delete(r.id));
+    }
+    setSelectedIds(next);
   };
 
   const onSend = async () => {
@@ -683,13 +713,13 @@ export default function RemindersDialog({
   const pastCount = rows.filter((r) => isPastBooking(r.start_time, nowForCounts)).length;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-6">
-      <div className="w-full sm:max-w-4xl bg-white text-gray-900 rounded-t-2xl sm:rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-[100] flex items-end lg:items-center justify-center bg-black/40 p-0 lg:p-6">
+      <div className="w-full lg:max-w-4xl bg-white text-gray-900 rounded-t-2xl lg:rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="p-4 border-b flex items-center gap-3 bg-gray-50">
           <div>
-            <h2 className="text-base sm:text-lg font-semibold">Send Reminders</h2>
-            <p className="text-xs sm:text-sm text-gray-600">
+            <h2 className="text-base lg:text-lg font-semibold">Send Reminders</h2>
+            <p className="text-xs sm:text-lg text-gray-600">
               Loaded: {rows.length}
               {cancelledCount ? ` • ${cancelledCount} cancelled` : ""}
               {pastCount ? ` • ${pastCount} past` : ""}
@@ -700,14 +730,14 @@ export default function RemindersDialog({
 
           <div className="ml-auto flex items-center gap-2">
             <button
-              className="px-3 py-1.5 text-xs sm:text-sm rounded border"
+              className="px-3 py-1.5 text-xs lg:text-lg rounded border"
               onClick={fetchBookings}
               disabled={loading || sending}
             >
               {loading ? "Loading..." : "Refresh"}
             </button>
             <button
-              className="px-3 py-1.5 text-xs sm:text-sm rounded border"
+              className="px-3 py-1.5 text-xs lg:text-lg rounded border"
               onClick={onClose}
             >
               Close
@@ -716,46 +746,55 @@ export default function RemindersDialog({
         </div>
 
         {/* Controls */}
-        <div className="p-4 grid gap-3 sm:grid-cols-4 items-start border-b">
-          <div className="sm:col-span-2 flex items-center gap-2">
-            <label className="text-xs sm:text-sm w-14 sm:w-16">From</label>
+        <div className="p-4 grid gap-3 lg:grid-cols-4 items-start border-b">
+          <div className="lg:col-span-2 flex items-center gap-2">
+            <label className="text-xs lg:text-lg w-14 lg:w-16">From</label>
             <input
               type="date"
-              className="border rounded px-2 py-2 w-full text-sm"
+              className="border rounded px-2 py-2 w-full text-lg"
               value={dateToInputValue(from)}
               onChange={(e) => setFrom(inputValueToDate(e.target.value, false))}
             />
           </div>
 
-          <div className="sm:col-span-2 flex items-center gap-2">
-            <label className="text-xs sm:text-sm w-14 sm:w-16">To</label>
+          <div className="lg:col-span-2 flex items-center gap-2">
+            <label className="text-xs lg:text-lg w-14 lg:w-16">To</label>
             <input
               type="date"
-              className="border rounded px-2 py-2 w-full text-sm"
+              className="border rounded px-2 py-2 w-full text-lg"
               value={dateToInputValue(to)}
               onChange={(e) => setTo(inputValueToDate(e.target.value, true))}
             />
           </div>
 
-          <div className="sm:col-span-1">
-            <label className="block text-xs sm:text-sm mb-1">Channel</label>
-            <select
-              className="border rounded px-2 py-2 w-full text-sm"
-              value={channel}
-              onChange={(e) => setChannel(e.target.value)}
-            >
-              {CHANNELS.map((c) => (
-                <option key={c} value={c}>
-                  {c.toUpperCase()}
-                </option>
-              ))}
-            </select>
+          <div className="lg:col-span-1">
+            <label className="block text-xs lg:text-lg mb-1">Channel</label>
+            <div className="flex gap-2 items-center">
+              {CHANNELS.map((c) => {
+                const isActive = channel === c;
+                const disabledLook = !isActive ? "opacity-60" : "";
+                return (
+                  <label
+                    key={c}
+                    className={`flex items-center gap-1 text-xs sm:text-sm px-2 py-1 border rounded cursor-pointer ${disabledLook}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isActive}
+                      onChange={() => setChannel(c)}
+                      className="h-4 w-4"
+                    />
+                    <span>{c.toUpperCase()}</span>
+                  </label>
+                );
+              })}
+            </div>
           </div>
 
-          <div className="sm:col-span-3">
-            <label className="block text-xs sm:text-sm mb-1">Message template</label>
+          <div className="lg:col-span-3">
+            <label className="block text-xs lg:text-lg mb-1">Message template</label>
             <textarea
-              className="border rounded px-3 py-2 w-full min-h-[110px] text-sm"
+              className="border rounded px-3 py-2 w-full min-h-[110px] text-lg"
               value={template}
               onChange={(e) => setTemplate(e.target.value)}
             />
@@ -765,15 +804,16 @@ export default function RemindersDialog({
         {/* Search + action */}
         <div className="px-4 pt-3 pb-2 flex flex-wrap items-center gap-2">
           <input
-            className="border rounded px-3 py-2 text-sm flex-1 min-w-[200px]"
+            className="border rounded px-3 py-2 text-lg flex-1 min-w-[200px]"
             placeholder="Search name, email, phone"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
 
-          <label className="flex items-center gap-2 text-xs sm:text-sm whitespace-nowrap">
+          <label className="flex items-center gap-2 text-xs lg:text-lg whitespace-nowrap">
             <input
               type="checkbox"
+               className="h-5 w-5"
               checked={allSelectableSelected}
               onChange={(e) => toggleAll(e.target.checked)}
             />
@@ -781,7 +821,7 @@ export default function RemindersDialog({
           </label>
 
           <button
-            className="ml-auto bg-black text-white rounded px-4 py-2 text-sm"
+            className="ml-auto bg-black text-white rounded px-4 py-2 text-lg"
             onClick={onSend}
             disabled={sending || loading}
           >
@@ -791,21 +831,20 @@ export default function RemindersDialog({
 
         {error && (
           <div className="px-4 pb-2">
-            <div className="p-3 bg-red-50 text-red-700 rounded text-sm">{error}</div>
+            <div className="p-3 bg-red-50 text-red-700 rounded text-lg">{error}</div>
           </div>
         )}
 
         {/* Table */}
-        <div className="p-4 overflow-auto border-t">
-          <table className="min-w-full text-xs sm:text-sm">
+       <div className="p-4 border-t">
+          <table className="min-w-full text-xs lg:text-lg">
             <thead className="bg-gray-50 sticky top-0">
               <tr>
                 <th className="p-2 text-left w-10">Sel</th>
                 <th className="p-2 text-left">Client</th>
                 <th className="p-2 text-left">Contact</th>
                 <th className="p-2 text-left">Status</th>
-                <th className="p-2 text-left">Reminder</th>
-                <th className="p-2 text-left">Channel</th>
+                              <th className="p-2 text-left">Channel</th>
                 <th className="p-2 text-left">Sent</th>
                 <th className="p-2 text-left">Staff</th>
                 <th className="p-2 text-left">Appointment</th>
@@ -813,7 +852,7 @@ export default function RemindersDialog({
             </thead>
 
             <tbody>
-              {filtered.map((b) => {
+              {paginated.map((b) => {
                 const cancelled = isCancelledStatus(b.status);
                 const past = isPastBooking(b.start_time, new Date());
 
@@ -865,6 +904,7 @@ export default function RemindersDialog({
                     <td className="p-2">
                       <input
                         type="checkbox"
+                        className="h-5 w-5"
                         disabled={disabled}
                         checked={disabled ? false : checked}
                         onChange={(e) => {
@@ -939,7 +979,7 @@ export default function RemindersDialog({
 
               {!filtered.length && (
                 <tr>
-                  <td colSpan={9} className="p-6 text-center text-gray-500 text-sm">
+                  <td colSpan={9} className="p-6 text-center text-gray-500 text-lg">
                     No bookings in range.
                   </td>
                 </tr>
@@ -950,7 +990,7 @@ export default function RemindersDialog({
 
         {result && (
           <div className="px-4 pb-4">
-            <div className="p-3 bg-green-50 text-green-700 rounded text-sm">
+            <div className="p-3 bg-green-50 text-green-700 rounded text-lg">
               Sent. Total: {result.total_groups ?? result.total ?? "—"} | Success:{" "}
               {result.success ?? "—"} | Failed: {result.failed ?? "—"}
             </div>

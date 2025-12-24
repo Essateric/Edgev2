@@ -183,7 +183,7 @@ const whatsappUrl =
   "https://bit.ly/EdgeWhatsAppChannel"
 
 const smsText = [
-  "🤖 Automated message: replies are handled by our friendly robot haha",
+  "🤖 Automated message: replies are handled by our friendly robot",
   `✅ Thanks ${nameLabel}, your appointment on ${startLabel} has been confirmed!`,
   `👉 Join our WhatsApp channel: ${whatsappUrl}`,
   "💈 From the Edge HD Salon Team",
