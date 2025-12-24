@@ -136,6 +136,65 @@ const deriveConfirmationStatus = (input) => {
   return getConfirmationStatus(normalized);
 };
 
+// Treat bookings as "confirmed" if ANY of the known fields indicates confirmed,
+// even if there's no "respondedAt" (e.g. staff marked confirmed in bookings table).
+const isBookingConfirmed = (row) => {
+  const status = deriveConfirmationStatus(
+    row?.booking_confirmation_status ??
+      row?.confirmation_status ??
+      row?.confirmation?.status ??
+      row?.confirmation?.response ??
+      row?.client_response ??
+      row?.confirmation
+  );
+
+  return status === "confirmed";
+};
+
+const normalizeConfirmation = (input) => {
+  if (!input && input !== false) {
+    return { status: "pending", respondedAt: null, response: null };
+  }
+
+  if (typeof input === "string" || typeof input === "boolean") {
+    const status = deriveConfirmationStatus(input) || "pending";
+    return { status, respondedAt: null, response: input };
+  }
+
+  if (typeof input === "object") {
+    const status = deriveConfirmationStatus(
+      input.status ?? input.response ?? input.choice ?? input.value
+    );
+
+    return {
+      status: status || "pending",
+      respondedAt: input.respondedAt ?? input.responded_at ?? null,
+      response: input.response ?? input.status ?? input.choice ?? input.value ?? null,
+    };
+  }
+
+  const status = deriveConfirmationStatus(input) || "pending";
+  return { status, respondedAt: null, response: input };
+};
+
+const getRowConfirmationStatus = (row) =>
+  deriveConfirmationStatus(
+    row?.confirmation?.status ??
+      row?.confirmation?.response ??
+      row?.booking_confirmation_status ??
+      row?.client_response ??
+      row?.confirmation
+  );
+
+const getEffectiveConfirmationStatus = (row) => {
+  const status = getRowConfirmationStatus(row);
+  const hasResponse =
+    Boolean(row?.confirmation?.respondedAt) ||
+    Boolean(row?.confirmation?.response) ||
+    Boolean(row?.client_response);
+  return hasResponse ? status : "pending";
+};
+
 const isPastBooking = (startIso, now = new Date()) => {
   const d = new Date(startIso);
   return Number.isFinite(d.getTime()) && d.getTime() < now.getTime();
@@ -172,14 +231,6 @@ const pickLatestByTime = (items, getTimeIso) => {
   return best;
 };
 
-// Treat "confirmed" on bookings table as final too
-const isBookingConfirmed = (row) => {
-  const a = String(row?.status || "").trim().toLowerCase();
-  const b = String(row?.booking_confirmation_status || "")
-    .trim()
-    .toLowerCase();
-  return a === "confirmed" || b === "confirmed";
-};
 
 export default function RemindersDialog({
   isOpen,
@@ -203,7 +254,7 @@ export default function RemindersDialog({
   );
   const [to, setTo] = useState(initialTo ? new Date(initialTo) : defaultTo);
 
-  const [channel, setChannel] = useState("email");
+  const [channel, setChannel] = useState("sms");
   const [template, setTemplate] = useState(REMINDER_DEFAULT_TEMPLATE);
 
   const [loading, setLoading] = useState(false);
@@ -313,7 +364,7 @@ export default function RemindersDialog({
 
         // Base confirmation derived from BOOKINGS row
         const baseConfirmStatus = deriveConfirmationStatus(
-          b.confirmation_status ?? b.status ?? b.client_response
+          b.confirmation_status ?? b.client_response ?? null
         );
 
         const row = {
@@ -394,9 +445,9 @@ export default function RemindersDialog({
             response: "cancelled",
           };
         } else {
-          // ✅ Else, if ANY slot is confirmed, treat the whole block as confirmed
-          const existingConf = isBookingConfirmed(existing);
-          const rowConf = isBookingConfirmed(row);
+       // ✅ Else, if ANY slot is confirmed by an explicit confirmation response, treat the whole block as confirmed
+          const existingConf = getRowConfirmationStatus(existing) === "confirmed";
+          const rowConf = getRowConfirmationStatus(row) === "confirmed";
 
           if (existingConf || rowConf) {
             existing.status = "confirmed";
@@ -552,22 +603,19 @@ export default function RemindersDialog({
 
       const now = new Date();
 
-      // ✅ Preselect only contactable bookings (not cancelled/past/responded/confirmed)
-      const selectable = mapped.filter((r) => {
-        const confirmationStatus = deriveConfirmationStatus(
-          r.confirmation?.status ?? r.confirmation?.response ?? r.confirmation
-        );
+const selectable = mapped.filter((r) => {
+  const confirmationStatus = getEffectiveConfirmationStatus(r);
+  const responded = isFinalResponse(confirmationStatus);
+  const bookingConf = isBookingConfirmed(r);
 
-        const responded = isFinalResponse(confirmationStatus);
-        const confirmedByBooking = isBookingConfirmed(r);
+  return (
+    !isCancelledStatus(r.status) &&
+    !isPastBooking(r.start_time, now) &&
+    !responded &&
+    !bookingConf
+  );
+});
 
-        return (
-          !isCancelledStatus(r.status) &&
-          !isPastBooking(r.start_time, now) &&
-          !responded &&
-          !confirmedByBooking
-        );
-      });
 
       setRows(mapped);
       setSelectedIds(new Set(selectable.map((x) => x.id)));
@@ -624,7 +672,7 @@ export default function RemindersDialog({
   const filteredSelectable = useMemo(() => {
     const now = new Date();
     return paginated.filter((r) => {
-      const confirmationStatus = deriveConfirmationStatus(r.confirmation?.status);
+       const confirmationStatus = getEffectiveConfirmationStatus(r);
       const bookingConf = isBookingConfirmed(r);
       return (
         !isCancelledStatus(r.status) &&
@@ -670,21 +718,19 @@ export default function RemindersDialog({
       let selected = rows.filter((r) => selectedIds.has(r.id));
       const now = new Date();
 
-      // ✅ Hard block: never send to cancelled OR past OR responded OR confirmed
-      selected = selected.filter((r) => {
-        const confirmationStatus = deriveConfirmationStatus(
-          r.confirmation?.status ?? r.confirmation?.response ?? r.confirmation
-        );
-        const responded = isFinalResponse(confirmationStatus);
-        const confirmedByBooking = isBookingConfirmed(r);
+selected = selected.filter((r) => {
+  const confirmationStatus = getEffectiveConfirmationStatus(r);
+  const responded = isFinalResponse(confirmationStatus);
+  const confirmedByBooking = isBookingConfirmed(r);
 
-        return (
-          !isCancelledStatus(r.status) &&
-          !isPastBooking(r.start_time, now) &&
-          !responded &&
-          !confirmedByBooking
-        );
-      });
+  return (
+    !isCancelledStatus(r.status) &&
+    !isPastBooking(r.start_time, now) &&
+    !responded &&
+    !confirmedByBooking
+  );
+});
+;
 
       if (!selected.length) {
         throw new Error(
@@ -807,29 +853,32 @@ export default function RemindersDialog({
             />
           </div>
 
-          <div className="lg:col-span-1">
-            <label className="block text-xs lg:text-lg mb-1">Channel</label>
-            <div className="flex gap-2 items-center">
-              {CHANNELS.map((c) => {
-                const isActive = channel === c;
-                const disabledLook = !isActive ? "opacity-60" : "";
-                return (
-                  <label
-                    key={c}
-                    className={`flex items-center gap-1 text-xs sm:text-sm px-2 py-1 border rounded cursor-pointer ${disabledLook}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isActive}
-                      onChange={() => setChannel(c)}
-                      className="h-4 w-4"
-                    />
-                    <span>{c.toUpperCase()}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
+<div className="lg:col-span-1">
+  <label className="block text-xs lg:text-lg mb-1">Channel</label>
+
+  <div className="flex flex-col gap-2">
+    {CHANNELS.map((c) => {
+      const isActive = channel === c;
+      const disabledLook = !isActive ? "opacity-60" : "";
+
+      return (
+        <label
+          key={c}
+          className={`flex items-center gap-2 text-xs sm:text-sm px-2 py-1 border rounded cursor-pointer ${disabledLook}`}
+        >
+          <input
+            type="checkbox"
+            checked={isActive}
+            onChange={() => setChannel(c)}
+            className="h-4 w-4"
+          />
+          <span>{c.toUpperCase()}</span>
+        </label>
+      );
+    })}
+  </div>
+</div>
+
 
           <div className="lg:col-span-3">
             <label className="block text-xs lg:text-lg mb-1">
@@ -909,8 +958,10 @@ export default function RemindersDialog({
 
           {/* Desktop table */}
           <div className="hidden lg:block overflow-hidden rounded-xl border">
-            <div className="max-h-[50vh] overflow-y-auto">
-              <table className="w-full table-fixed text-sm">
+           <div className="max-h-[50vh] overflow-y-auto overflow-x-hidden">
+
+         <table className="w-full table-auto text-sm">
+
                 <thead className="bg-gray-50 sticky top-0 z-10">
                   <tr>
                     <th className="p-2 text-left w-12">Sel</th>
@@ -1037,12 +1088,12 @@ export default function RemindersDialog({
                           </span>
                         </td>
 
-                        <td className="p-2 align-top whitespace-nowrap">
+                        <td className="p-2 align-top">
                           {b.lastReminder?.channel
                             ? b.lastReminder.channel.toUpperCase()
                             : "—"}
                         </td>
-                        <td className="p-2 align-top whitespace-nowrap">
+                        <td className="p-2 align-top">
                           {b.lastReminder?.sentAt ? (
                             <div>
                               <div>{fmtDateUK(b.lastReminder.sentAt)}</div>
@@ -1054,10 +1105,10 @@ export default function RemindersDialog({
                             "—"
                           )}
                         </td>
-                        <td className="p-2 align-top whitespace-nowrap">
+                        <td className="p-2 align-top">
                           {b.lastReminder?.staff || "—"}
                         </td>
-                        <td className="p-2 align-top whitespace-nowrap">
+                        <td className="p-2 align-top">
                           <div className="font-medium">
                             {fmtDateUK(b.start_time)}
                           </div>
