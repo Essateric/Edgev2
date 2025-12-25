@@ -1,5 +1,4 @@
-// src/components/clients/ClientNotesModal.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import baseSupabase from "../../supabaseClient";
 
@@ -56,8 +55,31 @@ export default function ClientNotesModal({
 
   // ✅ IMPORTANT: use token-backed client when available (same behavior as BookingPopUp)
   const db = supabaseClient || baseSupabase;
-   const notesDb = supabaseClient || null; // client_notes SELECT requires authenticated role
-  const notesClientReady = !!notesDb && !!currentUser?.token && !authLoading;
+   const notesDb = supabaseClient || baseSupabase; // client_notes requires authenticated session
+
+  const [notesSessionReady, setNotesSessionReady] = useState(false);
+  const notesClientReady = notesSessionReady && !authLoading;
+
+  useEffect(() => {
+    let cancelled = false;
+    setNotesSessionReady(false);
+
+    if (!notesDb || authLoading) return undefined;
+
+    (async () => {
+      try {
+        const { data, error } = await notesDb.auth.getSession();
+        if (cancelled) return;
+        setNotesSessionReady(!error && !!data?.session);
+      } catch {
+        if (!cancelled) setNotesSessionReady(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [notesDb, authLoading, currentUser?.token]);
 
   // Internal: resolved IDs (fixes “wrong id passed in” issues)
   const [effectiveClientId, setEffectiveClientId] = useState(null);
@@ -146,6 +168,10 @@ export default function ClientNotesModal({
   };
 
 const loadNotes = async ({ cid, bookingRowId, bookingGroupId }) => {
+    if (!notesClientReady) {
+      setNotes([]);
+      return;
+    }
     const filters = [];
     if (cid) filters.push(`client_id.eq.${cid}`);
     if (bookingRowId) filters.push(`booking_id.eq.${bookingRowId}`);
@@ -248,17 +274,21 @@ const loadNotes = async ({ cid, bookingRowId, bookingGroupId }) => {
   // -------- data loads --------
   // Client + stylist name on open (uses effectiveClientId)
   useEffect(() => {
-    if (!isOpen || !effectiveClientId) return;
+    if (!isOpen) return;
     let active = true;
 
     (async () => {
-      const { data, error } = await db
-        .from("clients")
-        .select("id, first_name, last_name, email")
-        .eq("id", effectiveClientId)
-        .maybeSingle();
+     const filters = [];
+      if (effectiveClientId) filters.push(`client_id.eq.${effectiveClientId}`);
+      if (bookingId) filters.push(`booking_id.eq.${bookingId}`);
+      if (effectiveBookingRowId) filters.push(`id.eq.${effectiveBookingRowId}`);
 
-      if (!active) return;
+      if (!filters.length) {
+        setHistory([]);
+        setBookingMetaByRowId({});
+        setBookingMetaByGroupId({});
+        return;
+      }
 
       if (!error && data) {
         setClient(data);
@@ -294,93 +324,100 @@ const loadNotes = async ({ cid, bookingRowId, bookingGroupId }) => {
       loadNotes({ cid: effectiveClientId });
       setNotesPage(1);
     }
- }, [isOpen, effectiveClientId, effectiveBookingRowId, bookingId]);
+ }, [isOpen, effectiveClientId, effectiveBookingRowId, bookingId, notesClientReady]);
 
   // --- Load history (bookings) when opened ---
-  useEffect(() => {
+  const loadHistory = useCallback(async () => {
     if (!isOpen || !effectiveClientId) return;
+    const { data, error } = await db
+      .from("bookings")
+      .select("id, booking_id, start, title, category, resource_id")
+     .or(filters.join(","))
+      .order("start", { ascending: false })
+      .order("id", { ascending: true });
+
+     if (error) {
+      console.error("History fetch failed:", error.message);
+      setHistory([]);
+      setBookingMetaByRowId({});
+      setBookingMetaByGroupId({});
+      return;
+    }
+     const rows = data || [];
+
+const seen = new Set();
+    const unique = [];
+    for (const b of rows) {
+      const d = new Date(b.start);
+      const startIso = isNaN(d) ? "" : d.toISOString();
+      const k = [b.resource_id || "", startIso, b.title || ""].join("|");
+      if (!seen.has(k)) {
+        seen.add(k);
+        unique.push(b);
+      }
+    }
+ setHistory(unique);
+    setHistoryPage(1);
+
+    // Provider map
+    const ids = Array.from(new Set(unique.map((b) => b.resource_id).filter(Boolean)));
+    if (ids.length) {
+      const { data: staffRows, error: staffErr } = await db
+        .from("staff")
+        .select("id, name, permission, email")
+        .in("id", ids);
+
+      if (!staffErr) {
+        const map = {};
+        (staffRows || []).forEach((s) => {
+          map[s.id] = s.name || s.email || s.permission || "—";
+        });
+        setProviderMap(map);
+      }
+    }
+
+       // Booking metadata for notes context
+    const byRow = {};
+    const byGroup = {};
+    unique.forEach((b) => {
+      const when = isNaN(new Date(b.start))
+        ? "—"
+        : format(new Date(b.start), "dd MMM yyyy");
+      const meta = {
+        when,
+        title: (b.category ? `${b.category}: ` : "") + (b.title || ""),
+      };
+      byRow[b.id] = meta;
+      if (b.booking_id) byGroup[b.booking_id] = meta; // bookings.booking_id (text)
+    });
+
+ setBookingMetaByRowId(byRow);
+    setBookingMetaByGroupId(byGroup);
+  }, [db, effectiveClientId, isOpen]);
+     useEffect(() => {
     let active = true;
-
-    (async () => {
-      const { data, error } = await db
-        .from("bookings")
-        .select("id, booking_id, start, title, category, resource_id")
-        .eq("client_id", effectiveClientId)
-        .order("start", { ascending: false })
-        .order("id", { ascending: true });
-
+(async () => {
+      await loadHistory();
       if (!active) return;
-
-      if (error) {
-        console.error("History fetch failed:", error.message);
-        setHistory([]);
-        setBookingMetaByRowId({});
-        setBookingMetaByGroupId({});
-        return;
-      }
-
-      const rows = data || [];
-
-      // De-duplicate by natural key (resource_id + start + title) safely
-      const seen = new Set();
-      const unique = [];
-      for (const b of rows) {
-        const d = new Date(b.start);
-        const startIso = isNaN(d) ? "" : d.toISOString();
-        const k = [b.resource_id || "", startIso, b.title || ""].join("|");
-        if (!seen.has(k)) {
-          seen.add(k);
-          unique.push(b);
-        }
-      }
-
-      setHistory(unique);
-      setHistoryPage(1);
-
-      // Provider map
-      const ids = Array.from(
-        new Set(unique.map((b) => b.resource_id).filter(Boolean))
-      );
-      if (ids.length) {
-        const { data: staffRows, error: staffErr } = await db
-          .from("staff")
-          .select("id, name, permission, email")
-          .in("id", ids);
-
-        if (!active) return;
-
-        if (!staffErr) {
-          const map = {};
-          (staffRows || []).forEach((s) => {
-            map[s.id] = s.name || s.email || s.permission || "—";
-          });
-          setProviderMap(map);
-        }
-      }
-
-      // Booking metadata for notes context
-      const byRow = {};
-      const byGroup = {};
-      unique.forEach((b) => {
-        const when = isNaN(new Date(b.start))
-          ? "—"
-          : format(new Date(b.start), "dd MMM yyyy");
-        const meta = {
-          when,
-          title: (b.category ? `${b.category}: ` : "") + (b.title || ""),
-        };
-        byRow[b.id] = meta;
-        if (b.booking_id) byGroup[b.booking_id] = meta; // bookings.booking_id (text)
-      });
-
-      setBookingMetaByRowId(byRow);
-      setBookingMetaByGroupId(byGroup);
     })();
 
     return () => {
       active = false;
     };
-  }, [isOpen, effectiveClientId, db]);
+   }, [loadHistory]);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    const handleBookingsChanged = () => {
+      void loadHistory();
+    };
+
+    window.addEventListener("bookings:changed", handleBookingsChanged);
+    return () => {
+      window.removeEventListener("bookings:changed", handleBookingsChanged);
+    };
+  }, [isOpen, loadHistory]);
 
   // -------- pagination helpers --------
   const paginatedHistory = useMemo(() => {
