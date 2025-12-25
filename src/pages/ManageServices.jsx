@@ -2,9 +2,29 @@ import React, { useState, useEffect, useMemo } from "react";
 import Card from "../components/Card.jsx";
 import Button from "../components/Button.jsx";
 import toast from "react-hot-toast";
-import { supabase } from "../supabaseClient";
+import { supabase as defaultSupabase } from "../supabaseClient";
+import { useAuth } from "../contexts/AuthContext";
 
 export default function ManageServices({ staffId }) {
+  const { supabaseClient } = useAuth();
+  const supabase = supabaseClient || defaultSupabase;
+
+  const withTimeout = async (promise, ms, label) => {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`${label} timeout after ${ms}ms`)),
+            ms
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   const [services, setServices] = useState([]);
   const [customData, setCustomData] = useState({}); // kept (unused) to preserve existing logic surface
   const [saving, setSaving] = useState(false);
@@ -30,7 +50,11 @@ export default function ManageServices({ staffId }) {
   ];
 
   const fetchServices = async () => {
-    const { data, error } = await supabase.from("services").select("*");
+    const { data, error } = await withTimeout(
+      supabase.from("services").select("*"),
+      5000,
+      "fetch services"
+    );
     if (error) {
       toast.error("Failed to fetch services");
       console.error(error);
@@ -40,10 +64,11 @@ export default function ManageServices({ staffId }) {
   };
 
   const fetchStaff = async () => {
-    const { data, error } = await supabase
-      .from("staff")
-      .select("id,name,permission,email")
-      .order("name");
+  const { data, error } = await withTimeout(
+      supabase.from("staff").select("id,name,permission,email").order("name"),
+      5000,
+      "fetch staff"
+    );
     if (error) {
       toast.error("Failed to fetch staff");
       console.error(error);

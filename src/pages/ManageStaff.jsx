@@ -1,7 +1,6 @@
 // File: src/pages/ManageStaff.jsx
 import React, { useEffect, useState } from "react";
 import { supabase as defaultSupabase } from "../supabaseClient";
-import { createClient } from "@supabase/supabase-js";
 import EditHoursModal from "../components/EditHoursModal";
 import EditServicesModal from "../components/EditServicesModal";
 import AddNewStaffModal from "../components/AddNewStaffModal";
@@ -51,27 +50,47 @@ export default function ManageStaff() {
   const [showRoleModal, setShowRoleModal] = useState(false);
   const [roleStaff, setRoleStaff] = useState(null);
 
-  const { currentUser, pageLoading, authLoading } = useAuth();
+ const { currentUser, pageLoading, authLoading, supabaseClient } = useAuth();
 
   const [loading, setLoading] = useState(true);
 
-  const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-  const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+ const supabase = supabaseClient || defaultSupabase;
 
   // Fetch staff and services data from DB
   useEffect(() => {
     fetchData();
   }, []);
 
+  const withTimeout = async (promise, ms, label) => {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`${label} timeout after ${ms}ms`)),
+            ms
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   const fetchData = async () => {
     setLoading(true);
     try {
-      const { data: staffData, error: staffError } = await defaultSupabase
-        .from("staff")
-        .select("*");
-      const { data: servicesData, error: servicesError } = await defaultSupabase
-        .from("services")
-        .select("id, name, category");
+       const { data: staffData, error: staffError } = await withTimeout(
+        supabase.from("staff").select("*"),
+        5000,
+        "staff fetch"
+      );
+      const { data: servicesData, error: servicesError } = await withTimeout(
+        supabase.from("services").select("id, name, category"),
+        5000,
+        "services fetch"
+      );
 
       if (staffError) {
         console.error("❌ Error fetching staff:", staffError);
@@ -124,12 +143,11 @@ export default function ManageStaff() {
       return;
     }
 
-    // 1) Fetch current weekly_hours (for patch/merge)
-    const { data: oldData, error: fetchError } = await defaultSupabase
-      .from("staff")
-      .select("weekly_hours")
-      .eq("id", modalStaff.id)
-      .single();
+   const { data: oldData, error: fetchError } = await withTimeout(
+      supabase.from("staff").select("weekly_hours").eq("id", modalStaff.id).single(),
+      5000,
+      "load weekly hours"
+    );
 
     if (fetchError) {
       alert("❌ Error fetching current hours: " + fetchError.message);
@@ -163,11 +181,12 @@ export default function ManageStaff() {
     // 3) Merge and log
     const updatedWeeklyHours = { ...oldHours, ...changes };
 
-    // 4) Update — reuse defaultSupabase; DO NOT call .select() here
-    const { error: updateError } = await defaultSupabase
-      .from("staff")
-      .update({ weekly_hours: updatedWeeklyHours })
-      .eq("id", modalStaff.id);
+// 4) Update — reuse Supabase; DO NOT call .select() here
+    const { error: updateError } = await withTimeout(
+      supabase.from("staff").update({ weekly_hours: updatedWeeklyHours }).eq("id", modalStaff.id),
+      5000,
+      "update weekly hours"
+    );
 
     if (updateError) {
       alert("❌ Error saving hours: " + updateError.message);
@@ -246,10 +265,11 @@ export default function ManageStaff() {
       alert("❌ No staff member selected.");
       return;
     }
-    const { error } = await defaultSupabase
-      .from("staff")
-      .update({ permission: newRole })
-      .eq("id", roleStaff.id);
+    const { error } = await withTimeout(
+      supabase.from("staff").update({ permission: newRole }).eq("id", roleStaff.id),
+      5000,
+      "update role"
+    );
 
     if (error) {
       alert("❌ Error updating role: " + error.message);
