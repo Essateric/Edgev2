@@ -789,6 +789,7 @@ const supabase = auth?.supabaseClient || baseSupabase;
       />
 
       <BookingPopUp
+      supabaseClient={supabase}
         isOpen={!!selectedBooking}
         booking={selectedBooking}
         onClose={() => setSelectedBooking(null)}

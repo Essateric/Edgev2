@@ -14,10 +14,12 @@ import ServicesList from "./popup/ServicesList";
 import ActionsBar from "./popup/ActionsBar";
 import ActionsPopover from "./popup/ActionsPopover";
 import ClientNotesModal from "../clients/ClientNotesModal";
-import RepeatBookingsModal from "./popup/RepeatBookingsModal"; // ESM import
+import RepeatBookingsModal from "./popup/RepeatBookingsModal";
 
 /* Layout styles for the roomy popup */
 import "../../styles/modal-tidy.css";
+import { format, differenceInDays } from "date-fns";
+import { Check, X, Clock } from "lucide-react";
 
 /* ✅ Small toggle switch (no deps) */
 function ToggleSwitch({ checked, onChange, disabled = false, label }) {
@@ -51,6 +53,42 @@ function ToggleSwitch({ checked, onChange, disabled = false, label }) {
   );
 }
 
+// Defensive cancelled check (handles "cancelled", "canceled", whitespace, case)
+const isCancelledStatus = (status) => {
+  const s = String(status || "").trim().toLowerCase();
+  return (
+    s === "cancelled" ||
+    s === "canceled" ||
+    s.startsWith("cancel") ||
+    s.includes("cancelled") ||
+    s.includes("canceled")
+  );
+};
+
+const toDateSafe = (v) => {
+  if (!v) return null;
+  if (v instanceof Date) return v;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const getStart = (b) => toDateSafe(b?.start ?? b?.start_time);
+const getEnd = (b) => toDateSafe(b?.end ?? b?.end_time) ?? getStart(b);
+
+function guessRepeatLabel(series) {
+  if (!series || series.length < 2) return "Repeat bookings";
+
+  const s0 = getStart(series[0]);
+  const s1 = getStart(series[1]);
+  if (!s0 || !s1) return "Repeat bookings";
+
+  const d = differenceInDays(s1, s0);
+  if (d >= 27 && d <= 33) return "Monthly";
+  if (d >= 6 && d <= 8) return "Weekly";
+  if (d >= 13 && d <= 15) return "Fortnightly";
+  return "Repeat (custom)";
+}
+
 export default function BookingPopUp(props) {
   const { isOpen, booking } = props;
   if (!isOpen || !booking) return null;
@@ -66,7 +104,7 @@ function BookingPopUpBody({
   stylistList = [],
   clients = [],
 
-  // ✅ NEW (optional): lets CalendarPage update its local events immediately
+  // ✅ optional: lets CalendarPage update its local events immediately
   onBookingUpdated,
 }) {
   const { supabaseClient } = useAuth();
@@ -76,7 +114,7 @@ function BookingPopUpBody({
   const [isEditingDob, setIsEditingDob] = useState(false);
   const [showRepeat, setShowRepeat] = useState(false);
 
-  // ✅ NEW: lock UI state
+  // ✅ lock UI state
   const [lockBooking, setLockBooking] = useState(false);
   const [lockSaving, setLockSaving] = useState(false);
   const [lockError, setLockError] = useState("");
@@ -97,7 +135,7 @@ function BookingPopUpBody({
 
   // client
   const {
-    client,
+    client, // kept (existing logic)
     displayClient,
     loading: clientLoading,
     err: clientError,
@@ -136,7 +174,7 @@ function BookingPopUpBody({
     }
   }, [displayClient, setDobInput]);
 
-  // derived
+  // derived totals
   const serviceTotal = useMemo(
     () =>
       (displayServices || []).reduce(
@@ -152,7 +190,7 @@ function BookingPopUpBody({
 
   const clientPhone = displayClient?.mobile || "N/A";
 
-  // ✅ FIX: derive email and pass it to the UI
+  // ✅ email derived safely
   const clientEmail =
     displayClient?.email || booking?.client_email || booking?.email || "N/A";
 
@@ -163,7 +201,7 @@ function BookingPopUpBody({
     (Array.isArray(relatedBookings) &&
       relatedBookings.some((r) => r.source === "public"));
 
-  // ✅ NEW: derive lock state (treat the group as locked if ANY row is locked)
+  // ✅ lock derived (treat the group as locked if ANY row is locked)
   const derivedLocked = useMemo(() => {
     const fromGroup =
       Array.isArray(relatedBookings) && relatedBookings.length > 0
@@ -180,6 +218,53 @@ function BookingPopUpBody({
     setLockBooking(!!derivedLocked);
     setLockError("");
   }, [isOpen, derivedLocked]);
+
+  // ✅ FIX: show repeat bookings summary + list on the popup page
+  const repeatSeries = useMemo(() => {
+    // If we have a group, use it; otherwise just show the single booking.
+    const base = Array.isArray(relatedBookings) && relatedBookings.length
+      ? relatedBookings
+      : [booking];
+
+    // De-dupe by id and sort by start time
+    const map = new Map();
+    for (const b of base) {
+      if (b?.id) map.set(b.id, b);
+    }
+
+    const list = Array.from(map.values()).sort((a, b) => {
+      const sa = getStart(a)?.getTime() ?? 0;
+      const sb = getStart(b)?.getTime() ?? 0;
+      return sa - sb;
+    });
+
+    return list;
+  }, [relatedBookings, booking]);
+
+  const repeatSummary = useMemo(() => {
+    if (!repeatSeries || repeatSeries.length <= 1) return null;
+
+    const now = new Date();
+    const label = guessRepeatLabel(repeatSeries);
+    const pastCount = repeatSeries.filter((b) => {
+      const end = getEnd(b);
+      return end && end < now;
+    }).length;
+
+    // Best-effort "attended": past + not cancelled (no attendance column exists)
+    const attendedCount = repeatSeries.filter((b) => {
+      const end = getEnd(b);
+      if (!end || end >= now) return false;
+      return !isCancelledStatus(b?.status);
+    }).length;
+
+    return {
+      label,
+      total: repeatSeries.length,
+      pastCount,
+      attendedCount,
+    };
+  }, [repeatSeries]);
 
   // handlers
   const handleCancelBooking = async () => {
@@ -246,7 +331,7 @@ function BookingPopUpBody({
     return { ok: true, data };
   };
 
-  // ✅ NEW: lock/unlock booking group
+  // ✅ lock/unlock booking group
   const handleToggleLock = async (nextVal) => {
     if (!supabaseClient) return;
     setLockError("");
@@ -275,7 +360,6 @@ function BookingPopUpBody({
 
       setLockBooking(next);
 
-      // tell CalendarPage (optional) so it can update events state immediately
       onBookingUpdated?.({
         id: booking.id,
         booking_id: booking.booking_id ?? null,
@@ -284,7 +368,6 @@ function BookingPopUpBody({
     } catch (e) {
       console.error("[BookingPopUp] lock update failed:", e);
       setLockError(e?.message || "Failed to update lock");
-      // revert toggle to derived state
       setLockBooking(!!derivedLocked);
     } finally {
       setLockSaving(false);
@@ -322,14 +405,13 @@ function BookingPopUpBody({
 
   return (
     <ModalLarge isOpen={isOpen} onClose={onClose} hideCloseIcon zIndex={50}>
-      {/* === New layout wrapper that lets the popup breathe === */}
       <div className="modal-panel">
         {/* Header region */}
         <div className="modal-panel__header">
           <BookingHeader
             clientName={clientName}
             clientPhone={clientPhone}
-            clientEmail={clientEmail} // ✅ NEW
+            clientEmail={clientEmail}
             isOnline={isOnline}
             isEditingDob={isEditingDob}
             dobInput={dobInput}
@@ -369,9 +451,87 @@ function BookingPopUpBody({
             displayServices={displayServices}
             serviceTotal={serviceTotal}
           />
+
+          {/* ✅ Repeat bookings summary + dates list (on the popup page) */}
+          <div className="mt-4">
+            <div className="border rounded-lg p-3 bg-gray-50">
+              <div className="flex items-start justify-between gap-3">
+                <div className="font-semibold text-gray-900">
+                  {repeatSummary
+                    ? `Repeat bookings: ${repeatSummary.label} (${repeatSummary.total})`
+                    : "Repeat bookings: None"}
+                </div>
+
+                {repeatSummary && (
+                  <div className="text-sm text-gray-600 whitespace-nowrap">
+                    Completed: {repeatSummary.attendedCount}/{repeatSummary.pastCount}
+                  </div>
+                )}
+              </div>
+
+              {repeatSummary && (
+                <div className="mt-3 space-y-2">
+                  {repeatSeries.map((b) => {
+                    const start = getStart(b);
+                    const end = getEnd(b) ?? start;
+                    const now = new Date();
+
+                    const cancelled = isCancelledStatus(b?.status);
+                    const isPast = !!end && end < now;
+                    const isFuture = !!start && start >= now;
+
+                    let Icon = Clock;
+                    let iconClass = "text-gray-400";
+                    let rightLabel = "Upcoming";
+
+                    if (cancelled) {
+                      Icon = X;
+                      iconClass = "text-red-600";
+                      rightLabel = "Cancelled";
+                    } else if (isPast) {
+                      Icon = Check;
+                      iconClass = "text-green-600";
+                      rightLabel = "Done";
+                    } else if (isFuture) {
+                      Icon = Clock;
+                      iconClass = "text-gray-400";
+                      rightLabel = "Upcoming";
+                    }
+
+                    return (
+                      <div
+                        key={b.id}
+                        className="flex items-center justify-between text-sm"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Icon className={`w-4 h-4 ${iconClass}`} />
+                          <span className="font-medium truncate">
+                            {start
+                              ? `${format(start, "eee dd MMM yyyy")} • ${format(
+                                  start,
+                                  "HH:mm"
+                                )}`
+                              : "Unknown date"}
+                          </span>
+                        </div>
+
+                        <span className="text-gray-600">{rightLabel}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {!repeatSummary && (
+                <div className="mt-2 text-sm text-gray-500">
+                  This booking isn’t part of a repeat series.
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
-        {/* Actions row (flex, wraps on small screens) */}
+        {/* Actions row */}
         <div className="modal-panel__actions">
           <ActionsBar
             onOpenRepeat={() => setShowRepeat(true)}
@@ -395,7 +555,7 @@ function BookingPopUpBody({
         <ClientNotesModal
           modalZIndex={60}
           clientId={displayClient?.id || booking?.client_id || null}
-          clientEmail={clientEmail} // ✅ NEW
+          clientEmail={clientEmail}
           bookingId={booking?.id}
           isOpen={showNotesModal}
           onClose={() => setShowNotesModal(false)}
@@ -417,12 +577,12 @@ function BookingPopUpBody({
               );
 
               // kept from the other version (prevents “removed” diff)
-              const clientEmail =
+              const _clientEmail =
                 displayClient?.email ||
                 booking?.client_email ||
                 booking?.email ||
                 "N/A";
-              void clientEmail;
+              void _clientEmail;
 
               setNotes(filtered);
             } catch {
@@ -432,7 +592,7 @@ function BookingPopUpBody({
         />
       )}
 
-      {/* Repeat bookings modal */}
+      {/* Repeat bookings modal (still used to create/manage repeats) */}
       <RepeatBookingsModal
         open={showRepeat}
         onClose={() => setShowRepeat(false)}

@@ -506,12 +506,46 @@ let refreshToken = u?.refresh_token || null;
           return;
         }
 
-        // 4) Private routes: best-effort Supabase session
-const { data, error } = await withTimeout(
-          supabase.auth.getSession(),
-          5000,
-          "supabase.auth.getSession"
-        );
+const supabaseUrl = getSupabaseUrl();
+        const supabaseAnon = getSupabaseAnonKey();
+        const canAttemptSupabase =
+          !!supabaseUrl &&
+          !!supabaseAnon &&
+          (typeof navigator === "undefined" || navigator.onLine);
+
+        if (!canAttemptSupabase) {
+          setCurrentUser(null);
+          if (!cancelled) {
+            setAuthLoading(false);
+            if (typeof window !== "undefined") {
+              window.location.replace("/login");
+            }
+          }
+          return;
+        }
+
+        let data;
+        let error;
+        try {
+          const response = await withTimeout(
+            supabase.auth.getSession(),
+            5000,
+            "supabase.auth.getSession"
+          );
+          data = response?.data;
+          error = response?.error;
+        } catch (e) {
+          if (!cancelled && String(e?.message || "").includes("timeout")) {
+            setCurrentUser(null);
+            setAuthLoading(false);
+            if (typeof window !== "undefined") {
+              window.location.replace("/login");
+            }
+            return;
+          }
+          throw e;
+        }
+        
         if (cancelled) return;
 
          if (error) {
