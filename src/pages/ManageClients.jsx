@@ -1,12 +1,14 @@
-// src/pages/ManageClients.jsx
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabaseClient";
 import Button from "../components/Button";
 import Card from "../components/Card";
+import { useAuth } from "../contexts/AuthContext";
 
 const COLS = "id,first_name,last_name,mobile,email,notes,created_at";
 
 export default function ManageClients() {
+    const { supabaseClient } = useAuth();
+  const db = useMemo(() => supabaseClient || supabase, [supabaseClient]);
   const [clients, setClients] = useState([]);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -35,13 +37,13 @@ useEffect(() => {
   let mounted = true;
   (async () => {
     try {
-      const { data } = await supabase.auth.getUser();
+         const { data } = await db.auth.getUser();
       const email = data?.user?.email;
       if (!email) {
         if (mounted) setIsAdmin(false);
         return;
       }
-      const { data: staffRow, error } = await supabase
+       const { data: staffRow, error } = await db
         .from("staff")
         .select("permission")
         .eq("email", email)
@@ -55,7 +57,8 @@ useEffect(() => {
     }
   })();
   return () => { mounted = false; };
-}, []);
+}, [db]);
+
 
 
   const fetchClients = useCallback(async () => {
@@ -67,7 +70,7 @@ useEffect(() => {
     const like = `%${s.replace(/[%_]/g, "\\$&")}%`;
 
     try {
-      let q = supabase.from("clients").select(COLS, { count: "exact" });
+        let q = db.from("clients").select(COLS, { count: "exact" });
 
       if (s) {
         const ors = [
@@ -113,7 +116,7 @@ useEffect(() => {
           { status, message: error.message }
         );
 
-        let fb = supabase
+ let fb = db
           .from("clients")
           .select("id,first_name,last_name,mobile,email,notes", { count: "exact" });
 
@@ -151,7 +154,7 @@ useEffect(() => {
     } finally {
       setLoading(false);
     }
-  }, [from, to, debouncedSearch, sortKey]);
+  }, [db, from, to, debouncedSearch, sortKey]);
 
   useEffect(() => {
     fetchClients();
@@ -165,7 +168,7 @@ useEffect(() => {
 
     setErrorMsg("");
 
-    const { error } = await supabase.from("clients").insert([
+  const { error } = await db.from("clients").insert([
       {
         first_name: fn,
         last_name: ln || null,
@@ -197,7 +200,7 @@ useEffect(() => {
     setLoading(true);
     setErrorMsg("");
     try {
-      const { error } = await supabase.from("clients").delete().eq("id", client.id);
+     const { error } = await db.from("clients").delete().eq("id", client.id);
       if (error) {
         // typical FK message when bookings exist
         if (/foreign key/i.test(error.message) || /violates/.test(error.message)) {
