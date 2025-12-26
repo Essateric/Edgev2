@@ -17,8 +17,7 @@ import NewBooking from "../components/bookings/NewBooking";
 
 import useUnavailableTimeBlocks from "../components/UnavailableTimeBlocks";
 import UseSalonClosedBlocks from "../components/UseSalonClosedBlocks";
-import UseTimeSlotLabel from "../utils/UseTimeSlotLabel";
-import AddGridTimeLabels from "../utils/AddGridTimeLabels";
+import useAddGridTimeLabels from "../utils/AddGridTimeLabels";
 
 import baseSupabase from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
@@ -86,6 +85,9 @@ const isConfirmedStatus = (status) => {
 export default function CalendarPage() {
   const [stylistList, setStylistList] = useState([]);
 
+    // Add subtle quarter-hour labels to each calendar grid cell
+  useAddGridTimeLabels(9, 20, 15);
+
  const mapBookingRowToEvent = (b, fallbackConfirmed = false) => {
     const stylistRow = stylistList.find((s) => s.id === b.resource_id);
     const start = b.start ?? b.start_time;
@@ -144,6 +146,8 @@ const supabase = auth?.supabaseClient || baseSupabase;
 
   const [loading, setLoading] = useState(true); // data fetch in progress
   const [ready, setReady] = useState(false); // calendar is allowed to render
+   // Add subtle quarter-hour labels to each calendar grid cell (rerun when calendar renders/navigates)
+  useAddGridTimeLabels(9, 20, 15, [ready, visibleDate]);
   const [showReminders, setShowReminders] = useState(false);
   const [errText, setErrText] = useState("");
   const [reviewData, setReviewData] = useState(null);
