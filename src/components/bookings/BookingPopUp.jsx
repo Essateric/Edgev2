@@ -164,6 +164,7 @@ function BookingPopUpBody({
   const { relatedBookings, displayServices, blueprint } = useRelatedBookings({
     supabase: supabaseClient,
     bookingGroupId: booking?.booking_id,
+     repeatSeriesId: booking?.repeat_series_id || null,
   });
 
   // notes

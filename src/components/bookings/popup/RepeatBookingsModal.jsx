@@ -24,19 +24,24 @@ const withTimeout = async (promiseOrBuilder, label, ms = DEFAULT_TIMEOUT_MS) => 
     runner = runner.abortSignal(controller.signal);
   }
 
+  let timeoutId;
   const timeoutPromise = new Promise((_, reject) => {
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
       controller.abort();
       reject(
-        new Error(`${label} timed out. Please check your connection and try again.`)
+        new Error(
+          `${label} timed out. Please check your connection and try again.`
+        )
       );
     }, ms);
   });
 
-  return await Promise.race([runner, timeoutPromise]);
+  try {
+    return await Promise.race([runner, timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 };
-
-
 
 function patternLabel(pattern, dayOfMonth) {
   switch (pattern) {
@@ -89,11 +94,7 @@ export default function RepeatBookingsModal({
       case "yearly":
         return setHMS(addYearsPreserveDay(base, index + 1), h, m);
       case "monthly_nth_day": {
-        const nextMonth = addMonthsPreserveDay(
-          base,
-          index + 1,
-          repeatDayOfMonth
-        );
+        const nextMonth = addMonthsPreserveDay(base, index + 1, repeatDayOfMonth);
         return setHMS(nextMonth, h, m);
       }
       default:
@@ -116,39 +117,14 @@ export default function RepeatBookingsModal({
       setErrorMsg("Missing service blueprint or stylist.");
       return;
     }
-
     if (!Array.isArray(blueprint.items) || blueprint.items.length === 0) {
       setErrorMsg("No services found to repeat for this booking.");
       return;
     }
-    setSaving(true);
-    @@ -101,125 +101,151 @@ export default function RepeatBookingsModal({
-    }
-  };
 
-  const createRepeatSet = async () => {
-    setErrorMsg("");
-
-    if (!supabaseClient) {
-      setErrorMsg("Not signed in. Please refresh and sign in again.");
-      return;
-    }
-    if (!booking?.start) {
-      setErrorMsg("Missing booking start time.");
-      return;
-    }
-    if (!blueprint || !stylist) {
-      setErrorMsg("Missing service blueprint or stylist.");
-      return;
-    }
-
-    if (!Array.isArray(blueprint.items) || blueprint.items.length === 0) {
-      setErrorMsg("No services found to repeat for this booking.");
-      return;
-    }
     setSaving(true);
 
-    const repeatSeriesId = booking?.repeat_series_id || uuidv4();
+ const repeatSeriesId = booking?.repeat_series_id || uuidv4();
     const bookingGroupId = booking?.booking_id || null;
     const clientId = booking?.client_id || null;
 
@@ -171,14 +147,12 @@ export default function RepeatBookingsModal({
       }
     }
 
-
     const created = [];
     const skipped = [];
-     const failed = [];
+    const failed = [];
 
     try {
       const total = Math.max(1, parseInt(String(repeatCount), 10) || 0);
-
 
       for (let i = 0; i < total; i++) {
         const occBase = generateOccurrenceBase(i);
@@ -188,8 +162,11 @@ export default function RepeatBookingsModal({
 
         try {
           for (const item of blueprint.items || []) {
-            const sStart = new Date(occBase.getTime() + item.offsetMin * 60000);
-            const sEnd = new Date(sStart.getTime() + item.duration * 60000);
+            const offsetMin = Number(item.offsetMin || 0);
+            const durationMin = Number(item.duration || 0);
+
+            const sStart = new Date(occBase.getTime() + offsetMin * 60000);
+            const sEnd = new Date(sStart.getTime() + durationMin * 60000);
 
             const { data: overlaps, error: overlapErr } = await withTimeout(
               supabaseClient
@@ -224,12 +201,15 @@ export default function RepeatBookingsModal({
         // create rows
         const newBookingId = uuidv4();
         const rows = (blueprint.items || []).map((item) => {
-          const sStart = new Date(occBase.getTime() + item.offsetMin * 60000);
-          const sEnd = new Date(sStart.getTime() + item.duration * 60000);
+          const offsetMin = Number(item.offsetMin || 0);
+          const durationMin = Number(item.duration || 0);
+
+          const sStart = new Date(occBase.getTime() + offsetMin * 60000);
+          const sEnd = new Date(sStart.getTime() + durationMin * 60000);
 
           return {
             booking_id: newBookingId,
-             repeat_series_id: repeatSeriesId,
+            repeat_series_id: repeatSeriesId,
             client_id: clientId,
             client_name: booking.client_name,
             resource_id: booking.resource_id,
@@ -242,15 +222,16 @@ export default function RepeatBookingsModal({
             status: "confirmed",
           };
         });
- try {
+
+        try {
           const { data: inserted, error: insErr } = await withTimeout(
             supabaseClient.from("bookings").insert(rows).select("*"),
             "Create repeat bookings"
           );
 
-        if (insErr) throw insErr;
+          if (insErr) throw insErr;
 
-      created.push({ when: occBase, rows: inserted });
+          created.push({ when: occBase, rows: inserted });
         } catch (e) {
           failed.push({ when: occBase, reason: e?.message || "Insert failed" });
           continue;
@@ -261,29 +242,32 @@ export default function RepeatBookingsModal({
           const firstItem = blueprint.items?.[0];
           if (firstItem && rows[0]) {
             SaveBookingsLog({
-  action: "created",
-  booking_id: newBookingId,
-  client_id: booking.client_id,
-  client_name: booking.client_name,
-  stylist_id: booking.resource_id,
-  stylist_name: stylist?.title || stylist?.name || "Unknown",
-  service: {
-    name: firstItem.title,
-    category: firstItem.category,
-    price: firstItem.price,
-    duration: firstItem.duration,
-  },
-  start: rows[0].start,
-  end: rows[0].end,
-  logged_by: null,
-  reason: `Repeat Booking: ${patternLabel(repeatPattern, repeatDayOfMonth)}`,
-  before_snapshot: null,
-  after_snapshot: rows[0],
-}).catch(() => {});
-
+              action: "created",
+              booking_id: newBookingId,
+             repeat_series_id: repeatSeriesId,
+            client_id: clientId,
+              client_name: booking.client_name,
+              stylist_id: booking.resource_id,
+              stylist_name: stylist?.title || stylist?.name || "Unknown",
+              service: {
+                name: firstItem.title,
+                category: firstItem.category,
+                price: firstItem.price,
+                duration: firstItem.duration,
+              },
+              start: rows[0].start,
+              end: rows[0].end,
+              logged_by: null,
+              reason: `Repeat Booking: ${patternLabel(
+                repeatPattern,
+                repeatDayOfMonth
+              )}`,
+              before_snapshot: null,
+              after_snapshot: rows[0],
+            }).catch(() => {});
           }
-        } catch (err) {
-          /* non-fatal */
+        } catch {
+          // non-fatal
         }
       }
 
@@ -294,7 +278,7 @@ export default function RepeatBookingsModal({
           created.length === 1 ? "booking" : "bookings"
         } created.`,
         skipped.length ? `${skipped.length} skipped due to conflicts.` : "",
-         failed.length
+        failed.length
           ? `${failed.length} not created due to errors: ${failed
               .map((f) => f.reason)
               .filter(Boolean)

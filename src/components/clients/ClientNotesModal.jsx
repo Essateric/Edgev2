@@ -39,6 +39,7 @@ export default function ClientNotesModal({
   const [providerMap, setProviderMap] = useState({}); // { staffId: "Name" }
   const [bookingMetaByRowId, setBookingMetaByRowId] = useState({}); // { bookingRowId: { when, title } }
   const [bookingMetaByGroupId, setBookingMetaByGroupId] = useState({}); // { bookingGroupId(text): { when, title } }
+  const [repeatSeriesId, setRepeatSeriesId] = useState(null);
 
   const [showFullHistory, setShowFullHistory] = useState(false);
 
@@ -230,19 +231,24 @@ export default function ClientNotesModal({
         if (isUuid(bookingId)) {
           const { data, error } = await db
             .from("bookings")
-            .select("id, client_id")
+            .select("id, client_id, repeat_series_id, booking_id")
             .eq("id", bookingId)
             .maybeSingle();
 
           if (!error && data?.id) {
             resolvedBookingRowId = data.id;
             if (!resolvedClientId && data.client_id) resolvedClientId = data.client_id;
+             if (data.repeat_series_id) setRepeatSeriesId(data.repeat_series_id);
+            if (data.booking_id && !bookingGroupId) {
+              // capture the group's booking_id if the caller didn't pass one
+              bookingGroupId = data.booking_id;
+            }
           }
         } else {
           // Case B: bookingId is a booking group id (bookings.booking_id text)
           const { data, error } = await db
             .from("bookings")
-            .select("id, client_id")
+            .select("id, client_id, repeat_series_id, booking_id")
             .eq("booking_id", bookingId)
             .order("start", { ascending: false })
             .limit(1)
@@ -251,6 +257,7 @@ export default function ClientNotesModal({
           if (!error && data?.id) {
             resolvedBookingRowId = data.id;
             if (!resolvedClientId && data.client_id) resolvedClientId = data.client_id;
+              if (data.repeat_series_id) setRepeatSeriesId(data.repeat_series_id);
           }
         }
       }
