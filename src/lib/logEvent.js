@@ -13,10 +13,12 @@ export async function logEvent({
   actorEmail = null,
   requestId = null,
   sessionId = null,
+  supabaseClient = null,
 }) {
+  const client = supabaseClient || supabase;
   // If admin path and no actor provided, try resolve from auth
   if (!actorId || !actorEmail) {
-    const { data: { user } = {} } = await supabase.auth.getUser();
+    const { data: { user } = {} } = await client.auth.getUser();
     if (user) {
       actorEmail = actorEmail ?? user.email ?? null;
       // If you map auth.uid -> staff.id, resolve here if you want a staff UUID
@@ -39,6 +41,6 @@ export async function logEvent({
     session_id: sessionId,
   };
 
-  const { error } = await supabase.from("audit_events").insert([payload]);
+ const { error } = await client.from("audit_events").insert([payload]);
   if (error) throw error;
 }

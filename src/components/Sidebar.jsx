@@ -1,16 +1,17 @@
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
-import { FaCalendarAlt, FaHome, FaUser, FaUsers, FaCog, FaSignOutAlt, FaCut } from "react-icons/fa";
+import { FaCalendarAlt, FaClipboardList, FaUser, FaUsers, FaCog, FaSignOutAlt, FaCut } from "react-icons/fa";
 import { useAuth } from "../contexts/AuthContext";
 import essatericLogo from "../assets/essateric_white.png";
 import edgeLogo from "../assets/EdgeLogo.png";
 
 const navItems = [
-  { label: "Dashboard", icon: <FaHome />, path: "/dashboard" },
-  { label: "Clients", icon: <FaUser />, path: "/manage-clients" },
+
   { label: "Calendar", icon: <FaCalendarAlt />, path: "/calendar" },
   { label: "Staff", icon: <FaUsers />, path: "/staff" },
   { label: "Services", icon: <FaCut />, path: "/manage-services" },
+  { label: "Clients", icon: <FaUser />, path: "/manage-clients" },
+     { label: "Audit", icon: <FaClipboardList />, path: "/audit" },
   { label: "Settings", icon: <FaCog />, path: "/settings" },
 ];
 

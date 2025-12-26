@@ -1,5 +1,5 @@
 // src/lib/audit.js
-import { supabase } from "../supabaseClient";
+import { supabase } from "../../supabaseClient.js";
 
 /**
  * Insert an audit row only if we have a valid session/JWT.

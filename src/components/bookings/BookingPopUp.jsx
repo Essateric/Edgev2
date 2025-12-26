@@ -407,6 +407,7 @@ function BookingPopUpBody({
           },
           actorId,
           actorEmail,
+           supabaseClient,
         });
       } catch (auditErr) {
         console.warn("Failed to audit cancelled booking", auditErr);

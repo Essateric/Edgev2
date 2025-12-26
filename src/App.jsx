@@ -3,7 +3,7 @@ import PublicBookingPage from "./onlinebookings/PublicBookingPage.jsx";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "./contexts/AuthContext.jsx";
 import Login from "./pages/Login.jsx";
-import Dashboard from "./pages/Dashboard.jsx";
+import AuditLogs from "./pages/AuditLogs.jsx";
 import CalendarPage from "./pages/CalendarPage.jsx";
 import ManageClients from "./pages/ManageClients.jsx";
 import ManageServices from "./pages/ManageServices.jsx";
@@ -88,7 +88,9 @@ function App() {
             <Route element={<StaffLayout />}>
              {/* Send root to calendar when already authenticated */}
               <Route path="/" element={<Navigate to="/calendar" replace />} />
-              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/audit" element={<AuditLogs />} />
+              <Route path="/dashboard" element={<Navigate to="/audit" replace />} />
+              
               <Route path="/calendar" element={<CalendarPage />} />
 
               <Route

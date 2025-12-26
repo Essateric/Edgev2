@@ -1,6 +1,6 @@
 // src/auth/initAuthAudit.js
 import { supabase } from "../supabaseClient";
-import { logAuditIfAuthed } from "../lib/audit";
+import { logAuditIfAuthed } from "../lib/audit/audit";
 
 export function initAuthAudit() {
   supabase.auth.onAuthStateChange(async (event, session) => {

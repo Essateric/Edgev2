@@ -13,8 +13,9 @@ import { createClient } from "@supabase/supabase-js";
 
 import supabase from "../supabaseClient"; // ✅ default export (your base client)
 import { getStaffPins, cacheStaffPins } from "../utils/PinCache.jsx";
-import { logAuditIfAuthed } from "../lib/audit";
+import { logAuditIfAuthed } from "../lib/audit/audit.js";
 import { fetchEdgePinSession, buildUserData } from "../lib/pinSession";
+import { createAuthAuditTracker } from "../lib/audit/authAuditTracker.js";
 
 const AuthContext = createContext();
 export const useAuth = () => useContext(AuthContext);
@@ -120,11 +121,22 @@ export const AuthProvider = ({ children }) => {
     currentUserRef.current = currentUser;
   }, [currentUser]);
 
+  // ✅ Auth audit tracker (modular)
+  const authAuditRef = useRef(null);
+  useEffect(() => {
+    authAuditRef.current = createAuthAuditTracker({
+      supabase,
+      getCurrentUser: () => currentUserRef.current,
+      source: "app",
+      logTokenRefreshed: false,
+    });
+  }, []);
+
   // Prevent multiple refresh calls at once
   const refreshInFlightRef = useRef(null);
-   // Avoid spamming redirects/logouts on repeated failures
-  const authLossHandledRef = useRef(false);
 
+  // Avoid spamming redirects/logouts on repeated failures
+  const authLossHandledRef = useRef(false);
   useEffect(() => {
     if (currentUser) authLossHandledRef.current = false;
   }, [currentUser]);
@@ -141,6 +153,16 @@ export const AuthProvider = ({ children }) => {
   const handleAuthLoss = (reason) => {
     if (authLossHandledRef.current) return;
     authLossHandledRef.current = true;
+
+    // ✅ Queue "session expired" (token stale) for next login
+    try {
+      const u = currentUserRef.current;
+      if (u && !u.offline) {
+        authAuditRef.current?.queueSessionExpired?.("auth_loss", { reason });
+      }
+    } catch {
+      // ignore
+    }
 
     console.warn("[AUTH] clearing session after auth loss:", reason);
 
@@ -192,7 +214,8 @@ export const AuthProvider = ({ children }) => {
     const u = currentUserRef.current;
 
     if (!url || !anon) throw new Error("Missing Supabase env (URL/ANON)");
-let refreshToken = u?.refresh_token || null;
+
+    let refreshToken = u?.refresh_token || null;
 
     if (!refreshToken) {
       try {
@@ -212,7 +235,7 @@ let refreshToken = u?.refresh_token || null;
         Authorization: `Bearer ${anon}`,
         "Content-Type": "application/json",
       },
- body: JSON.stringify({ refresh_token: refreshToken }),
+      body: JSON.stringify({ refresh_token: refreshToken }),
     });
 
     const json = await resp.json().catch(() => ({}));
@@ -265,7 +288,7 @@ let refreshToken = u?.refresh_token || null;
     return nextAccess;
   };
 
- const queueTokenRefresh = () => {
+  const queueTokenRefresh = () => {
     if (refreshInFlightRef.current) return refreshInFlightRef.current;
 
     const pending = refreshAccessToken().finally(() => {
@@ -275,7 +298,6 @@ let refreshToken = u?.refresh_token || null;
     refreshInFlightRef.current = pending;
     return pending;
   };
-
 
   const getValidAccessToken = async () => {
     const u = currentUserRef.current;
@@ -288,14 +310,14 @@ let refreshToken = u?.refresh_token || null;
     // expiring/expired: refresh once
     if (!u.refresh_token) return u.token;
 
-  try {
+    try {
       return await queueTokenRefresh();
     } catch (e) {
       console.warn("[AUTH] token refresh failed:", e?.message || e);
       if (!u?.offline) handleAuthLoss("token refresh failure");
       return null;
     }
-};
+  };
 
   const buildAuthHeaders = async (incomingHeaders = {}) => {
     const headers = new Headers(incomingHeaders || {});
@@ -372,9 +394,8 @@ let refreshToken = u?.refresh_token || null;
 
       // Always send the current PIN access token (and apikey) on every request.
       global: {
-       fetch: (input, init = {}) => authFetchWithRetry(input, init),
+        fetch: (input, init = {}) => authFetchWithRetry(input, init),
       },
-
 
       // ✅ important
       accessToken: getValidAccessToken,
@@ -398,7 +419,7 @@ let refreshToken = u?.refresh_token || null;
 
     return client;
     // eslint-disable-next-line react-hooks/exhaustive-deps
- }, [currentUser?.token]);
+  }, [currentUser?.token]);
 
   const cacheStaffPinsFromSupabase = async () => {
     const { data: staffList, error } = await supabase
@@ -475,7 +496,10 @@ let refreshToken = u?.refresh_token || null;
             permission: (storedUser.permission ?? "staff").toLowerCase(),
             offline: !!storedUser.offline,
           };
-          console.log("[AUTH] restoreSession: using stored currentUser (PIN)", normalized);
+          console.log(
+            "[AUTH] restoreSession: using stored currentUser (PIN)",
+            normalized
+          );
           setCurrentUser(normalized);
 
           // Best-effort: seed Supabase session (never block UI)
@@ -486,11 +510,12 @@ let refreshToken = u?.refresh_token || null;
             !normalized.offline
           ) {
             try {
-               supabase.auth.setSession({
-                access_token: normalized.token,
-                refresh_token: normalized.refresh_token,
-                }).catch(() => {});
-          
+              supabase.auth
+                .setSession({
+                  access_token: normalized.token,
+                  refresh_token: normalized.refresh_token,
+                })
+                .catch(() => {});
             } catch {
               // ignore
             }
@@ -506,7 +531,7 @@ let refreshToken = u?.refresh_token || null;
           return;
         }
 
-const supabaseUrl = getSupabaseUrl();
+        const supabaseUrl = getSupabaseUrl();
         const supabaseAnon = getSupabaseAnonKey();
         const canAttemptSupabase =
           !!supabaseUrl &&
@@ -545,11 +570,14 @@ const supabaseUrl = getSupabaseUrl();
           }
           throw e;
         }
-        
+
         if (cancelled) return;
 
-         if (error) {
-          console.warn("[AUTH] getSession error, clearing Supabase auth storage", error);
+        if (error) {
+          console.warn(
+            "[AUTH] getSession error, clearing Supabase auth storage",
+            error
+          );
           try {
             supabase.auth.stopAutoRefresh();
           } catch {
@@ -579,7 +607,10 @@ const supabaseUrl = getSupabaseUrl();
             staff_id: staffId ?? null,
           };
 
-          console.log("[AUTH] restoreSession: setting currentUser from Supabase", userData);
+          console.log(
+            "[AUTH] restoreSession: setting currentUser from Supabase",
+            userData
+          );
           setCurrentUser(userData);
           localStorage.setItem("currentUser", JSON.stringify(userData));
           localStorage.removeItem("offlineUser");
@@ -601,7 +632,21 @@ const supabaseUrl = getSupabaseUrl();
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       console.log("[AUTH] onAuthStateChange:", event, "hasUser:", !!session?.user);
 
+      // ✅ Let audit tracker observe every auth change (best effort)
+      Promise.resolve(
+        authAuditRef.current?.handleAuthStateChange?.(event, session)
+      ).catch(() => {});
+
       if (localStorage.getItem("offlineUser")) return;
+
+      // ✅ If Supabase signs out and it wasn't our manual logout, treat as auth loss
+      if (event === "SIGNED_OUT" && !logoutInProgressRef.current) {
+        const u = currentUserRef.current;
+        if (u && !u.offline) {
+          handleAuthLoss("supabase SIGNED_OUT");
+        }
+        return;
+      }
 
       if (event === "SIGNED_OUT") {
         if (logoutInProgressRef.current) {
@@ -613,10 +658,7 @@ const supabaseUrl = getSupabaseUrl();
         return;
       }
 
-      if (
-        session?.user &&
-        (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")
-      ) {
+      if (session?.user && (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")) {
         setCurrentUser((prev) => {
           if (!prev || prev.offline) return prev;
           if (prev.id && prev.id !== session.user.id) return prev;
@@ -710,7 +752,10 @@ const supabaseUrl = getSupabaseUrl();
         const p = supabase.auth.setSession({ access_token, refresh_token });
         await withTimeout(p, 5000, "setSession");
       } catch (e) {
-        console.warn("[AUTH][STEP 4] setSession slow/failed (ignored)", e?.message || e);
+        console.warn(
+          "[AUTH][STEP 4] setSession slow/failed (ignored)",
+          e?.message || e
+        );
       }
 
       step(5, "buildUserData()");
@@ -741,7 +786,11 @@ const supabaseUrl = getSupabaseUrl();
       try {
         const safeFindStaffId = async (authUser) => {
           if (result?.staff_id) return result.staff_id;
-          return await withTimeout(findStaffIdForUser(authUser), 1500, "findStaffIdForUser");
+          return await withTimeout(
+            findStaffIdForUser(authUser),
+            1500,
+            "findStaffIdForUser"
+          );
         };
 
         userData = await withTimeout(
@@ -761,7 +810,10 @@ const supabaseUrl = getSupabaseUrl();
           staff_id: userData.staff_id ?? result?.staff_id ?? null,
         };
       } catch (e) {
-        console.warn("[AUTH][STEP 5] buildUserData slow/failed; using fallback", e?.message || e);
+        console.warn(
+          "[AUTH][STEP 5] buildUserData slow/failed; using fallback",
+          e?.message || e
+        );
         userData = fallbackUser;
       }
 
@@ -823,14 +875,48 @@ const supabaseUrl = getSupabaseUrl();
   // ---------- Logout ----------
   const logout = async () => {
     console.log("[AUTH] logout: start");
-    const snapshot = currentUser;
+    const snapshot = currentUserRef.current;
 
     logoutInProgressRef.current = true;
+
+    // ✅ Mark as manual so audit tracker does not treat SIGNED_OUT as "expired"
+    try {
+      authAuditRef.current?.markManualSignOut?.();
+    } catch {
+      // ignore
+    }
 
     try {
       supabase.auth.stopAutoRefresh();
     } catch {}
 
+    // ✅ Log manual logout while we are still authenticated (best-effort)
+    try {
+      await withTimeout(
+        logAuditIfAuthed({
+          entity_type: "auth",
+          entity_id: snapshot?.id ?? null,
+          action: "logout_manual",
+          source: "app",
+          staff_id: snapshot?.staff_id ?? null,
+          staff_name: snapshot?.name ?? null,
+          staff_email: snapshot?.email ?? null,
+          details: {
+            email: snapshot?.email ?? null,
+            ua: typeof navigator !== "undefined" ? navigator.userAgent : null,
+          },
+        }),
+        800,
+        "logout audit"
+      );
+    } catch (e) {
+      console.warn(
+        "[AUTH] audit on logout failed/timeout (ignored)",
+        e?.message || e
+      );
+    }
+
+    // Now clear local state/storage (existing behaviour)
     setCurrentUser(null);
     setAuthLoading(false);
     setPageLoading(false);
@@ -841,31 +927,15 @@ const supabaseUrl = getSupabaseUrl();
 
     try {
       await withTimeout(
-        logAuditIfAuthed({
-          entity_type: "auth",
-          entity_id: snapshot?.id ?? null,
-          action: "signed_out",
-          source: "auth",
-          details: {
-            email: snapshot?.email ?? null,
-            ua: typeof navigator !== "undefined" ? navigator.userAgent : null,
-          },
-        }),
-        800,
-        "logout audit"
-      );
-    } catch (e) {
-      console.warn("[AUTH] audit on logout failed/timeout (ignored)", e?.message || e);
-    }
-
-    try {
-      await withTimeout(
         supabase.auth.signOut({ scope: "local" }),
         800,
         "signOut(local)"
       );
     } catch (e) {
-      console.warn("[AUTH] signOut(local) failed/timeout (ignored)", e?.message || e);
+      console.warn(
+        "[AUTH] signOut(local) failed/timeout (ignored)",
+        e?.message || e
+      );
     }
 
     console.log("[AUTH] logout: redirect -> /login");
