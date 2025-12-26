@@ -18,6 +18,7 @@ const isProcessingRow = (row) => {
   const title = String(row?.title || "").toLowerCase();
   return cat === "processing" || title.includes("processing time");
 };
+
 /**
  * useRelatedBookings
  * Fetches all rows in a booking "group" (same booking_id), then provides
@@ -33,7 +34,7 @@ const isProcessingRow = (row) => {
  *   relatedBookings: Array,
  *   loading: boolean,
  *   error: string | null,
- *  repeatSeriesOccurrences: Array,
+ *   repeatSeriesOccurrences: Array,
  *   sortedAllServices: Array,
  *   displayServices: Array,
  *   blueprint: null | {
@@ -49,7 +50,15 @@ export function useRelatedBookings({ supabase, bookingGroupId, repeatSeriesId })
   const [relatedBookings, setRelatedBookings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-   const [repeatSeriesOccurrences, setRepeatSeriesOccurrences] = useState([]);
+  const [repeatSeriesOccurrences, setRepeatSeriesOccurrences] = useState([]);
+  const [effectiveRepeatSeriesId, setEffectiveRepeatSeriesId] = useState(
+    repeatSeriesId || null
+  );
+
+  // keep local effective id in sync with caller
+  useEffect(() => {
+    setEffectiveRepeatSeriesId(repeatSeriesId || null);
+  }, [repeatSeriesId]);
 
   /**
    * Internal fetcher (also exposed via refresh)
@@ -60,6 +69,7 @@ export function useRelatedBookings({ supabase, bookingGroupId, repeatSeriesId })
       setRelatedBookings([]);
       return;
     }
+
     setLoading(true);
     try {
       const { data, error } = await supabase
@@ -68,7 +78,16 @@ export function useRelatedBookings({ supabase, bookingGroupId, repeatSeriesId })
         .eq("booking_id", bookingGroupId);
 
       if (error) throw error;
+
       setRelatedBookings(Array.isArray(data) ? data : []);
+
+      // derive repeat_series_id from fetched rows when caller didn't provide one
+      if (!repeatSeriesId && Array.isArray(data)) {
+        const found = data.find((row) => row?.repeat_series_id);
+        if (found?.repeat_series_id) {
+          setEffectiveRepeatSeriesId(found.repeat_series_id);
+        }
+      }
     } catch (e) {
       setRelatedBookings([]);
       setError(e?.message || "Failed to load related bookings");
@@ -81,21 +100,15 @@ export function useRelatedBookings({ supabase, bookingGroupId, repeatSeriesId })
    * Auto-load when group id changes
    */
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      await fetchGroup();
-    })();
-    return () => {
-      alive = false;
-    };
+    fetchGroup();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase, bookingGroupId]);
 
-   /**
+  /**
    * Derived: fetch all occurrences in the repeat series (one row per booking_id)
    */
   useEffect(() => {
-    if (!supabase || !repeatSeriesId) {
+    if (!supabase || !effectiveRepeatSeriesId) {
       setRepeatSeriesOccurrences([]);
       return;
     }
@@ -106,8 +119,10 @@ export function useRelatedBookings({ supabase, bookingGroupId, repeatSeriesId })
       try {
         const { data, error } = await supabase
           .from("bookings")
-          .select("id, booking_id, start, title, category, resource_id, repeat_series_id")
-          .eq("repeat_series_id", repeatSeriesId)
+          .select(
+            "id, booking_id, start, title, category, resource_id, repeat_series_id"
+          )
+          .eq("repeat_series_id", effectiveRepeatSeriesId)
           .order("start", { ascending: true });
 
         if (error) throw error;
@@ -126,7 +141,10 @@ export function useRelatedBookings({ supabase, bookingGroupId, repeatSeriesId })
         }
       } catch (e) {
         if (!cancelled) {
-          console.warn("[useRelatedBookings] repeat series fetch failed:", e?.message || e);
+          console.warn(
+            "[useRelatedBookings] repeat series fetch failed:",
+            e?.message || e
+          );
           setRepeatSeriesOccurrences([]);
         }
       }
@@ -135,8 +153,7 @@ export function useRelatedBookings({ supabase, bookingGroupId, repeatSeriesId })
     return () => {
       cancelled = true;
     };
-  }, [supabase, repeatSeriesId]);
-
+  }, [supabase, effectiveRepeatSeriesId]);
 
   /**
    * Derived: sort all services by start
@@ -172,6 +189,7 @@ export function useRelatedBookings({ supabase, bookingGroupId, repeatSeriesId })
       const sEnd = asLocalDate(row.end);
       const offsetMin = Math.round((sStart - baseStart) / 60000);
       const duration = Math.round((sEnd - sStart) / 60000);
+
       return {
         title: row.title,
         category: row.category || null,

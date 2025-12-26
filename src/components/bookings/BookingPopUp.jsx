@@ -161,7 +161,12 @@ function BookingPopUpBody({
   } = useDisplayClient({ isOpen, booking, clients, supabase: supabaseClient });
 
   // group + services + blueprint
-  const { relatedBookings, displayServices, blueprint } = useRelatedBookings({
+  const {
+    relatedBookings,
+    displayServices,
+    blueprint,
+    repeatSeriesOccurrences,
+  } = useRelatedBookings({
     supabase: supabaseClient,
     bookingGroupId: booking?.booking_id,
      repeatSeriesId: booking?.repeat_series_id || null,
@@ -241,10 +246,15 @@ function BookingPopUpBody({
 
   // ✅ FIX: show repeat bookings summary + list on the popup page
   const repeatSeries = useMemo(() => {
-    // If we have a group, use it; otherwise just show the single booking.
-    const base = Array.isArray(relatedBookings) && relatedBookings.length
-      ? relatedBookings
-      : [booking];
+ const base =
+      (Array.isArray(repeatSeriesOccurrences) &&
+        repeatSeriesOccurrences.length &&
+        repeatSeriesOccurrences) ||
+      (Array.isArray(relatedBookings) && relatedBookings.length
+        ? relatedBookings
+        : booking
+        ? [booking]
+        : []);
 
     // De-dupe by id and sort by start time
     const map = new Map();
@@ -259,7 +269,7 @@ function BookingPopUpBody({
     });
 
     return list;
-  }, [relatedBookings, booking]);
+ }, [relatedBookings, repeatSeriesOccurrences, booking]);
 
   const repeatSummary = useMemo(() => {
     if (!repeatSeries || repeatSeries.length <= 1) return null;

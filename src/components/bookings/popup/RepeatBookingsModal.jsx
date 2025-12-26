@@ -94,7 +94,11 @@ export default function RepeatBookingsModal({
       case "yearly":
         return setHMS(addYearsPreserveDay(base, index + 1), h, m);
       case "monthly_nth_day": {
-        const nextMonth = addMonthsPreserveDay(base, index + 1, repeatDayOfMonth);
+        const nextMonth = addMonthsPreserveDay(
+          base,
+          index + 1,
+          repeatDayOfMonth
+        );
         return setHMS(nextMonth, h, m);
       }
       default:
@@ -124,23 +128,54 @@ export default function RepeatBookingsModal({
 
     setSaving(true);
 
- const repeatSeriesId = booking?.repeat_series_id || uuidv4();
     const bookingGroupId = booking?.booking_id || null;
     const clientId = booking?.client_id || null;
 
-    // Ensure the original booking rows are tagged with the same repeat series id
-    if (bookingGroupId && !booking?.repeat_series_id) {
+    // ✅ FIX: don't accidentally "split" an existing series if the UI booking payload
+    // doesn't include repeat_series_id. First try to discover it from DB using booking_id.
+    let repeatSeriesId = booking?.repeat_series_id || null;
+
+    if (!repeatSeriesId && bookingGroupId) {
+      try {
+        const { data, error } = await withTimeout(
+          supabaseClient
+            .from("bookings")
+            .select("repeat_series_id")
+            .eq("booking_id", bookingGroupId)
+            .not("repeat_series_id", "is", null)
+            .limit(1)
+            .maybeSingle(),
+          "Fetch existing repeat series id"
+        );
+
+        if (!error && data?.repeat_series_id) {
+          repeatSeriesId = data.repeat_series_id;
+        }
+      } catch (e) {
+        console.warn(
+          "[RepeatBookings] could not fetch existing repeat_series_id",
+          e
+        );
+      }
+    }
+
+    // If still none, this is a brand-new series
+    if (!repeatSeriesId) repeatSeriesId = uuidv4();
+
+    // ✅ FIX: tag original group rows, but ONLY where repeat_series_id is NULL (never overwrite)
+    if (bookingGroupId) {
       try {
         await withTimeout(
           supabaseClient
             .from("bookings")
             .update({ repeat_series_id: repeatSeriesId })
-            .eq("booking_id", bookingGroupId),
-          "Update original booking repeat series id"
+            .eq("booking_id", bookingGroupId)
+            .is("repeat_series_id", null),
+          "Tag original booking group with repeat_series_id"
         );
       } catch (e) {
         console.warn(
-          "[RepeatBookings] failed to tag original booking with repeat_series_id",
+          "[RepeatBookings] failed to tag original booking group with repeat_series_id",
           e
         );
         // keep going; inserts below will still use repeatSeriesId
@@ -244,8 +279,8 @@ export default function RepeatBookingsModal({
             SaveBookingsLog({
               action: "created",
               booking_id: newBookingId,
-             repeat_series_id: repeatSeriesId,
-            client_id: clientId,
+              repeat_series_id: repeatSeriesId,
+              client_id: clientId,
               client_name: booking.client_name,
               stylist_id: booking.resource_id,
               stylist_name: stylist?.title || stylist?.name || "Unknown",
