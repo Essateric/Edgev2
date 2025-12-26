@@ -122,6 +122,55 @@ export default function RepeatBookingsModal({
       return;
     }
     setSaving(true);
+    @@ -101,125 +101,151 @@ export default function RepeatBookingsModal({
+    }
+  };
+
+  const createRepeatSet = async () => {
+    setErrorMsg("");
+
+    if (!supabaseClient) {
+      setErrorMsg("Not signed in. Please refresh and sign in again.");
+      return;
+    }
+    if (!booking?.start) {
+      setErrorMsg("Missing booking start time.");
+      return;
+    }
+    if (!blueprint || !stylist) {
+      setErrorMsg("Missing service blueprint or stylist.");
+      return;
+    }
+
+    if (!Array.isArray(blueprint.items) || blueprint.items.length === 0) {
+      setErrorMsg("No services found to repeat for this booking.");
+      return;
+    }
+    setSaving(true);
+
+    const repeatSeriesId = booking?.repeat_series_id || uuidv4();
+    const bookingGroupId = booking?.booking_id || null;
+    const clientId = booking?.client_id || null;
+
+    // Ensure the original booking rows are tagged with the same repeat series id
+    if (bookingGroupId && !booking?.repeat_series_id) {
+      try {
+        await withTimeout(
+          supabaseClient
+            .from("bookings")
+            .update({ repeat_series_id: repeatSeriesId })
+            .eq("booking_id", bookingGroupId),
+          "Update original booking repeat series id"
+        );
+      } catch (e) {
+        console.warn(
+          "[RepeatBookings] failed to tag original booking with repeat_series_id",
+          e
+        );
+        // keep going; inserts below will still use repeatSeriesId
+      }
+    }
+
 
     const created = [];
     const skipped = [];
@@ -160,7 +209,10 @@ export default function RepeatBookingsModal({
             }
           }
         } catch (e) {
-          failed.push({ when: occBase, reason: e?.message || "Conflict check failed" });
+          failed.push({
+            when: occBase,
+            reason: e?.message || "Conflict check failed",
+          });
           continue;
         }
 
@@ -177,7 +229,8 @@ export default function RepeatBookingsModal({
 
           return {
             booking_id: newBookingId,
-            client_id: booking.client_id,
+             repeat_series_id: repeatSeriesId,
+            client_id: clientId,
             client_name: booking.client_name,
             resource_id: booking.resource_id,
             start: toLocalSQL(sStart),

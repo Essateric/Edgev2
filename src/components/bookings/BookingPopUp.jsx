@@ -15,6 +15,7 @@ import ActionsBar from "./popup/ActionsBar";
 import ActionsPopover from "./popup/ActionsPopover";
 import ClientNotesModal from "../clients/ClientNotesModal";
 import RepeatBookingsModal from "./popup/RepeatBookingsModal";
+import { logEvent } from "../../lib/logEvent";
 
 /* Layout styles for the roomy popup */
 import "../../styles/modal-tidy.css";
@@ -75,6 +76,17 @@ const toDateSafe = (v) => {
 const getStart = (b) => toDateSafe(b?.start ?? b?.start_time);
 const getEnd = (b) => toDateSafe(b?.end ?? b?.end_time) ?? getStart(b);
 
+
+const CANCEL_REASON_OPTIONS = [
+  { value: "cancelled_no_reason", label: "Cancelled - no reason" },
+  { value: "no_show", label: "No Show" },
+  {
+    value: "cancelled_by_customer_with_notes",
+    label: "Cancelled by customer with cancellation notes",
+  },
+];
+
+
 function guessRepeatLabel(series) {
   if (!series || series.length < 2) return "Repeat bookings";
 
@@ -113,6 +125,13 @@ function BookingPopUpBody({
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [isEditingDob, setIsEditingDob] = useState(false);
   const [showRepeat, setShowRepeat] = useState(false);
+    const [showCancelForm, setShowCancelForm] = useState(false);
+  const [cancelReason, setCancelReason] = useState(
+    CANCEL_REASON_OPTIONS[0].value
+  );
+  const [cancelComment, setCancelComment] = useState("");
+  const [cancelSaving, setCancelSaving] = useState(false);
+  const [cancelError, setCancelError] = useState("");
 
   // ✅ lock UI state
   const [lockBooking, setLockBooking] = useState(false);
@@ -267,11 +286,29 @@ function BookingPopUpBody({
   }, [repeatSeries]);
 
   // handlers
-  const handleCancelBooking = async () => {
+ const handleCancelBooking = () => {
+    setCancelError("");
+    setShowCancelForm(true);
+  };
+
+  const handleSubmitCancelBooking = async () => {
+    const comment = (cancelComment || "").trim();
+    if (!comment) {
+      setCancelError("Cancellation comments are required for auditing.");
+      return;
+    }
+
     const confirmDelete = window.confirm(
       "Are you sure you want to cancel this booking?"
     );
     if (!confirmDelete) return;
+      setCancelSaving(true);
+    const cancelledAt = new Date().toISOString();
+    const selectedReason =
+      CANCEL_REASON_OPTIONS.find((opt) => opt.value === cancelReason) ||
+      CANCEL_REASON_OPTIONS[0];
+
+
     try {
       const { error } = await supabaseClient
         .from("bookings")
@@ -281,13 +318,53 @@ function BookingPopUpBody({
       if (error) {
         console.error("Failed to delete booking:", error);
         alert("Something went wrong.");
+      setCancelSaving(false);
       } else {
+          try {
+          const actorEmail =
+            currentStaff?.email ||
+            currentUser?.email ||
+            currentUser?.user?.email ||
+            null;
+          const actorId = currentUser?.id || currentUser?.user?.id || null;
+
+          await logEvent({
+            entityType: "booking",
+            entityId: booking.id,
+            bookingId: booking.id,
+            action: "cancelled",
+            reason: selectedReason.label,
+            details: {
+              cancellation_reason_value: selectedReason.value,
+              cancellation_reason_label: selectedReason.label,
+              cancelled_at: cancelledAt,
+              cancelled_by: currentStaff?.name ||
+                currentStaff?.email ||
+                actorEmail ||
+                "unknown",
+              cancelled_by_staff_id: currentStaff?.id || null,
+              cancellation_comment: comment,
+            },
+            actorId,
+            actorEmail,
+          });
+        } catch (auditErr) {
+          console.warn("Failed to audit cancelled booking", auditErr);
+        }
+
+
         onDeleteSuccess?.(booking.id);
         onClose();
+        setShowCancelForm(false);
+        setCancelSaving(false);
+        setCancelComment("");
+        setCancelReason(CANCEL_REASON_OPTIONS[0].value);
+        setCancelError("");
       }
     } catch (err) {
       console.error("Failed to cancel booking:", err);
       alert("Something went wrong. Please try again.");
+      setCancelSaving(false);
     }
   };
 
@@ -557,6 +634,7 @@ function BookingPopUpBody({
           clientId={displayClient?.id || booking?.client_id || null}
           clientEmail={clientEmail}
           bookingId={booking?.id}
+            bookingGroupId={booking?.booking_id || null}
           isOpen={showNotesModal}
           onClose={() => setShowNotesModal(false)}
           staffContext={currentStaff || null}
@@ -601,6 +679,84 @@ function BookingPopUpBody({
         stylist={stylist}
         supabaseClient={supabaseClient}
       />
+      
+     
+           {/* Cancellation modal */}
+      <ModalLarge
+        isOpen={showCancelForm}
+        onClose={() => {
+          if (cancelSaving) return;
+          setShowCancelForm(false);
+        }}
+        contentClassName="w-full max-w-xl p-6 text-gray-900"
+      >
+        <div className="flex flex-col gap-5">
+          <div className="space-y-1">
+            <h2 className="text-xl font-semibold text-gray-900">Cancel booking</h2>
+            <p className="text-sm text-gray-800">
+              Select a cancellation reason and add a comment for auditing.
+            </p>
+          </div>
+
+          <label className="flex flex-col gap-2 text-sm">
+            <span className="font-medium text-gray-900">Reason</span>
+            <select
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              className="rounded border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-1 focus:ring-emerald-600"
+              disabled={cancelSaving}
+            >
+              {CANCEL_REASON_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-2 text-sm">
+            <span className="font-medium text-gray-900">
+              Cancellation comments <span className="text-red-600">*</span>
+            </span>
+            <textarea
+              value={cancelComment}
+              onChange={(e) => {
+                setCancelComment(e.target.value);
+                if (cancelError) setCancelError("");
+              }}
+              rows={4}
+              className="rounded border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-1 focus:ring-emerald-600"
+              placeholder="Add context for the audit trail"
+              disabled={cancelSaving}
+            />
+          </label>
+
+          {cancelError && (
+            <div className="text-sm text-red-600">{cancelError}</div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-2">
+            <button
+              type="button"
+              className="px-4 py-2 rounded border border-gray-300 text-sm text-gray-800 bg-white hover:bg-gray-50 shadow-sm"
+              onClick={() => {
+                if (cancelSaving) return;
+                setShowCancelForm(false);
+              }}
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              className="px-4 py-2 rounded bg-red-600 text-white text-sm font-semibold shadow-sm hover:bg-red-700 disabled:opacity-60"
+              onClick={handleSubmitCancelBooking}
+              disabled={cancelSaving}
+            >
+              {cancelSaving ? "Cancelling..." : "Confirm cancellation"}
+            </button>
+          </div>
+        </div>
+      </ModalLarge>
     </ModalLarge>
   );
 }

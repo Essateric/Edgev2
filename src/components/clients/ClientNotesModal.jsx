@@ -19,6 +19,7 @@ export default function ClientNotesModal({
   clientEmail,
   clientId,
   bookingId = null,
+  bookingGroupId = null,
   modalZIndex = 60,
 }) {
   const [client, setClient] = useState(null);
@@ -55,7 +56,7 @@ export default function ClientNotesModal({
 
   // ✅ IMPORTANT: use token-backed client when available (same behavior as BookingPopUp)
   const db = supabaseClient || baseSupabase;
-   const notesDb = supabaseClient || baseSupabase; // client_notes requires authenticated session
+  const notesDb = supabaseClient || baseSupabase; // client_notes requires authenticated session
 
   const [notesSessionReady, setNotesSessionReady] = useState(false);
   const notesClientReady = notesSessionReady && !authLoading;
@@ -167,11 +168,12 @@ export default function ClientNotesModal({
     return who.name || "Stylist";
   };
 
-const loadNotes = async ({ cid, bookingRowId, bookingGroupId }) => {
+  const loadNotes = async ({ cid, bookingRowId, bookingGroupId }) => {
     if (!notesClientReady) {
       setNotes([]);
       return;
     }
+
     const filters = [];
     if (cid) filters.push(`client_id.eq.${cid}`);
     if (bookingRowId) filters.push(`booking_id.eq.${bookingRowId}`);
@@ -182,13 +184,14 @@ const loadNotes = async ({ cid, bookingRowId, bookingGroupId }) => {
       setNotes([]);
       return;
     }
-    const res = await db
+
+    const res = await notesDb
       .from("client_notes")
       .select("id, client_id, note_content, created_by, created_at, booking_id")
       .or(filters.join(","))
       .order("created_at", { ascending: false });
 
- if (res.error) {
+    if (res.error) {
       console.error("Error fetching notes:", res.error.message);
       setNotes([]);
       return;
@@ -222,9 +225,6 @@ const loadNotes = async ({ cid, bookingRowId, bookingGroupId }) => {
       let resolvedClientId = isUuid(clientId) ? clientId : null;
       let resolvedBookingRowId = isUuid(bookingId) ? bookingId : null;
 
-      // If bookingId is provided, try to resolve it to a booking row + its client_id.
-      // This fixes cases where the parent accidentally passes booking.id as clientId,
-      // or passes a legacy booking_id (text) instead of the booking row uuid.
       if (bookingId) {
         // Case A: bookingId is a booking row uuid
         if (isUuid(bookingId)) {
@@ -260,7 +260,6 @@ const loadNotes = async ({ cid, bookingRowId, bookingGroupId }) => {
       setEffectiveClientId(resolvedClientId || null);
       setEffectiveBookingRowId(resolvedBookingRowId || null);
 
-      // Helpful for catching wrong-id bugs quickly (doesn't break anything)
       if (!resolvedClientId) {
         console.warn("[ClientNotesModal] No resolved client id:", { clientId, bookingId });
       }
@@ -271,24 +270,26 @@ const loadNotes = async ({ cid, bookingRowId, bookingGroupId }) => {
     };
   }, [isOpen, clientId, bookingId, db]);
 
-  // -------- data loads --------
   // Client + stylist name on open (uses effectiveClientId)
   useEffect(() => {
     if (!isOpen) return;
     let active = true;
 
     (async () => {
-     const filters = [];
-      if (effectiveClientId) filters.push(`client_id.eq.${effectiveClientId}`);
-      if (bookingId) filters.push(`booking_id.eq.${bookingId}`);
-      if (effectiveBookingRowId) filters.push(`id.eq.${effectiveBookingRowId}`);
-
-      if (!filters.length) {
-        setHistory([]);
-        setBookingMetaByRowId({});
-        setBookingMetaByGroupId({});
+      if (!effectiveClientId) {
+        if (!active) return;
+        setClient(null);
+        setEmailInput(clientEmail || "");
         return;
       }
+
+      const { data, error } = await db
+        .from("clients")
+        .select("id, first_name, last_name, email")
+        .eq("id", effectiveClientId)
+        .maybeSingle();
+
+      if (!active) return;
 
       if (!error && data) {
         setClient(data);
@@ -302,7 +303,6 @@ const loadNotes = async ({ cid, bookingRowId, bookingGroupId }) => {
         setClient(null);
         setEmailInput(clientEmail || "");
       } else {
-        // no row returned
         setClient(null);
         setEmailInput(clientEmail || "");
       }
@@ -318,34 +318,64 @@ const loadNotes = async ({ cid, bookingRowId, bookingGroupId }) => {
     };
   }, [isOpen, effectiveClientId, clientId, bookingId, clientEmail, db]);
 
-  // Notes on open
+  // Notes on open ✅ (FIXED BRACES)
   useEffect(() => {
     if (isOpen && effectiveClientId) {
-      loadNotes({ cid: effectiveClientId });
+      const groupId = bookingGroupId || (!isUuid(bookingId) ? bookingId : null);
+      const bookingRow =
+        effectiveBookingRowId || (isUuid(bookingId) ? bookingId : null);
+
+      loadNotes({
+        cid: effectiveClientId,
+        bookingRowId: bookingRow,
+        bookingGroupId: groupId,
+      });
+
       setNotesPage(1);
     }
- }, [isOpen, effectiveClientId, effectiveBookingRowId, bookingId, notesClientReady]);
+  }, [
+    isOpen,
+    effectiveClientId,
+    effectiveBookingRowId,
+    bookingId,
+    bookingGroupId,
+    notesClientReady,
+  ]);
 
   // --- Load history (bookings) when opened ---
   const loadHistory = useCallback(async () => {
     if (!isOpen || !effectiveClientId) return;
+
+    const filters = [];
+    if (effectiveClientId) filters.push(`client_id.eq.${effectiveClientId}`);
+    if (bookingId) filters.push(`booking_id.eq.${bookingId}`);
+    if (effectiveBookingRowId) filters.push(`id.eq.${effectiveBookingRowId}`);
+
+    if (!filters.length) {
+      setHistory([]);
+      setBookingMetaByRowId({});
+      setBookingMetaByGroupId({});
+      return;
+    }
+
     const { data, error } = await db
       .from("bookings")
       .select("id, booking_id, start, title, category, resource_id")
-     .or(filters.join(","))
+      .or(filters.join(","))
       .order("start", { ascending: false })
       .order("id", { ascending: true });
 
-     if (error) {
+    if (error) {
       console.error("History fetch failed:", error.message);
       setHistory([]);
       setBookingMetaByRowId({});
       setBookingMetaByGroupId({});
       return;
     }
-     const rows = data || [];
 
-const seen = new Set();
+    const rows = data || [];
+
+    const seen = new Set();
     const unique = [];
     for (const b of rows) {
       const d = new Date(b.start);
@@ -356,7 +386,8 @@ const seen = new Set();
         unique.push(b);
       }
     }
- setHistory(unique);
+
+    setHistory(unique);
     setHistoryPage(1);
 
     // Provider map
@@ -376,7 +407,7 @@ const seen = new Set();
       }
     }
 
-       // Booking metadata for notes context
+    // Booking metadata for notes context
     const byRow = {};
     const byGroup = {};
     unique.forEach((b) => {
@@ -391,12 +422,14 @@ const seen = new Set();
       if (b.booking_id) byGroup[b.booking_id] = meta; // bookings.booking_id (text)
     });
 
- setBookingMetaByRowId(byRow);
+    setBookingMetaByRowId(byRow);
     setBookingMetaByGroupId(byGroup);
-  }, [db, effectiveClientId, isOpen]);
-     useEffect(() => {
+  }, [bookingId, db, effectiveBookingRowId, effectiveClientId, isOpen]);
+
+  useEffect(() => {
     let active = true;
-(async () => {
+
+    (async () => {
       await loadHistory();
       if (!active) return;
     })();
@@ -404,7 +437,7 @@ const seen = new Set();
     return () => {
       active = false;
     };
-   }, [loadHistory]);
+  }, [loadHistory]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -463,7 +496,7 @@ const seen = new Set();
       booking_id: safeBookingRowId,
     };
 
-    const { error } = await db.from("client_notes").insert([payload]);
+    const { error } = await notesDb.from("client_notes").insert([payload]);
     if (error) {
       console.error("Add note failed:", error?.message || error);
       alert("Couldn't save note. " + (error?.message || ""));
@@ -471,7 +504,7 @@ const seen = new Set();
     }
 
     setNoteContent("");
-        await loadNotes({
+    await loadNotes({
       cid: effectiveClientId,
       bookingRowId: effectiveBookingRowId,
       bookingGroupId: !isUuid(bookingId) ? bookingId : null,
@@ -538,7 +571,6 @@ const seen = new Set();
         <div className="flex items-start justify-between gap-3">
           <h3 className="text-lg font-semibold">{fullName}</h3>
 
-          {/* Kept state/import; only show button when it won't obviously break */}
           {effectiveClientId ? (
             <button
               className="text-xs text-blue-600 underline"
@@ -731,7 +763,6 @@ const seen = new Set();
 
           <div className="space-y-2 max-h-[300px] overflow-auto bg-white p-1 rounded">
             {paginatedNotes.map((note) => {
-              // note.booking_id is uuid (bookings.id). Keep a safe fallback to group map just in case.
               const key = note.booking_id ? String(note.booking_id) : "";
               const meta =
                 (key && bookingMetaByRowId[key]) ||
@@ -750,7 +781,10 @@ const seen = new Set();
                     {meta ? (
                       <>
                         {" "}
-                        · <span className="italic">for {meta.title} on {meta.when}</span>
+                        ·{" "}
+                        <span className="italic">
+                          for {meta.title} on {meta.when}
+                        </span>
                       </>
                     ) : null}
                   </div>
@@ -765,7 +799,7 @@ const seen = new Set();
           </div>
         </div>
 
-        {/* Optional full history view (kept, but only shown when toggled) */}
+        {/* Optional full history view */}
         {showFullHistory && (
           <div className="border rounded p-2 bg-white">
             <div className="flex items-center justify-between mb-2">
@@ -778,7 +812,6 @@ const seen = new Set();
                 Close
               </button>
             </div>
-            {/* This page/component is project-specific; we keep it mounted here without changing its internals */}
             <ClientHistoryFullScreen />
           </div>
         )}
