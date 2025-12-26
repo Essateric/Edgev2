@@ -76,7 +76,6 @@ const toDateSafe = (v) => {
 const getStart = (b) => toDateSafe(b?.start ?? b?.start_time);
 const getEnd = (b) => toDateSafe(b?.end ?? b?.end_time) ?? getStart(b);
 
-
 const CANCEL_REASON_OPTIONS = [
   { value: "cancelled_no_reason", label: "Cancelled - no reason" },
   { value: "no_show", label: "No Show" },
@@ -85,7 +84,6 @@ const CANCEL_REASON_OPTIONS = [
     label: "Cancelled by customer with cancellation notes",
   },
 ];
-
 
 function guessRepeatLabel(series) {
   if (!series || series.length < 2) return "Repeat bookings";
@@ -119,19 +117,24 @@ function BookingPopUpBody({
   // ✅ optional: lets CalendarPage update its local events immediately
   onBookingUpdated,
 }) {
-  const { supabaseClient } = useAuth();
+  // ✅ include currentUser because cancel audit uses it
+  const { supabaseClient, currentUser } = useAuth();
 
   const [showActions, setShowActions] = useState(false);
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [isEditingDob, setIsEditingDob] = useState(false);
   const [showRepeat, setShowRepeat] = useState(false);
-    const [showCancelForm, setShowCancelForm] = useState(false);
+
+  const [showCancelForm, setShowCancelForm] = useState(false);
   const [cancelReason, setCancelReason] = useState(
     CANCEL_REASON_OPTIONS[0].value
   );
   const [cancelComment, setCancelComment] = useState("");
   const [cancelSaving, setCancelSaving] = useState(false);
   const [cancelError, setCancelError] = useState("");
+
+  // ✅ NEW: cancel scope (this occurrence vs whole series)
+  const [cancelScope, setCancelScope] = useState("one"); // "one" | "all"
 
   // ✅ lock UI state
   const [lockBooking, setLockBooking] = useState(false);
@@ -169,7 +172,7 @@ function BookingPopUpBody({
   } = useRelatedBookings({
     supabase: supabaseClient,
     bookingGroupId: booking?.booking_id,
-     repeatSeriesId: booking?.repeat_series_id || null,
+    repeatSeriesId: booking?.repeat_series_id || null,
   });
 
   // notes
@@ -244,9 +247,26 @@ function BookingPopUpBody({
     setLockError("");
   }, [isOpen, derivedLocked]);
 
-  // ✅ FIX: show repeat bookings summary + list on the popup page
+  // ✅ quick lookup for stylist name in the repeat list
+  const stylistNameById = useMemo(() => {
+    const m = new Map();
+    (stylistList || []).forEach((s) => {
+      const key = s?.id;
+      if (!key) return;
+      const name = s?.title || s?.name || s?.full_name || s?.email || "—";
+      m.set(key, name);
+    });
+    return m;
+  }, [stylistList]);
+
+  const getStylistName = (resourceId) => {
+    if (!resourceId) return "—";
+    return stylistNameById.get(resourceId) || "—";
+  };
+
+  // ✅ Repeat series list used in UI (dedupe + sort)
   const repeatSeries = useMemo(() => {
- const base =
+    const base =
       (Array.isArray(repeatSeriesOccurrences) &&
         repeatSeriesOccurrences.length &&
         repeatSeriesOccurrences) ||
@@ -269,7 +289,7 @@ function BookingPopUpBody({
     });
 
     return list;
- }, [relatedBookings, repeatSeriesOccurrences, booking]);
+  }, [relatedBookings, repeatSeriesOccurrences, booking]);
 
   const repeatSummary = useMemo(() => {
     if (!repeatSeries || repeatSeries.length <= 1) return null;
@@ -281,7 +301,6 @@ function BookingPopUpBody({
       return end && end < now;
     }).length;
 
-    // Best-effort "attended": past + not cancelled (no attendance column exists)
     const attendedCount = repeatSeries.filter((b) => {
       const end = getEnd(b);
       if (!end || end >= now) return false;
@@ -297,8 +316,14 @@ function BookingPopUpBody({
   }, [repeatSeries]);
 
   // handlers
- const handleCancelBooking = () => {
+  const handleCancelBooking = () => {
     setCancelError("");
+    setCancelComment("");
+    setCancelReason(CANCEL_REASON_OPTIONS[0].value);
+
+    // default choice: single occurrence
+    setCancelScope("one");
+
     setShowCancelForm(true);
   };
 
@@ -310,68 +335,98 @@ function BookingPopUpBody({
     }
 
     const confirmDelete = window.confirm(
-      "Are you sure you want to cancel this booking?"
+      cancelScope === "all"
+        ? "Cancel ALL bookings in this repeat series?"
+        : "Cancel this booking occurrence?"
     );
     if (!confirmDelete) return;
-      setCancelSaving(true);
+
+    setCancelSaving(true);
+
     const cancelledAt = new Date().toISOString();
     const selectedReason =
       CANCEL_REASON_OPTIONS.find((opt) => opt.value === cancelReason) ||
       CANCEL_REASON_OPTIONS[0];
 
+    // ✅ IMPORTANT: bookings table has multiple rows per appointment (services)
+    // - One occurrence = same booking.booking_id (group id)
+    // - Whole series = same repeat_series_id
+    const occurrenceGroupId = booking?.booking_id || null;
+    const seriesId = booking?.repeat_series_id || null;
 
     try {
-      const { error } = await supabaseClient
-        .from("bookings")
-        .delete()
-        .eq("id", booking.id);
+      let del = supabaseClient.from("bookings").delete();
+
+      if (cancelScope === "all" && seriesId) {
+        del = del.eq("repeat_series_id", seriesId);
+      } else if (occurrenceGroupId) {
+        del = del.eq("booking_id", occurrenceGroupId);
+      } else {
+        // fallback (single row)
+        del = del.eq("id", booking.id);
+      }
+
+      const { error } = await del;
 
       if (error) {
-        console.error("Failed to delete booking:", error);
+        console.error("Failed to cancel booking:", error);
         alert("Something went wrong.");
-      setCancelSaving(false);
-      } else {
-          try {
-          const actorEmail =
-            currentStaff?.email ||
-            currentUser?.email ||
-            currentUser?.user?.email ||
-            null;
-          const actorId = currentUser?.id || currentUser?.user?.id || null;
-
-          await logEvent({
-            entityType: "booking",
-            entityId: booking.id,
-            bookingId: booking.id,
-            action: "cancelled",
-            reason: selectedReason.label,
-            details: {
-              cancellation_reason_value: selectedReason.value,
-              cancellation_reason_label: selectedReason.label,
-              cancelled_at: cancelledAt,
-              cancelled_by: currentStaff?.name ||
-                currentStaff?.email ||
-                actorEmail ||
-                "unknown",
-              cancelled_by_staff_id: currentStaff?.id || null,
-              cancellation_comment: comment,
-            },
-            actorId,
-            actorEmail,
-          });
-        } catch (auditErr) {
-          console.warn("Failed to audit cancelled booking", auditErr);
-        }
-
-
-        onDeleteSuccess?.(booking.id);
-        onClose();
-        setShowCancelForm(false);
         setCancelSaving(false);
-        setCancelComment("");
-        setCancelReason(CANCEL_REASON_OPTIONS[0].value);
-        setCancelError("");
+        return;
       }
+
+      // audit (best effort)
+      try {
+        const actorEmail =
+          currentStaff?.email ||
+          currentUser?.email ||
+          currentUser?.user?.email ||
+          null;
+        const actorId = currentUser?.id || currentUser?.user?.id || null;
+
+        await logEvent({
+          entityType: "booking",
+          entityId: booking.id,
+          bookingId: booking.id,
+          action: "cancelled",
+          reason: selectedReason.label,
+          details: {
+            scope: cancelScope, // "one" | "all"
+            cancellation_reason_value: selectedReason.value,
+            cancellation_reason_label: selectedReason.label,
+            cancelled_at: cancelledAt,
+            cancelled_by:
+              currentStaff?.name ||
+              currentStaff?.email ||
+              actorEmail ||
+              "unknown",
+            cancelled_by_staff_id: currentStaff?.id || null,
+            cancellation_comment: comment,
+            booking_group_id: occurrenceGroupId,
+            repeat_series_id: seriesId,
+          },
+          actorId,
+          actorEmail,
+        });
+      } catch (auditErr) {
+        console.warn("Failed to audit cancelled booking", auditErr);
+      }
+
+      // notify UI
+      onDeleteSuccess?.(booking.id);
+      window.dispatchEvent(
+        new CustomEvent("bookings:changed", {
+          detail: { type: "booking-cancelled", scope: cancelScope },
+        })
+      );
+
+      onClose();
+      setShowCancelForm(false);
+      setCancelSaving(false);
+      setCancelComment("");
+      setCancelReason(CANCEL_REASON_OPTIONS[0].value);
+      setCancelError("");
+      setCancelScope("one");
     } catch (err) {
       console.error("Failed to cancel booking:", err);
       alert("Something went wrong. Please try again.");
@@ -429,7 +484,6 @@ function BookingPopUpBody({
       const next = !!nextVal;
 
       if (booking?.booking_id) {
-        // update ALL rows in the group
         const { error } = await supabaseClient
           .from("bookings")
           .update({ is_locked: next })
@@ -437,7 +491,6 @@ function BookingPopUpBody({
 
         if (error) throw error;
       } else {
-        // fallback: update just this one row
         const { error } = await supabaseClient
           .from("bookings")
           .update({ is_locked: next })
@@ -491,15 +544,24 @@ function BookingPopUpBody({
     );
   }
 
+  const hasSeries = !!booking?.repeat_series_id;
+
   return (
     <ModalLarge isOpen={isOpen} onClose={onClose} hideCloseIcon zIndex={50}>
       <div className="modal-panel">
         {/* Header region */}
         <div className="modal-panel__header">
           <BookingHeader
-            clientName={clientName}
-            clientPhone={clientPhone}
-            clientEmail={clientEmail}
+            clientName={`${displayClient?.first_name ?? ""} ${
+              displayClient?.last_name ?? ""
+            }`.trim() || "Client"}
+            clientPhone={displayClient?.mobile || "N/A"}
+            clientEmail={
+              displayClient?.email ||
+              booking?.client_email ||
+              booking?.email ||
+              "N/A"
+            }
             isOnline={isOnline}
             isEditingDob={isEditingDob}
             dobInput={dobInput}
@@ -540,7 +602,7 @@ function BookingPopUpBody({
             serviceTotal={serviceTotal}
           />
 
-          {/* ✅ Repeat bookings summary + dates list (on the popup page) */}
+          {/* ✅ Repeat bookings summary + dates list (3 columns: date/time | stylist | status) */}
           <div className="mt-4">
             <div className="border rounded-lg p-3 bg-gray-50">
               <div className="flex items-start justify-between gap-3">
@@ -552,7 +614,8 @@ function BookingPopUpBody({
 
                 {repeatSummary && (
                   <div className="text-sm text-gray-600 whitespace-nowrap">
-                    Completed: {repeatSummary.attendedCount}/{repeatSummary.pastCount}
+                    Completed: {repeatSummary.attendedCount}/
+                    {repeatSummary.pastCount}
                   </div>
                 )}
               </div>
@@ -586,11 +649,14 @@ function BookingPopUpBody({
                       rightLabel = "Upcoming";
                     }
 
+                    const stylistName = getStylistName(b?.resource_id);
+
                     return (
                       <div
                         key={b.id}
-                        className="flex items-center justify-between text-sm"
+                        className="grid grid-cols-[minmax(220px,1fr)_minmax(160px,1fr)_auto] items-center gap-3 text-sm"
                       >
+                        {/* Col 1: date/time */}
                         <div className="flex items-center gap-2 min-w-0">
                           <Icon className={`w-4 h-4 ${iconClass}`} />
                           <span className="font-medium truncate">
@@ -603,7 +669,15 @@ function BookingPopUpBody({
                           </span>
                         </div>
 
-                        <span className="text-gray-600">{rightLabel}</span>
+                        {/* Col 2: stylist */}
+                        <div className="text-gray-700 truncate">
+                          {stylistName}
+                        </div>
+
+                        {/* Col 3: status */}
+                        <div className="text-gray-600 whitespace-nowrap">
+                          {rightLabel}
+                        </div>
                       </div>
                     );
                   })}
@@ -645,7 +719,7 @@ function BookingPopUpBody({
           clientId={displayClient?.id || booking?.client_id || null}
           clientEmail={clientEmail}
           bookingId={booking?.id}
-            bookingGroupId={booking?.booking_id || null}
+          bookingGroupId={booking?.booking_id || null}
           isOpen={showNotesModal}
           onClose={() => setShowNotesModal(false)}
           staffContext={currentStaff || null}
@@ -665,14 +739,6 @@ function BookingPopUpBody({
                 (n) => !n.booking_id || groupIds.has(n.booking_id)
               );
 
-              // kept from the other version (prevents “removed” diff)
-              const _clientEmail =
-                displayClient?.email ||
-                booking?.client_email ||
-                booking?.email ||
-                "N/A";
-              void _clientEmail;
-
               setNotes(filtered);
             } catch {
               /* ignore */
@@ -681,7 +747,7 @@ function BookingPopUpBody({
         />
       )}
 
-      {/* Repeat bookings modal (still used to create/manage repeats) */}
+      {/* Repeat bookings modal */}
       <RepeatBookingsModal
         open={showRepeat}
         onClose={() => setShowRepeat(false)}
@@ -690,9 +756,8 @@ function BookingPopUpBody({
         stylist={stylist}
         supabaseClient={supabaseClient}
       />
-      
-     
-           {/* Cancellation modal */}
+
+      {/* Cancellation modal */}
       <ModalLarge
         isOpen={showCancelForm}
         onClose={() => {
@@ -708,6 +773,39 @@ function BookingPopUpBody({
               Select a cancellation reason and add a comment for auditing.
             </p>
           </div>
+
+          {/* ✅ NEW: scope selector for repeat series */}
+          {hasSeries && (
+            <div className="rounded border border-gray-200 bg-gray-50 p-3">
+              <div className="text-sm font-medium text-gray-900 mb-2">
+                Apply cancellation to:
+              </div>
+
+              <label className="flex items-center gap-2 text-sm text-gray-800">
+                <input
+                  type="radio"
+                  name="cancelScope"
+                  value="one"
+                  checked={cancelScope === "one"}
+                  onChange={() => setCancelScope("one")}
+                  disabled={cancelSaving}
+                />
+                Only this occurrence
+              </label>
+
+              <label className="flex items-center gap-2 text-sm text-gray-800 mt-2">
+                <input
+                  type="radio"
+                  name="cancelScope"
+                  value="all"
+                  checked={cancelScope === "all"}
+                  onChange={() => setCancelScope("all")}
+                  disabled={cancelSaving}
+                />
+                All occurrences in this series
+              </label>
+            </div>
+          )}
 
           <label className="flex flex-col gap-2 text-sm">
             <span className="font-medium text-gray-900">Reason</span>
