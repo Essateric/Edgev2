@@ -1,432 +1,567 @@
 import React, { useEffect, useMemo, useState } from "react";
-import Modal from "./Modal";
-import { addWeeks, addMonths, startOfDay, endOfDay } from "date-fns";
 import Select from "react-select";
-import { v4 as uuidv4 } from "uuid";
-import baseSupabase from "../supabaseClient"; // ✅ adjust if your path differs
+import toast from "react-hot-toast";
+import { format } from "date-fns";
+import Modal from "./Modal";
+import { useAuth } from "../contexts/AuthContext.jsx";
 
-const recurrenceOptions = [
-  { value: "none", label: "No repeat" },
-  { value: "weekly", label: "Weekly" },
-  { value: "fortnightly", label: "Fortnightly" },
-  { value: "monthly", label: "Monthly" },
-];
+const clampInt = (n, min, max) => Math.max(min, Math.min(max, n));
 
-const CUSTOM_TYPE = "__custom__";
+const toLocalDateTimeValue = (d) => {
+  if (!d) return "";
+  const pad = (v) => `${v}`.padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const min = pad(d.getMinutes());
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+};
 
-const safeId = () => {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
-  return uuidv4();
+const parseLocalDateTime = (s) => {
+  if (!s || typeof s !== "string" || !s.includes("T")) return null;
+  const [datePart, timePart] = s.split("T");
+  const [y, m, d] = datePart.split("-").map((x) => Number(x));
+  const [hh, mm] = timePart.split(":").map((x) => Number(x));
+  if (!y || !m || !d) return null;
+  return new Date(y, (m || 1) - 1, d, hh || 0, mm || 0, 0, 0);
 };
 
 export default function ScheduleTaskModal({
   isOpen,
   onClose,
   slot,
-  stylists,
-  editingTask,
+  stylists = [],
+  editingTask = null,
   onSave,
-  supabaseClient,
 }) {
-  const supabase = supabaseClient || baseSupabase;
+  const { supabaseClient } = useAuth();
+  const supabase = supabaseClient;
 
-  // --- Task types ---
+  const isEditing = !!editingTask?.id;
+  const editingBookingGroupId =
+    editingTask?.booking_id || editingTask?.bookingId || null;
+  const editingSeriesId = editingTask?.repeat_series_id || null;
+
+  // --- task types ---
   const [taskTypes, setTaskTypes] = useState([]);
-  const [taskTypeId, setTaskTypeId] = useState(""); // schedule_task_types.id or CUSTOM_TYPE
-  const [typesLoading, setTypesLoading] = useState(false);
-  const [typesError, setTypesError] = useState("");
+  const [taskTypeId, setTaskTypeId] = useState("");
+  const selectedTaskType = useMemo(
+    () => taskTypes.find((t) => t.id === taskTypeId) || null,
+    [taskTypes, taskTypeId]
+  );
 
-  // --- Form ---
-  const [title, setTitle] = useState("Scheduled task"); // used only when Custom
-  const [details, setDetails] = useState("");
+  const taskTypeOptions = useMemo(() => {
+    return (taskTypes || []).map((t) => ({
+      value: t.id,
+      label: `${t.category ? `${t.category} — ` : ""}${t.name}`,
+    }));
+  }, [taskTypes]);
+
+  const taskTitle = useMemo(() => {
+    // Title is derived from the selected task type
+    if (!selectedTaskType) return "Scheduled task";
+    return selectedTaskType.name || "Scheduled task";
+  }, [selectedTaskType]);
+
+  // --- fields ---
+  const [start, setStart] = useState(null);
+  const [end, setEnd] = useState(null);
   const [allDay, setAllDay] = useState(false);
-  const [lock, setLock] = useState(false);
-  const [recurrence, setRecurrence] = useState("none");
+  const [lockTask, setLockTask] = useState(false);
+
+  // --- staff multi select ---
+  const staffOptions = useMemo(() => {
+    return (stylists || []).map((s) => ({
+      value: s.id,
+      label: s.title || s.name || "Staff",
+    }));
+  }, [stylists]);
+
+  const [staffIds, setStaffIds] = useState([]);
+
+  const selectedStaffValue = useMemo(() => {
+    const set = new Set(staffIds);
+    return staffOptions.filter((o) => set.has(o.value));
+  }, [staffIds, staffOptions]);
+
+  // --- repeat ---
+  const [repeatRule, setRepeatRule] = useState("none"); // none | weekly | fortnightly | monthly
+  const repeatEnabled = repeatRule !== "none";
+
+  // ✅ Keep existing numeric state
   const [occurrences, setOccurrences] = useState(1);
-  const [applySeries, setApplySeries] = useState(true);
-  const [selectedStylistIds, setSelectedStylistIds] = useState([]);
-  const [start, setStart] = useState(slot?.start || new Date());
-  const [end, setEnd] = useState(slot?.end || new Date());
 
-  // -------- load task types on open --------
+  // ✅ FIX: add text state so users can type directly without spinner clicking
+  const [occurrencesText, setOccurrencesText] = useState("1");
   useEffect(() => {
+    setOccurrencesText(String(occurrences || 1));
+  }, [occurrences]);
+
+  // Only show series checkbox if editing a real series
+  const [applyToSeries, setApplyToSeries] = useState(false);
+
+  const [saving, setSaving] = useState(false);
+
+  // Load task types when modal opens
+  useEffect(() => {
+    if (!isOpen || !supabase) return;
+
     let alive = true;
-    if (!isOpen) return;
-
-    setTypesError("");
-    setTypesLoading(true);
-
     (async () => {
-      try {
-        const { data, error } = await supabase
-          .from("schedule_task_types")
-          .select("id, name, category, description, color, sort_order, is_active")
-          .eq("is_active", true)
-          .order("category", { ascending: true })
-          .order("sort_order", { ascending: true })
-          .order("name", { ascending: true });
+      const { data, error } = await supabase
+        .from("schedule_task_types")
+        .select("id,name,category,description,color,sort_order,is_active")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true })
+        .order("category", { ascending: true })
+        .order("name", { ascending: true });
 
-        if (!alive) return;
+      if (!alive) return;
 
-        if (error) {
-          console.error("[ScheduleTaskModal] schedule_task_types error:", error);
-          setTaskTypes([]);
-          setTypesError(error.message || "Failed to load task types");
-          setTypesLoading(false);
-          return;
+      if (error) {
+        console.error("[ScheduleTaskModal] load task types failed", error);
+        toast.error("Could not load task types");
+        setTaskTypes([]);
+        return;
+      }
+
+      setTaskTypes(data || []);
+
+      // Default selection
+      if (!taskTypeId && (data || []).length) {
+        // If editing, try match by title -> type name
+        if (isEditing && editingTask?.title) {
+          const match = (data || []).find(
+            (t) =>
+              String(t.name || "").trim().toLowerCase() ===
+              String(editingTask.title || "").trim().toLowerCase()
+          );
+          if (match?.id) {
+            setTaskTypeId(match.id);
+            return;
+          }
         }
 
-        setTaskTypes(data || []);
-        setTypesLoading(false);
-      } catch (e) {
-        console.error("[ScheduleTaskModal] schedule_task_types crash:", e);
-        if (!alive) return;
-        setTaskTypes([]);
-        setTypesError(e?.message || "Failed to load task types");
-        setTypesLoading(false);
+        setTaskTypeId((data || [])[0]?.id || "");
       }
     })();
 
     return () => {
       alive = false;
     };
-  }, [isOpen, supabase]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, supabase, isEditing]);
 
-  const taskTypeMap = useMemo(() => {
-    const m = new Map();
-    (taskTypes || []).forEach((t) => m.set(t.id, t));
-    return m;
-  }, [taskTypes]);
-
-  const taskTypeOptions = useMemo(() => {
-    const byCat = new Map();
-
-    for (const t of taskTypes || []) {
-      const cat = t.category || "Other";
-      if (!byCat.has(cat)) byCat.set(cat, []);
-      byCat.get(cat).push({ value: t.id, label: t.name });
-    }
-
-    const groups = Array.from(byCat.entries()).map(([label, options]) => ({
-      label,
-      options,
-    }));
-
-    groups.push({
-      label: "Custom",
-      options: [{ value: CUSTOM_TYPE, label: "Custom title…" }],
-    });
-
-    return groups;
-  }, [taskTypes]);
-
-  // -------- reset form on open --------
+  // Init fields when opening
   useEffect(() => {
     if (!isOpen) return;
 
-    if (editingTask) {
-      setDetails(editingTask.details || "");
-      setAllDay(!!editingTask.allDay);
-      setLock(!!editingTask.is_locked);
-      setRecurrence(editingTask.recurrence || "none");
-      setOccurrences(editingTask.repeatCount || 1);
-      setApplySeries(true);
-      setSelectedStylistIds([editingTask.resourceId].filter(Boolean));
-      setStart(new Date(editingTask.start));
-      setEnd(new Date(editingTask.end));
+    setSaving(false);
 
-      const existingTypeId =
-        editingTask.task_type_id ||
-        editingTask.taskTypeId ||
-        editingTask.schedule_task_type_id ||
-        "";
+    const s = editingTask?.start
+      ? new Date(editingTask.start)
+      : slot?.start
+      ? new Date(slot.start)
+      : null;
 
-      if (existingTypeId && taskTypeMap.has(existingTypeId)) {
-        setTaskTypeId(existingTypeId);
-        setTitle(taskTypeMap.get(existingTypeId)?.name || editingTask.title || "Scheduled task");
-      } else {
-        // fallback: match by title
-        const byName = (taskTypes || []).find(
-          (t) =>
-            String(t.name || "").toLowerCase() ===
-            String(editingTask.title || "").toLowerCase()
-        );
-        if (byName?.id) {
-          setTaskTypeId(byName.id);
-          setTitle(byName.name);
-        } else {
-          setTaskTypeId(CUSTOM_TYPE);
-          setTitle(editingTask.title || "Scheduled task");
-        }
-      }
-      return;
-    }
+    const e = editingTask?.end
+      ? new Date(editingTask.end)
+      : slot?.end
+      ? new Date(slot.end)
+      : null;
 
-    // new
-    setDetails("");
-    setAllDay(false);
-    setLock(false);
-    setRecurrence("none");
+    setStart(s);
+    setEnd(e);
+
+    setAllDay(!!editingTask?.allDay);
+    setLockTask(!!editingTask?.is_locked);
+
+    // Repeat defaults
+    setRepeatRule("none");
     setOccurrences(1);
-    setApplySeries(true);
-    setSelectedStylistIds([slot?.resourceId].filter(Boolean));
-    setStart(slot?.start || new Date());
-    setEnd(slot?.end || new Date());
+    setOccurrencesText("1"); // ✅ keep text in sync on open
 
-    // default select first type if available (once loaded)
-    const first = (taskTypes || [])[0];
-    if (first?.id) {
-      setTaskTypeId(first.id);
-      setTitle(first.name || "Scheduled task");
-    } else {
-      setTaskTypeId(CUSTOM_TYPE);
-      setTitle("Scheduled task");
-    }
-  }, [isOpen, editingTask, slot, taskTypes, taskTypeMap]);
+    // Only meaningful if this is a series
+    setApplyToSeries(false);
 
-  // sync title to selected type (unless custom)
-  useEffect(() => {
-    if (!isOpen) return;
-    if (!taskTypeId || taskTypeId === CUSTOM_TYPE) return;
-    const t = taskTypeMap.get(taskTypeId);
-    if (t?.name) setTitle(t.name);
-  }, [taskTypeId, taskTypeMap, isOpen]);
+    // Default staff:
+    // - If editing, we try to show all staff in this booking group (multi-staff block)
+    // - If creating, default to selected slot resourceId
+    if (isEditing && supabase && editingBookingGroupId) {
+      (async () => {
+        const { data, error } = await supabase
+          .from("bookings")
+          .select("id,resource_id,booking_id")
+          .eq("booking_id", editingBookingGroupId);
 
-  const stylistOptions = useMemo(
-    () => (stylists || []).map((s) => ({ value: s.id, label: s.title || s.name || "Unknown" })),
-    [stylists]
-  );
-
-  const selectedTypeOption = useMemo(() => {
-    if (!taskTypeId) return null;
-    if (taskTypeId === CUSTOM_TYPE) return { value: CUSTOM_TYPE, label: "Custom title…" };
-    const t = taskTypeMap.get(taskTypeId);
-    return t ? { value: t.id, label: t.name } : null;
-  }, [taskTypeId, taskTypeMap]);
-
-  const clampEnd = (s, e) => {
-    if (!e || e <= s) return new Date(s.getTime() + 30 * 60000);
-    return e;
-  };
-
-  const buildOccurrences = () => {
-    const baseStart = allDay ? startOfDay(start) : start;
-    const baseEnd = allDay ? endOfDay(end) : clampEnd(baseStart, end);
-
-    const seriesId = editingTask?.seriesId || safeId();
-    const count = Math.max(1, Number(occurrences) || 1);
-    const resources = selectedStylistIds.length ? selectedStylistIds : [null];
-
-    const typeRow = taskTypeId && taskTypeId !== CUSTOM_TYPE ? taskTypeMap.get(taskTypeId) : null;
-
-    const resolvedTitle =
-      taskTypeId === CUSTOM_TYPE
-        ? (title || "Scheduled task")
-        : (typeRow?.name || title || "Scheduled task");
-
-    const instances = [];
-
-    resources.forEach((rid) => {
-      for (let i = 0; i < count; i++) {
-        let s = new Date(baseStart);
-        let e = new Date(baseEnd);
-
-        if (recurrence === "weekly") {
-          s = addWeeks(baseStart, i);
-          e = addWeeks(baseEnd, i);
-        } else if (recurrence === "fortnightly") {
-          s = addWeeks(baseStart, i * 2);
-          e = addWeeks(baseEnd, i * 2);
-        } else if (recurrence === "monthly") {
-          s = addMonths(baseStart, i);
-          e = addMonths(baseEnd, i);
+        if (error) {
+          console.warn(
+            "[ScheduleTaskModal] failed to load booking group staff",
+            error
+          );
+          // fallback to single
+          const rid =
+            editingTask?.resourceId ||
+            editingTask?.resource_id ||
+            slot?.resourceId ||
+            null;
+          setStaffIds(rid ? [rid] : []);
+          return;
         }
 
-        instances.push({
-          id: safeId(),
-          seriesId,
-          title: resolvedTitle,
-          details,
-          start: s,
-          end: e,
-          resourceId: rid,
-          isScheduledTask: true,
+        const ids = Array.from(
+          new Set((data || []).map((r) => r.resource_id).filter(Boolean))
+        );
+
+        // fallback
+        if (!ids.length) {
+          const rid =
+            editingTask?.resourceId ||
+            editingTask?.resource_id ||
+            slot?.resourceId ||
+            null;
+          setStaffIds(rid ? [rid] : []);
+        } else {
+          setStaffIds(ids);
+        }
+      })();
+    } else {
+      const rid = slot?.resourceId || null;
+      setStaffIds(rid ? [rid] : []);
+    }
+  }, [isOpen, isEditing, editingBookingGroupId, editingTask, slot, supabase]);
+
+  const onPrimarySave = async () => {
+    if (!supabase) return toast.error("No Supabase client available");
+    if (!start || !end || !(end > start)) return toast.error("End must be after start");
+    if (!taskTypeId) return toast.error("Pick a task type");
+    if (!staffIds.length) return toast.error("Pick at least one staff member");
+
+    const durMin = Math.round((end.getTime() - start.getTime()) / 60000);
+    if (durMin > 12 * 60) return toast.error("Tasks can’t be longer than 12 hours.");
+
+    setSaving(true);
+    try {
+      await onSave?.({
+        action: isEditing ? "update" : "create",
+        payload: {
+          taskTypeId,
+          title: taskTitle, // derived
+          start,
+          end,
           allDay,
-          recurrence,
-          repeatCount: count,
-          is_locked: lock,
-
-          // ✅ store task type data
-          task_type_id: taskTypeId !== CUSTOM_TYPE ? taskTypeId : null,
-          task_type_name: typeRow?.name || (taskTypeId === CUSTOM_TYPE ? resolvedTitle : null),
-          task_type_category: typeRow?.category || null,
-          task_type_color: typeRow?.color || null,
-        });
-      }
-    });
-
-    return { seriesId, instances };
+          is_locked: lockTask,
+          staffIds,
+          repeatRule,
+          occurrences: repeatEnabled
+            ? clampInt(Number(occurrences) || 1, 1, 52)
+            : 1,
+          applyToSeries: !!applyToSeries,
+          editingMeta: isEditing
+            ? {
+                id: editingTask?.id,
+                booking_id: editingBookingGroupId,
+                repeat_series_id: editingSeriesId,
+                oldStart: editingTask?.start ? new Date(editingTask.start) : null,
+                oldEnd: editingTask?.end ? new Date(editingTask.end) : null,
+              }
+            : null,
+        },
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const canSave = selectedStylistIds.length > 0 && (!!taskTypeId || !!title);
+  const onDelete = async () => {
+    if (!isEditing) return;
+    const ok = window.confirm(
+      applyToSeries && editingSeriesId
+        ? "Delete ALL occurrences in this series?"
+        : "Delete this scheduled task?"
+    );
+    if (!ok) return;
 
-  const handleSave = () => {
-    const { seriesId, instances } = buildOccurrences();
-    onSave?.({
-      seriesId,
-      replaceSeriesId: applySeries ? editingTask?.seriesId : null,
-      replaceSingleId: !applySeries ? editingTask?.id : null,
-      instances,
-    });
-    onClose?.();
+    setSaving(true);
+    try {
+      await onSave?.({
+        action: "delete",
+        payload: {
+          applyToSeries: !!applyToSeries,
+          editingMeta: {
+            id: editingTask?.id,
+            booking_id: editingBookingGroupId,
+            repeat_series_id: editingSeriesId,
+          },
+        },
+      });
+    } finally {
+      setSaving(false);
+    }
   };
+
+  if (!isOpen) return null;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={editingTask ? "Edit scheduled task" : "New scheduled task"}>
-      <div className="space-y-3">
-        {/* ✅ visible marker so you KNOW this file is being used */}
-        <div className="text-[11px] text-gray-400">
-          task types loaded: {typesLoading ? "loading…" : String(taskTypes?.length || 0)}
+    <Modal isOpen={isOpen} onClose={onClose}>
+      {/* Hide number spinners (so user can just type) */}
+      <style>{`
+        input[type="number"]::-webkit-outer-spin-button,
+        input[type="number"]::-webkit-inner-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+      `}</style>
+
+      <div className="w-full max-w-xl">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg font-bold text-bronze">
+            {isEditing ? "Edit scheduled task" : "New scheduled task"}
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-red-500 text-xl leading-none"
+            disabled={saving}
+            aria-label="Close"
+          >
+            ✕
+          </button>
         </div>
 
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-1">Task type</label>
-          <Select
-            options={taskTypeOptions}
-            value={selectedTypeOption}
-            onChange={(opt) => setTaskTypeId(opt?.value || CUSTOM_TYPE)}
-            placeholder={typesLoading ? "Loading task types…" : "Choose a task type…"}
-            styles={{ control: (base) => ({ ...base, minHeight: "38px" }) }}
-          />
-          {!!typesError && <p className="text-xs text-red-600 mt-1">{typesError}</p>}
-        </div>
-
-        {taskTypeId === CUSTOM_TYPE && (
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Title</label>
-            <input
-              className="w-full border rounded px-2 py-1 text-sm"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Bank holiday, training, maintenance…"
-            />
+        {start && end && (
+          <div className="text-xs text-gray-600 mb-3">
+            Date: {format(start, "eeee dd MMMM yyyy")} • Time:{" "}
+            {format(start, "HH:mm")} – {format(end, "HH:mm")}
           </div>
         )}
 
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-1">Details (optional)</label>
-          <textarea
-            className="w-full border rounded px-2 py-1 text-sm"
-            rows={2}
-            value={details}
-            onChange={(e) => setDetails(e.target.value)}
-            placeholder="Notes, impact, who is involved…"
+        {/* Task type */}
+        <div className="mb-3">
+          <label className="block text-sm font-semibold text-gray-700 mb-1">
+            Task type
+          </label>
+          <Select
+            options={taskTypeOptions}
+            value={taskTypeOptions.find((o) => o.value === taskTypeId) || null}
+            onChange={(opt) => setTaskTypeId(opt?.value || "")}
+            isDisabled={saving}
+            placeholder="Select task type…"
+            styles={{
+              control: (base) => ({ ...base, backgroundColor: "white" }),
+              option: (base, st) => ({
+                ...base,
+                backgroundColor: st.isSelected
+                  ? "#9b611e"
+                  : st.isFocused
+                  ? "#f1e0c5"
+                  : "white",
+                color: "black",
+              }),
+            }}
           />
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {/* Start / End */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-2">
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Start</label>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">
+              Start
+            </label>
             <input
               type="datetime-local"
               className="w-full border rounded px-2 py-1 text-sm"
-              value={toInputValue(start)}
-              onChange={(e) => setStart(new Date(e.target.value))}
+              value={toLocalDateTimeValue(start)}
+              onChange={(e) => {
+                const d = parseLocalDateTime(e.target.value);
+                if (d) setStart(d);
+              }}
+              disabled={saving}
             />
           </div>
+
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">End</label>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">
+              End
+            </label>
             <input
               type="datetime-local"
               className="w-full border rounded px-2 py-1 text-sm"
-              value={toInputValue(end)}
-              onChange={(e) => setEnd(new Date(e.target.value))}
+              value={toLocalDateTimeValue(end)}
+              onChange={(e) => {
+                const d = parseLocalDateTime(e.target.value);
+                if (d) setEnd(d);
+              }}
+              disabled={saving}
             />
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
+        <div className="flex items-center gap-4 mb-3 text-sm text-gray-700">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={allDay}
+              onChange={(e) => setAllDay(!!e.target.checked)}
+              disabled={saving}
+            />
             All day (blocks online bookings)
           </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
+
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={lockTask}
+              onChange={(e) => setLockTask(!!e.target.checked)}
+              disabled={saving}
+            />
             Lock task
           </label>
         </div>
 
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-1">Columns / staff</label>
+        {/* Staff */}
+        <div className="mb-3">
+          <label className="block text-sm font-semibold text-gray-700 mb-1">
+            Columns / staff
+          </label>
+
           <Select
             isMulti
-            options={stylistOptions}
-            value={stylistOptions.filter((o) => selectedStylistIds.includes(o.value))}
-            onChange={(opts) => setSelectedStylistIds((opts || []).map((o) => o.value))}
-            placeholder="Choose columns to block"
-            styles={{ control: (base) => ({ ...base, minHeight: "38px" }) }}
+            options={staffOptions}
+            value={selectedStaffValue}
+            onChange={(vals) => {
+              const ids = (vals || []).map((v) => v.value).filter(Boolean);
+              setStaffIds(ids);
+            }}
+            isDisabled={saving}
+            placeholder="Select staff…"
+            styles={{
+              control: (base) => ({ ...base, backgroundColor: "white" }),
+              option: (base, st) => ({
+                ...base,
+                backgroundColor: st.isSelected
+                  ? "#9b611e"
+                  : st.isFocused
+                  ? "#f1e0c5"
+                  : "white",
+                color: "black",
+              }),
+            }}
           />
-          {!selectedStylistIds.length && (
-            <p className="text-xs text-amber-700 mt-1">Select at least one column to place the task.</p>
-          )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+        {/* Repeat + Occurrences */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end mb-3">
           <div className="sm:col-span-2">
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Repeat</label>
-            <Select
-              options={recurrenceOptions}
-              value={recurrenceOptions.find((o) => o.value === recurrence)}
-              onChange={(opt) => setRecurrence(opt?.value || "none")}
-              styles={{ control: (base) => ({ ...base, minHeight: "38px" }) }}
-            />
+            <label className="block text-sm font-semibold text-gray-700 mb-1">
+              Repeat
+            </label>
+            <select
+              className="w-full border rounded px-2 py-1 text-sm"
+              value={repeatRule}
+              onChange={(e) => {
+                const v = e.target.value;
+                setRepeatRule(v);
+                if (v === "none") {
+                  setOccurrences(1);
+                  setOccurrencesText("1"); // ✅ keep text in sync when disabling repeat
+                }
+              }}
+              disabled={saving}
+            >
+              <option value="none">No repeat</option>
+              <option value="weekly">Weekly</option>
+              <option value="fortnightly">Fortnightly</option>
+              <option value="monthly">Monthly</option>
+            </select>
           </div>
+
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Occurrences</label>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">
+              Occurrences
+            </label>
+
+            {/* ✅ FIXED: typing-friendly occurrences input (no other logic changed) */}
             <input
               type="number"
               min={1}
               max={52}
-              className="w-full border rounded px-2 py-1 text-sm"
-              value={occurrences}
-              onChange={(e) => setOccurrences(Number(e.target.value) || 1)}
+              step={1}
+              className={`w-full border rounded px-2 py-1 text-sm ${
+                !repeatEnabled ? "bg-gray-100 text-gray-500 cursor-not-allowed" : ""
+              }`}
+              value={repeatEnabled ? occurrencesText : "1"}
+              onChange={(e) => setOccurrencesText(e.target.value)}
+              onBlur={() => {
+                const n = Number(occurrencesText);
+                const safe = Math.max(1, Math.min(52, Number.isFinite(n) ? n : 1));
+                setOccurrences(safe);
+                setOccurrencesText(String(safe));
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+              disabled={saving || !repeatEnabled}
             />
           </div>
         </div>
 
-        {editingTask?.seriesId && (
-          <label className="flex items-center gap-2 text-sm text-gray-700">
+        {/* Apply to series (edit only) */}
+        {isEditing && !!editingSeriesId && (
+          <label className="flex items-center gap-2 text-sm text-gray-700 mb-3">
             <input
               type="checkbox"
-              checked={applySeries}
-              onChange={(e) => setApplySeries(e.target.checked)}
+              checked={applyToSeries}
+              onChange={(e) => setApplyToSeries(!!e.target.checked)}
+              disabled={saving}
             />
             Apply changes to entire series
           </label>
         )}
 
-        <div className="flex justify-end gap-2 pt-2">
-          <button onClick={onClose} className="px-3 py-2 text-sm text-gray-600 hover:text-black">
+        {/* Footer buttons */}
+        <div className="flex items-center justify-between pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-gray-600"
+            disabled={saving}
+          >
             Cancel
           </button>
-          <button
-            onClick={handleSave}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded disabled:bg-indigo-300 disabled:cursor-not-allowed text-sm"
-            disabled={!canSave}
-          >
-            {editingTask ? "Update task" : "Create task"}
-          </button>
+
+          <div className="flex items-center gap-2">
+            {isEditing && (
+              <button
+                type="button"
+                onClick={onDelete}
+                className="px-4 py-2 rounded bg-red-600 text-white text-sm font-semibold disabled:opacity-60"
+                disabled={saving}
+              >
+                Delete task
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={onPrimarySave}
+              className="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold disabled:opacity-60"
+              disabled={
+                saving ||
+                !taskTypeId ||
+                !start ||
+                !end ||
+                !(end > start) ||
+                !staffIds.length
+              }
+            >
+              {saving ? "Saving…" : isEditing ? "Update task" : "Create task"}
+            </button>
+          </div>
         </div>
       </div>
     </Modal>
   );
 }
-
-const toInputValue = (d) => {
-  if (!d) return "";
-  const pad = (n) => String(n).padStart(2, "0");
-  const dt = new Date(d);
-  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(
-    dt.getHours()
-  )}:${pad(dt.getMinutes())}`;
-};

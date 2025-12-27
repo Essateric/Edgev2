@@ -25,6 +25,11 @@ import baseSupabase from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
 import useTaskScheduler from "../components/hooks/useTaskScheduler";
 
+import { v4 as uuidv4 } from "uuid";
+import { addWeeks, addMonths } from "date-fns";
+import { logEvent } from "../lib/logEvent";
+
+
 
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "react-big-calendar/lib/addons/dragAndDrop/styles.css";
@@ -333,21 +338,26 @@ const supabase = auth?.supabaseClient || baseSupabase;
           }))
         );
 
-        setEvents(
-          (bookingsData || []).map((b) => {
-            const stylistRow = staff.find((s) => s.id === b.resource_id);
-            const start = b.start ?? b.start_time;
-            const end = b.end ?? b.end_time;
-            return {
-              ...b,
-              start: new Date(start),
-              end: new Date(end),
-              resourceId: b.resource_id,
-              stylistName: stylistRow?.name || "Unknown Stylist",
-              title: b.title || "No Service Name",
-            };
-          })
-        );
+     setEvents(
+  (bookingsData || []).map((b) => {
+    const stylistRow = staff.find((s) => s.id === b.resource_id);
+    const start = b.start ?? b.start_time;
+    const end = b.end ?? b.end_time;
+
+    const isScheduleBlock =
+      String(b?.status || "").toLowerCase() === "blocked" && !b?.client_id;
+
+    return {
+      ...b,
+      start: new Date(start),
+      end: new Date(end),
+      resourceId: b.resource_id,
+      stylistName: stylistRow?.name || "Unknown Stylist",
+      title: b.title || (isScheduleBlock ? "Blocked" : "No Service Name"),
+      isScheduleBlock, // ✅ IMPORTANT
+    };
+  })
+);
 
         dbgLog("fetchData: end of try block", { runId });
       } catch (error) {
@@ -658,113 +668,354 @@ const handleOpenScheduleTask = (slot, editingTask = null) => {
     setTaskDraft(null);
   };
 
-const handleSaveTask = async ({ instances, replaceSeriesId, replaceSingleId }) => {
-  // ✅ Editing an existing persisted block (already in bookings table)
-  if (taskDraft?.editingTask?.isScheduleBlock && taskDraft.editingTask.id) {
-    const updated = instances?.[0];
-    if (!updated) return;
+const buildOccurrences = ({ start, end, repeatRule, occurrences }) => {
+  const out = [];
+  const count = Math.max(1, Math.min(52, Number(occurrences) || 1));
 
-    try {
-      await supabase
-        .from("bookings")
-        .update({
-          start: updated.start instanceof Date ? updated.start.toISOString() : updated.start,
-          end: updated.end instanceof Date ? updated.end.toISOString() : updated.end,
-          resource_id: updated.resourceId,
-          title: updated.title || taskDraft.editingTask.title,
-          is_locked: !!updated.is_locked,
-        })
-        .eq("id", taskDraft.editingTask.id);
+  const durMs = end.getTime() - start.getTime();
 
-      // UI update (optional; realtime will also update)
-      setEvents((prev) =>
-        prev.map((ev) =>
-          ev.id === taskDraft.editingTask.id
-            ? {
-                ...ev,
-                start: new Date(updated.start),
-                end: new Date(updated.end),
-                resourceId: updated.resourceId,
-                resource_id: updated.resourceId,
-                title: updated.title || ev.title,
-                is_locked: !!updated.is_locked,
-                isScheduleBlock: true,
-              }
-            : ev
-        )
-      );
-    } catch (error) {
-      console.error("Failed to update scheduled task block", error);
-      toast.error("Could not update the scheduled task block");
-    } finally {
-      handleCloseTaskModal();
-    }
-    return;
+  for (let i = 0; i < count; i++) {
+    let s = new Date(start);
+    if (repeatRule === "weekly") s = addWeeks(s, i);
+    if (repeatRule === "fortnightly") s = addWeeks(s, i * 2);
+    if (repeatRule === "monthly") s = addMonths(s, i);
+
+    const e = new Date(s.getTime() + durMs);
+    out.push({ start: s, end: e });
   }
 
-  // ✅ Creating NEW tasks: persist to bookings table so refresh keeps them
-  if (!instances?.length) {
-    handleCloseTaskModal();
-    return;
-  }
+  return out;
+};
+
+const handleSaveTask = async ({ action, payload }) => {
+  if (!supabase) return;
 
   try {
-    // If updating a whole series, delete old rows first
-    if (replaceSeriesId) {
-      await supabase.from("bookings").delete().eq("booking_id", replaceSeriesId);
-    }
+    // ---------- DELETE ----------
+    if (action === "delete") {
+      const meta = payload?.editingMeta || {};
+      const scopeAll = !!payload?.applyToSeries && !!meta.repeat_series_id;
 
-    // If updating a single row, delete it first
-    if (replaceSingleId) {
-      await supabase.from("bookings").delete().eq("id", replaceSingleId);
-    }
+      // grab rows for audit
+      const { data: beforeRows } = await supabase
+        .from("bookings")
+        .select("id,booking_id,repeat_series_id,resource_id,start,end,title,status,is_locked,client_id")
+        .match(
+          scopeAll
+            ? { repeat_series_id: meta.repeat_series_id }
+            : { booking_id: meta.booking_id }
+        );
 
-    // Use seriesId as booking_id so we can delete/edit the series later
-    const seriesId = instances[0]?.seriesId || crypto.randomUUID?.() || uuidv4();
+      const del = scopeAll
+        ? supabase.from("bookings").delete().eq("repeat_series_id", meta.repeat_series_id)
+        : supabase.from("bookings").delete().eq("booking_id", meta.booking_id);
 
-    const rowsToInsert = instances.map((t) => {
-      const s = t.start instanceof Date ? t.start : new Date(t.start);
-      const e = t.end instanceof Date ? t.end : new Date(t.end);
-      const durationMinutes = Math.max(1, Math.round((e.getTime() - s.getTime()) / 60000));
+      const { error } = await del;
+      if (error) throw error;
 
-      return {
-        booking_id: seriesId,          // ✅ series grouping
-        client_id: null,               // ✅ makes it a block
-        resource_id: t.resourceId,     // ✅ staff column
-        start: s.toISOString(),
-        end: e.toISOString(),
-        title: t.title || "Scheduled task",
-        status: "blocked",
-        source: "staff",
-        duration: durationMinutes,
-        is_locked: !!t.is_locked,
-      };
-    });
+      // local UI remove immediately
+      setEvents((prev) =>
+        prev.filter((ev) =>
+          scopeAll
+            ? ev.repeat_series_id !== meta.repeat_series_id
+            : ev.booking_id !== meta.booking_id
+        )
+      );
 
-    const { data, error } = await supabase
-      .from("bookings")
-      .insert(rowsToInsert)
-      .select("*");
+      // audit
+      try {
+        const actorEmail = currentUser?.email || currentUser?.user?.email || null;
+        const actorId = currentUser?.id || currentUser?.user?.id || null;
 
-    if (error) throw error;
-
-    // UI update (optional; realtime will also add them)
-    const mapped = (data || []).map((b) => mapBookingRowToEvent(b));
-    setEvents((prev) => {
-      const existingIds = new Set(prev.map((p) => p.id));
-      const merged = [...prev];
-      for (const m of mapped) {
-        if (!existingIds.has(m.id)) merged.push(m);
+        await logEvent({
+          entityType: "scheduled_task",
+          entityId: scopeAll ? meta.repeat_series_id : meta.booking_id,
+          action: "scheduled_task_deleted",
+          details: {
+            scope: scopeAll ? "series" : "one",
+            repeat_series_id: meta.repeat_series_id || null,
+            booking_id: meta.booking_id || null,
+            deleted_rows: (beforeRows || []).map((r) => ({
+              id: r.id,
+              booking_id: r.booking_id,
+              resource_id: r.resource_id,
+              start: r.start,
+              end: r.end,
+              title: r.title,
+            })),
+          },
+          actorId,
+          actorEmail,
+          supabaseClient: supabase,
+        });
+      } catch (e) {
+        console.warn("[Audit] delete scheduled task failed", e);
       }
-      return merged;
-    });
 
-    toast.success("Scheduled task saved");
-  } catch (error) {
-    console.error("Failed to save scheduled task", error);
-    toast.error(error?.message || "Could not save scheduled task");
-  } finally {
-    handleCloseTaskModal();
+      toast.success("Task deleted");
+      handleCloseTaskModal();
+      return;
+    }
+
+    // ---------- CREATE ----------
+    if (action === "create") {
+      const {
+        title,
+        start,
+        end,
+        staffIds,
+        repeatRule,
+        occurrences,
+        is_locked,
+      } = payload;
+
+      const occ = buildOccurrences({
+        start: new Date(start),
+        end: new Date(end),
+        repeatRule,
+        occurrences,
+      });
+
+      const seriesId =
+        repeatRule && repeatRule !== "none" && occ.length > 1 ? uuidv4() : null;
+
+      const rows = [];
+      for (const o of occ) {
+        const groupId = uuidv4();
+        const durMin = Math.round((o.end.getTime() - o.start.getTime()) / 60000);
+
+        for (const staffId of staffIds) {
+          rows.push({
+            booking_id: groupId,
+            repeat_series_id: seriesId,
+            client_id: null,
+            resource_id: staffId,
+            start: o.start.toISOString(),
+            end: o.end.toISOString(),
+            title: title || "Scheduled task",
+            status: "blocked",
+            source: "staff",
+            duration: durMin,
+            is_locked: !!is_locked,
+          });
+        }
+      }
+
+      const { data: inserted, error } = await supabase
+        .from("bookings")
+        .insert(rows)
+        .select("*");
+
+      if (error) throw error;
+
+      // immediate UI add
+      setEvents((prev) => [
+        ...prev,
+        ...(inserted || []).map((r) => mapBookingRowToEvent(r)),
+      ]);
+
+      // audit
+      try {
+        const actorEmail = currentUser?.email || currentUser?.user?.email || null;
+        const actorId = currentUser?.id || currentUser?.user?.id || null;
+
+        await logEvent({
+          entityType: "scheduled_task",
+          entityId: seriesId || rows?.[0]?.booking_id || uuidv4(),
+          action: "scheduled_task_created",
+          details: {
+            repeat_series_id: seriesId,
+            occurrences: occ.length,
+            staff_ids: staffIds,
+            title,
+            start: new Date(start).toISOString(),
+            end: new Date(end).toISOString(),
+            inserted_rows: (inserted || []).length,
+          },
+          actorId,
+          actorEmail,
+          supabaseClient: supabase,
+        });
+      } catch (e) {
+        console.warn("[Audit] create scheduled task failed", e);
+      }
+
+      toast.success("Task created");
+      handleCloseTaskModal();
+      return;
+    }
+
+    // ---------- UPDATE ----------
+    if (action === "update") {
+      const meta = payload?.editingMeta || {};
+      const scopeAll = !!payload?.applyToSeries && !!meta.repeat_series_id;
+
+      const newStart = new Date(payload.start);
+      const newEnd = new Date(payload.end);
+      const newTitle = payload.title || "Scheduled task";
+      const newStaffIds = payload.staffIds || [];
+      const newLocked = !!payload.is_locked;
+
+      if (!meta.booking_id) {
+        toast.error("Missing booking group id for update");
+        return;
+      }
+
+      // Fetch before rows for scope
+      const { data: beforeRows, error: beforeErr } = await supabase
+        .from("bookings")
+        .select("id,booking_id,repeat_series_id,resource_id,start,end,title,status,is_locked,client_id")
+        .match(
+          scopeAll
+            ? { repeat_series_id: meta.repeat_series_id }
+            : { booking_id: meta.booking_id }
+        );
+
+      if (beforeErr) throw beforeErr;
+
+      const groups = new Map();
+      for (const r of beforeRows || []) {
+        const key = r.booking_id;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(r);
+      }
+
+      // We shift each group by the delta from the edited occurrence
+      const oldStart = meta.oldStart ? new Date(meta.oldStart) : new Date(meta.old_start || meta.oldStart);
+      const deltaMs = oldStart ? newStart.getTime() - new Date(oldStart).getTime() : 0;
+      const newDurMs = newEnd.getTime() - newStart.getTime();
+
+      const deleteIds = [];
+      const inserts = [];
+
+      // Update group-by-group so every staff row in that group is consistent
+      for (const [bookingId, rows] of groups.entries()) {
+        const groupStart = new Date(rows[0].start);
+        const nextStart = new Date(groupStart.getTime() + deltaMs);
+        const nextEnd = new Date(nextStart.getTime() + newDurMs);
+
+        // Update ALL rows in this group (title/time/lock)
+        const { error: upErr } = await supabase
+          .from("bookings")
+          .update({
+            start: nextStart.toISOString(),
+            end: nextEnd.toISOString(),
+            title: newTitle,
+            is_locked: newLocked,
+          })
+          .eq("booking_id", bookingId);
+
+        if (upErr) throw upErr;
+
+        const existingStaff = new Set(rows.map((x) => x.resource_id).filter(Boolean));
+        const wantedStaff = new Set(newStaffIds);
+
+        // delete removed staff rows
+        for (const r of rows) {
+          if (r.resource_id && !wantedStaff.has(r.resource_id)) {
+            deleteIds.push(r.id);
+          }
+        }
+
+        // insert added staff rows
+        for (const staffId of newStaffIds) {
+          if (!existingStaff.has(staffId)) {
+            inserts.push({
+              booking_id: bookingId,
+              repeat_series_id: rows[0].repeat_series_id || null,
+              client_id: null,
+              resource_id: staffId,
+              start: nextStart.toISOString(),
+              end: nextEnd.toISOString(),
+              title: newTitle,
+              status: "blocked",
+              source: "staff",
+              duration: Math.round((nextEnd.getTime() - nextStart.getTime()) / 60000),
+              is_locked: newLocked,
+            });
+          }
+        }
+      }
+
+      if (deleteIds.length) {
+        const { error: delErr } = await supabase
+          .from("bookings")
+          .delete()
+          .in("id", deleteIds);
+
+        if (delErr) throw delErr;
+      }
+
+      let inserted = [];
+      if (inserts.length) {
+        const { data, error: insErr } = await supabase
+          .from("bookings")
+          .insert(inserts)
+          .select("*");
+
+        if (insErr) throw insErr;
+        inserted = data || [];
+      }
+
+      // Refresh UI for affected scope (simple + reliable)
+      const { data: afterRows, error: afterErr } = await supabase
+        .from("bookings")
+        .select("*")
+        .match(
+          scopeAll
+            ? { repeat_series_id: meta.repeat_series_id }
+            : { booking_id: meta.booking_id }
+        );
+
+      if (afterErr) throw afterErr;
+
+      const afterIds = new Set((afterRows || []).map((r) => r.id));
+      const scopeBeforeIds = new Set((beforeRows || []).map((r) => r.id));
+
+      setEvents((prev) => {
+        // remove old scoped rows
+        const kept = prev.filter((ev) => !scopeBeforeIds.has(ev.id));
+        // add rebuilt scoped rows
+        const rebuilt = (afterRows || []).map((r) => mapBookingRowToEvent(r));
+        return [...kept, ...rebuilt];
+      });
+
+      // audit
+      try {
+        const actorEmail = currentUser?.email || currentUser?.user?.email || null;
+        const actorId = currentUser?.id || currentUser?.user?.id || null;
+
+        await logEvent({
+          entityType: "scheduled_task",
+          entityId: scopeAll ? meta.repeat_series_id : meta.booking_id,
+          action: "scheduled_task_updated",
+          details: {
+            scope: scopeAll ? "series" : "one",
+            repeat_series_id: meta.repeat_series_id || null,
+            booking_id: meta.booking_id || null,
+            delta_minutes: Math.round(deltaMs / 60000),
+            title: newTitle,
+            staff_ids: newStaffIds,
+            before_row_count: (beforeRows || []).length,
+            after_row_count: (afterRows || []).length,
+            deleted_row_ids: deleteIds,
+            inserted_row_ids: inserted.map((r) => r.id),
+          },
+          actorId,
+          actorEmail,
+          supabaseClient: supabase,
+        });
+      } catch (e) {
+        console.warn("[Audit] update scheduled task failed", e);
+      }
+
+      toast.success("Task updated");
+      handleCloseTaskModal();
+      return;
+    }
+  } catch (err) {
+    console.error("[Calendar] task save failed", err);
+    toast.error(err?.message || "Task save failed");
   }
 };
 
