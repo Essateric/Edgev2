@@ -15,7 +15,7 @@ import SelectClientModal from "../components/clients/SelectClientModal.jsx";
 import SelectClientModalStaff from "../components/clients/SelectClientModalStaff.jsx";
 import ReviewModal from "../components/ReviewModal";
 import NewBooking from "../components/bookings/NewBooking";
-import ScheduleTaskModal from "../components/tasks/ScheduleTaskModal.jsx";
+import ScheduleTaskModal from "../components/ScheduleTaskModal.jsx";
 
 import useUnavailableTimeBlocks from "../components/UnavailableTimeBlocks";
 import UseSalonClosedBlocks from "../components/UseSalonClosedBlocks";
