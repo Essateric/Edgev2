@@ -80,6 +80,18 @@ const isCancelledStatus = (status) => {
   );
 };
 
+const isScheduleBlockEvent = (ev) => {
+  if (!ev) return false;
+
+  if (ev.isScheduleBlock || ev.isScheduledTask) return true;
+
+  const status = String(ev.status || "").trim().toLowerCase();
+  const hasNoClient = ev.client_id === null || ev.client_id === undefined || ev.client_id === "";
+
+  return status === "blocked" && hasNoClient;
+};
+
+
 const isConfirmedStatus = (status) => {
   const s = String(status || "").trim().toLowerCase();
   return s === "confirmed" || s.startsWith("confirm") || s.includes("confirmed");
@@ -647,66 +659,115 @@ const handleOpenScheduleTask = (slot, editingTask = null) => {
   };
 
 const handleSaveTask = async ({ instances, replaceSeriesId, replaceSingleId }) => {
-    if (taskDraft?.editingTask?.isScheduleBlock && taskDraft.editingTask.id) {
-      const updated = instances?.[0];
-      if (!updated) return;
+  // ✅ Editing an existing persisted block (already in bookings table)
+  if (taskDraft?.editingTask?.isScheduleBlock && taskDraft.editingTask.id) {
+    const updated = instances?.[0];
+    if (!updated) return;
 
+    try {
+      await supabase
+        .from("bookings")
+        .update({
+          start: updated.start instanceof Date ? updated.start.toISOString() : updated.start,
+          end: updated.end instanceof Date ? updated.end.toISOString() : updated.end,
+          resource_id: updated.resourceId,
+          title: updated.title || taskDraft.editingTask.title,
+          is_locked: !!updated.is_locked,
+        })
+        .eq("id", taskDraft.editingTask.id);
+
+      // UI update (optional; realtime will also update)
       setEvents((prev) =>
         prev.map((ev) =>
           ev.id === taskDraft.editingTask.id
             ? {
                 ...ev,
-                ...updated,
-                id: ev.id,
+                start: new Date(updated.start),
+                end: new Date(updated.end),
                 resourceId: updated.resourceId,
                 resource_id: updated.resourceId,
                 title: updated.title || ev.title,
+                is_locked: !!updated.is_locked,
                 isScheduleBlock: true,
               }
             : ev
         )
       );
+    } catch (error) {
+      console.error("Failed to update scheduled task block", error);
+      toast.error("Could not update the scheduled task block");
+    } finally {
+      handleCloseTaskModal();
+    }
+    return;
+  }
 
-      try {
-        await supabase
-          .from("bookings")
-          .update({
-            start: updated.start,
-            end: updated.end,
-            resource_id: updated.resourceId,
-            title: updated.title || taskDraft.editingTask.title,
-          })
-          .eq("id", taskDraft.editingTask.id);
-      } catch (error) {
-        console.error("Failed to update scheduled task block", error);
-        toast.error("Could not update the scheduled task block");
-      } finally {
-        handleCloseTaskModal();
-      }
-      return;
+  // ✅ Creating NEW tasks: persist to bookings table so refresh keeps them
+  if (!instances?.length) {
+    handleCloseTaskModal();
+    return;
+  }
+
+  try {
+    // If updating a whole series, delete old rows first
+    if (replaceSeriesId) {
+      await supabase.from("bookings").delete().eq("booking_id", replaceSeriesId);
     }
 
-    setScheduledTasks((prev) => {
-      let next = [...prev];
+    // If updating a single row, delete it first
+    if (replaceSingleId) {
+      await supabase.from("bookings").delete().eq("id", replaceSingleId);
+    }
 
-      if (replaceSeriesId) {
-        next = next.filter((t) => t.seriesId !== replaceSeriesId);
-      }
+    // Use seriesId as booking_id so we can delete/edit the series later
+    const seriesId = instances[0]?.seriesId || crypto.randomUUID?.() || uuidv4();
 
-      if (replaceSingleId) {
-        next = next.filter((t) => t.id !== replaceSingleId);
-      }
+    const rowsToInsert = instances.map((t) => {
+      const s = t.start instanceof Date ? t.start : new Date(t.start);
+      const e = t.end instanceof Date ? t.end : new Date(t.end);
+      const durationMinutes = Math.max(1, Math.round((e.getTime() - s.getTime()) / 60000));
 
-      const withNames = instances.map((t) => ({
-        ...t,
-        resource_id: t.resourceId,
-        stylistName: stylistList.find((s) => s.id === t.resourceId)?.title || "Task",
-      }));
-
-      return [...next, ...withNames];
+      return {
+        booking_id: seriesId,          // ✅ series grouping
+        client_id: null,               // ✅ makes it a block
+        resource_id: t.resourceId,     // ✅ staff column
+        start: s.toISOString(),
+        end: e.toISOString(),
+        title: t.title || "Scheduled task",
+        status: "blocked",
+        source: "staff",
+        duration: durationMinutes,
+        is_locked: !!t.is_locked,
+      };
     });
-     handleCloseTaskModal();
-  };
+
+    const { data, error } = await supabase
+      .from("bookings")
+      .insert(rowsToInsert)
+      .select("*");
+
+    if (error) throw error;
+
+    // UI update (optional; realtime will also add them)
+    const mapped = (data || []).map((b) => mapBookingRowToEvent(b));
+    setEvents((prev) => {
+      const existingIds = new Set(prev.map((p) => p.id));
+      const merged = [...prev];
+      for (const m of mapped) {
+        if (!existingIds.has(m.id)) merged.push(m);
+      }
+      return merged;
+    });
+
+    toast.success("Scheduled task saved");
+  } catch (error) {
+    console.error("Failed to save scheduled task", error);
+    toast.error(error?.message || "Could not save scheduled task");
+  } finally {
+    handleCloseTaskModal();
+  }
+};
+
 
 
   const handleBlockCreated = useCallback(
@@ -865,24 +926,36 @@ const handleSaveTask = async ({ instances, replaceSeriesId, replaceSingleId }) =
           setIsModalOpen(true);
           setStep(1);
         }}
-        onSelectEvent={(event) => {
+   onSelectEvent={(event) => {
+  if (event.isUnavailable || event.isSalonClosed || event.isTask) return;
 
-       if (event.isUnavailable || event.isSalonClosed || event.isTask) return;
+  // ✅ ALWAYS open task editor for blocked slots (even if flags are missing)
+  if (isScheduleBlockEvent(event)) {
+    const rid = event.resourceId ?? event.resource_id ?? null;
 
-          if (event.isScheduleBlock || event.isScheduledTask) {
-            handleOpenScheduleTask(
-              {
-                start: event.start,
-                end: event.end,
-                resourceId: event.resourceId,
-              },
-              event
-            );
-            return;
-          }
+    handleOpenScheduleTask(
+      {
+        start: event.start,
+        end: event.end,
+        resourceId: rid,
+      },
+      {
+        ...event,
+        // ✅ force flags so edit save logic always treats it as a DB block
+        isScheduleBlock: true,
+        resourceId: rid,
+        start: event.start,
+        end: event.end,
+        // ✅ series id hint for later (optional)
+        seriesId: event.repeat_series_id || event.booking_id || event.seriesId || null,
+      }
+    );
+    return;
+  }
 
-          setSelectedBooking(coerceEventForPopup(event));
-        }}
+  setSelectedBooking(coerceEventForPopup(event));
+}}
+
         onEventDrop={moveEvent}
         resizable
         onEventResize={moveEvent}
@@ -948,6 +1021,19 @@ const handleSaveTask = async ({ instances, replaceSeriesId, replaceSingleId }) =
               },
             };
           }
+
+          if (isScheduleBlockEvent(event) || event.isTask) {
+    return {
+      style: {
+        zIndex: 2,
+        backgroundImage: "linear-gradient(135deg, #d0a36c, #b0702e, #391f04)",
+        color: "#fff",
+        border: "1px solid #d0a36c",
+        opacity: 0.95,
+      },
+      title: event.title,
+    };
+  }
 
           // default (pending etc)
           return { style: { zIndex: 2 } };
