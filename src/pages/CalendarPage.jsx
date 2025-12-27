@@ -5,6 +5,7 @@ import withDragAndDrop from "react-big-calendar/lib/addons/dragAndDrop";
 import { format, parse, startOfWeek, getDay } from "date-fns";
 import enGB from "date-fns/locale/en-GB";
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon } from "lucide-react";
+import toast from "react-hot-toast";
 
 import CalendarModal from "../components/CalendarModal";
 import BookingPopUp from "../components/bookings/BookingPopUp";
@@ -14,6 +15,7 @@ import SelectClientModal from "../components/clients/SelectClientModal.jsx";
 import SelectClientModalStaff from "../components/clients/SelectClientModalStaff.jsx";
 import ReviewModal from "../components/ReviewModal";
 import NewBooking from "../components/bookings/NewBooking";
+import ScheduleTaskModal from "../components/tasks/ScheduleTaskModal.jsx";
 
 import useUnavailableTimeBlocks from "../components/UnavailableTimeBlocks";
 import UseSalonClosedBlocks from "../components/UseSalonClosedBlocks";
@@ -21,6 +23,7 @@ import useAddGridTimeLabels from "../utils/AddGridTimeLabels";
 
 import baseSupabase from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
+import useTaskScheduler from "../components/hooks/useTaskScheduler";
 
 
 import "react-big-calendar/lib/css/react-big-calendar.css";
@@ -88,15 +91,19 @@ export default function CalendarPage() {
     // Add subtle quarter-hour labels to each calendar grid cell
   useAddGridTimeLabels(9, 20, 15);
 
- const mapBookingRowToEvent = (b, fallbackConfirmed = false) => {
+const mapBookingRowToEvent = useCallback (
+  (b, fallbackConfirmed = false) => {
     const stylistRow = stylistList.find((s) => s.id === b.resource_id);
     const start = b.start ?? b.start_time;
     const end = b.end ?? b.end_time;
+     const isScheduleBlock =
+      String(b?.status || "").toLowerCase() === "blocked" && !b?.client_id;
 
       // When realtime updates don’t include booking_confirmations, keep the
     // previously-known confirmation flag so the green indicator isn’t lost.
-    const confirmed_via_reminder =
-      hasReminderConfirmation(b) || fallbackConfirmed || false;
+  const confirmed_via_reminder = Boolean(
+  fallbackConfirmed || b?.confirmed_via_reminder
+);
 
     return {
       ...b,
@@ -104,11 +111,13 @@ export default function CalendarPage() {
       end: new Date(end),
       resourceId: b.resource_id,
       stylistName: stylistRow?.title || "Unknown Stylist", // ✅ FIX: stylistList uses `title`
-      title: b.title || "No Service Name",
+      title: b.title || (isScheduleBlock ? "Blocked" : "No Service Name"),
       confirmed_via_reminder,
+       isScheduleBlock,
     };
-  };
-
+  },
+  [stylistList]
+);
   const auth = useAuth();
   const { currentUser, pageLoading, authLoading } = auth;
 
@@ -121,6 +130,13 @@ const supabase = auth?.supabaseClient || baseSupabase;
 
   const [clients, setClients] = useState([]);
   const [events, setEvents] = useState([]);
+  const {
+    tasks,
+    taskEvents,
+    taskSaving,
+    taskError,
+    upsertTask,
+  } = useTaskScheduler({ supabase, stylistList });
 
   const [dbg, setDbg] = useState({});
   const dbgLog = (k, v = true) => {
@@ -151,10 +167,18 @@ const supabase = auth?.supabaseClient || baseSupabase;
   const [showReminders, setShowReminders] = useState(false);
   const [errText, setErrText] = useState("");
   const [reviewData, setReviewData] = useState(null);
+  const [scheduledTasks, setScheduledTasks] = useState([]);
+  const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const [taskDraft, setTaskDraft] = useState(null);
 
   const selectedClientRow = useMemo(() => {
-    return clientObj || clients?.find((c) => c.id === selectedClient) || null;
-  }, [clientObj, clients, selectedClient]);
+     return [
+      ...(events || []),
+      ...scheduledTasks,
+      ...unavailableBlocks,
+      ...salonClosedBlocks,
+    ];
+  }, [events, scheduledTasks, unavailableBlocks, salonClosedBlocks]);
 
   const newBookingExtendedProps = useMemo(() => {
     return {
@@ -170,8 +194,13 @@ const supabase = auth?.supabaseClient || baseSupabase;
 
   // ✅ Include cancelled in view (we color them red below)
   const calendarEvents = useMemo(() => {
-    return [...(events || []), ...unavailableBlocks, ...salonClosedBlocks];
-  }, [events, unavailableBlocks, salonClosedBlocks]);
+    return [
+      ...(events || []),
+      ...(taskEvents || []),
+      ...unavailableBlocks,
+      ...salonClosedBlocks,
+    ];
+  }, [events, taskEvents, unavailableBlocks, salonClosedBlocks]);
 
   const isAdmin = currentUser?.permission?.toLowerCase() === "admin";
 
@@ -526,13 +555,39 @@ const supabase = auth?.supabaseClient || baseSupabase;
 
   const moveEvent = useCallback(
     async ({ event, start, end, resourceId }) => {
+      const { start: s, end: e } = clampRange(start, end);
+
       if (event?.is_locked) return;
       if (isCancelledStatus(event?.status)) return; // ✅ don't move cancelled
 
-      const { start: s, end: e } = clampRange(start, end);
+      if (event?.isScheduledTask) {
+        const { start: s, end: e } = clampRange(start, end);
+        const rid = resourceId ?? event.resourceId;
+
+        setScheduledTasks((prev) =>
+          prev.map((ev) =>
+            ev.id === event.id
+              ? {
+                  ...ev,
+                  start: s,
+                  end: e,
+                  resourceId: rid,
+                  stylistName: stylistList.find((s1) => s1.id === rid)?.title || ev.stylistName,
+                }
+              : ev
+          )
+        );
+        return;
+      }
+
       const rid = resourceId ?? event.resourceId;
 
       const newDuration = (e.getTime() - s.getTime()) / 60000;
+
+      if (event?.isScheduleBlock && newDuration > 12 * 60) {
+        toast.error("Blocks can’t be longer than 12 hours.");
+        return;
+      }
 
       const updated = {
         ...event,
@@ -562,10 +617,10 @@ const supabase = auth?.supabaseClient || baseSupabase;
         console.error("❌ Failed to move booking:", error);
       }
     },
-    [stylistList, supabase]
+   [stylistList, supabase, tasks, upsertTask]
   );
 
-  const handleCancelBookingFlow = () => {
+  const handleCancelBookingFlow = useCallback(() => {
     setIsModalOpen(false);
     setSelectedSlot(null);
     setSelectedClient("");
@@ -573,7 +628,53 @@ const supabase = auth?.supabaseClient || baseSupabase;
     setBasket([]);
     setReviewData(null);
     setStep(1);
+ }, []);
+
+  const handleOpenScheduleTask = (slot) => {
+    setIsModalOpen(false);
+    setTaskDraft({
+      slot: slot || selectedSlot,
+    });
+    setTaskModalOpen(true);
   };
+
+  const handleCloseTaskModal = () => {
+    setTaskModalOpen(false);
+    setTaskDraft(null);
+  };
+
+  const handleSaveTask = ({ instances, replaceSeriesId, replaceSingleId }) => {
+    setScheduledTasks((prev) => {
+      let next = [...prev];
+
+      if (replaceSeriesId) {
+        next = next.filter((t) => t.seriesId !== replaceSeriesId);
+      }
+
+      if (replaceSingleId) {
+        next = next.filter((t) => t.id !== replaceSingleId);
+      }
+
+      const withNames = instances.map((t) => ({
+        ...t,
+        resource_id: t.resourceId,
+        stylistName: stylistList.find((s) => s.id === t.resourceId)?.title || "Task",
+      }));
+
+      return [...next, ...withNames];
+    });
+  };
+
+
+  const handleBlockCreated = useCallback(
+    (row) => {
+      if (!row) return;
+      const mapped = mapBookingRowToEvent(row);
+      setEvents((prev) => [...prev, mapped]);
+      handleCancelBookingFlow();
+    },
+    [handleCancelBookingFlow, mapBookingRowToEvent]
+  );
 
   /* ---------- simple auth gate ---------- */
 
@@ -684,6 +785,15 @@ const supabase = auth?.supabaseClient || baseSupabase;
         </div>
       </div>
 
+       {taskError && (
+        <div className="mb-3 p-3 bg-red-50 text-red-700 border border-red-200 rounded">
+          Task save failed: {taskError}
+        </div>
+      )}
+      {taskSaving && (
+        <div className="mb-2 text-sm text-gray-600">Saving task…</div>
+      )}
+
       <DnDCalendar
         localizer={localizer}
         events={calendarEvents}
@@ -713,13 +823,29 @@ const supabase = auth?.supabaseClient || baseSupabase;
           setStep(1);
         }}
         onSelectEvent={(event) => {
-          if (event.isUnavailable || event.isSalonClosed) return;
+        if (event.isUnavailable || event.isSalonClosed || event.isTask) return;
           setSelectedBooking(coerceEventForPopup(event));
         }}
         onEventDrop={moveEvent}
         resizable
         onEventResize={moveEvent}
         eventPropGetter={(event) => {
+          if (event.isTask) {
+            return {
+              style: {
+                zIndex: 2,
+                backgroundColor: event.color || "#0ea5e9",
+                color: "#fff",
+                border: "none",
+                opacity: 0.9,
+              },
+              title: event.description
+                ? `${event.title}: ${event.description}`
+                : event.title,
+            };
+          }
+
+
           if (event.isUnavailable) {
             return {
               style: {
@@ -736,6 +862,17 @@ const supabase = auth?.supabaseClient || baseSupabase;
                 backgroundColor: "#333333",
                 opacity: 0.7,
                 border: "none",
+              },
+            };
+          }
+
+          if (event.isScheduleBlock) {
+            return {
+              style: {
+                backgroundColor: "#6b7280",
+                opacity: 0.9,
+                border: "none",
+                color: "#fff",
               },
             };
           }
@@ -825,56 +962,56 @@ const supabase = auth?.supabaseClient || baseSupabase;
         }}
       />
 
-      <SelectClientModal
-        isOpen={isModalOpen && step === 1}
-        onClose={handleCancelBookingFlow}
-        clients={clients}
-        selectedSlot={selectedSlot}
-        selectedClient={selectedClient}
-        setSelectedClient={(id) => {
-          setSelectedClient(id);
-          setClientObj(clients.find((c) => c.id === id));
-        }}
-        onNext={() => setStep(2)}
-        onClientCreated={(c) => {
-          setClients((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c]));
-          setSelectedClient(c.id);
-          setClientObj(c);
-        }}
-      />
+    {isAdmin ? (
+  <SelectClientModal
+    isOpen={isModalOpen && step === 1}
+    onClose={handleCancelBookingFlow}
+    clients={clients}
+    selectedSlot={selectedSlot}
+    selectedClient={selectedClient}
+    setSelectedClient={(id) => {
+      setSelectedClient(id);
+      setClientObj(clients.find((c) => c.id === id));
+    }}
+    onNext={() => setStep(2)}
+    onClientCreated={(c) => {
+      setClients((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c]));
+      setSelectedClient(c.id);
+      setClientObj(c);
+    }}
+    supabaseClient={supabase}
+    onBlockCreated={handleBlockCreated}
+  />
+) : (
+  <SelectClientModalStaff
+    supabaseClient={supabase}
+    isOpen={isModalOpen && step === 1}
+    onClose={handleCancelBookingFlow}
+    clients={clients}
+    selectedSlot={selectedSlot}
+    selectedClient={selectedClient}
+    setSelectedClient={async (id) => {
+      setSelectedClient(id);
+      const local = clients.find((c) => c.id === id);
+      if (local) return setClientObj(local);
 
-      <SelectClientModalStaff
-        supabaseClient={supabase}
-        isOpen={isModalOpen && step === 1}
-        onClose={handleCancelBookingFlow}
-        clients={clients}
-        selectedSlot={selectedSlot}
-        selectedClient={selectedClient}
-        setSelectedClient={async (id) => {
-          setSelectedClient(id);
+      const { data } = await supabase
+        .from("clients")
+        .select("id, first_name, last_name, mobile, email, notes, dob, created_at")
+        .eq("id", id)
+        .single();
 
-          const local = clients.find((c) => c.id === id);
-          if (local) {
-            setClientObj(local);
-            return;
-          }
+      if (data) setClientObj(data);
+    }}
+    onNext={() => setStep(2)}
+    onClientCreated={(c) => {
+      setClients((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c]));
+      setSelectedClient(c.id);
+      setClientObj(c);
+    }}
+  />
+)}
 
-          const { data, error } = await supabase
-            .from("clients")
-            .select("id, first_name, last_name, mobile, email, notes, dob, created_at")
-            .eq("id", id)
-            .single();
-
-          if (error) console.error("[CalendarPage] fetch selected client failed:", error);
-          if (data) setClientObj(data);
-        }}
-        onNext={() => setStep(2)}
-        onClientCreated={(c) => {
-          setClients((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c]));
-          setSelectedClient(c.id);
-          setClientObj(c);
-        }}
-      />
 
       <RightDrawer
         isOpen={step === 2}

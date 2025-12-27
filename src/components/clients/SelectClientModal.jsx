@@ -1,8 +1,10 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Modal from "../Modal";
 import Select from "react-select";
 import { format } from "date-fns";
-import { supabase } from "../../supabaseClient"; // ✅ add supabase
+import toast from "react-hot-toast";
+import { v4 as uuidv4 } from "uuid";
+import { supabase as defaultSupabase } from "../../supabaseClient";
 import { findOrCreateClient } from "../../onlinebookings/lib/findOrCreateClient.js";
 
 export default function SelectClientModal({
@@ -13,8 +15,13 @@ export default function SelectClientModal({
   selectedClient,
   setSelectedClient,
   onNext,
-  onClientCreated, // ✅ NEW (optional) – parent can update its clients state
+  onScheduleTask,
+  onClientCreated,
+  supabaseClient,
+  onBlockCreated,
 }) {
+  const supabase = supabaseClient || defaultSupabase;
+
   const clientOptions = useMemo(
     () =>
       (clients || []).map((c) => ({
@@ -23,6 +30,14 @@ export default function SelectClientModal({
       })),
     [clients]
   );
+
+  // ---- MODE: "booking" (client) vs "task" (block) ----
+  const [mode, setMode] = useState("booking"); // "booking" | "task"
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setMode("booking");
+  }, [isOpen]);
 
   // --- New client mini-form state ---
   const [creating, setCreating] = useState(false);
@@ -33,50 +48,198 @@ export default function SelectClientModal({
     mobile: "",
   });
 
-  const normPhone = (s = "") => s.replace(/[^\d+]/g, "");
-  const isEmail = (s = "") => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s).trim());
+  // --- Task blocks ---
+  const [taskTypes, setTaskTypes] = useState([]);
+  const [selectedTaskType, setSelectedTaskType] = useState("");
+  const [blockStart, setBlockStart] = useState(null);
+  const [blockEnd, setBlockEnd] = useState(null);
+  const [savingBlock, setSavingBlock] = useState(false);
 
-  // ⚙️ Find existing by email/mobile; else create; then select
-const handleCreateOrSelect = async () => {
-  const fn = newClient.first_name.trim();
-  const ln = newClient.last_name.trim();
-  const em = newClient.email.trim();
-  const mo = newClient.mobile;
+  useEffect(() => {
+    if (!isOpen || !supabase) return;
 
-  if (!fn || !ln) {
-    alert("Enter first and last name.");
-    return;
-  }
+    const fetchTaskTypes = async () => {
+      const { data, error } = await supabase.from("schedule_task_types").select("*");
+      if (error) {
+        console.error("Failed to load task types", error);
+        toast.error("Could not load task types");
+        return;
+      }
+      setTaskTypes(data || []);
+      if (!selectedTaskType && data?.length) {
+        const active = data.find((t) => t.is_active !== false);
+        setSelectedTaskType((active || data[0])?.id || "");
+      }
+    };
 
-  setCreating(true);
+    fetchTaskTypes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, supabase]);
+
+  useEffect(() => {
+    if (!selectedSlot?.start || !selectedSlot?.end) return;
+    setBlockStart(new Date(selectedSlot.start));
+    setBlockEnd(new Date(selectedSlot.end));
+  }, [selectedSlot?.start, selectedSlot?.end]);
+
+  const findTaskLabel = (id) => {
+    const row = taskTypes.find((t) => t.id === id) || {};
+    return (
+      row.name ||
+      row.title ||
+      row.label ||
+      row.task_type ||
+      row.type ||
+      "Blocked"
+    );
+  };
+
+  const toLocalDateTimeValue = (d) => {
+    if (!d) return "";
+    const pad = (v) => `${v}`.padStart(2, "0");
+    const yyyy = d.getFullYear();
+    const mm = pad(d.getMonth() + 1);
+    const dd = pad(d.getDate());
+    const hh = pad(d.getHours());
+    const min = pad(d.getMinutes());
+    return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+  };
+
+  const handleBlockCreate = async () => {
+    if (!supabase) {
+      toast.error("No Supabase client available");
+      return;
+    }
+    if (!selectedSlot?.resourceId) {
+      toast.error("Select a staff member to block out time.");
+      return;
+    }
+    if (!selectedTaskType) {
+      toast.error("Pick a task type");
+      return;
+    }
+
+    const start = blockStart ? new Date(blockStart) : null;
+    const end = blockEnd ? new Date(blockEnd) : null;
+
+    if (!start || !end || !(end > start)) {
+      toast.error("End time must be after start time.");
+      return;
+    }
+
+    const durationMinutes = Math.round((end.getTime() - start.getTime()) / 60000);
+    if (durationMinutes > 12 * 60) {
+      toast.error("Blocks can’t be longer than 12 hours.");
+      return;
+    }
+
+    setSavingBlock(true);
+    const booking_id = uuidv4();
+    const title = findTaskLabel(selectedTaskType);
+
+    try {
+      const { data, error } = await supabase
+        .from("bookings")
+        .insert([
+          {
+            booking_id,
+            client_id: null,
+            resource_id: selectedSlot.resourceId,
+            start: start.toISOString(),
+            end: end.toISOString(),
+            title,
+            status: "blocked",
+            source: "staff",
+            duration: durationMinutes,
+          },
+        ])
+        .select("*")
+        .single();
+
+      if (error) throw error;
+
+      toast.success("Task scheduled (blocked)");
   try {
-    const clientRow = await findOrCreateClient({
-      first_name: fn,
-      last_name:  ln,
-      email:      em,
-      mobile:     mo,
-      // in admin you can let email be optional:
-      requireEmail: false,
-    });
+  onBlockCreated?.(data);
+} catch (e) {
+  console.warn("onBlockCreated callback failed:", e);
+}
+onClose?.();
 
-    setSelectedClient(clientRow.id);
-    onClientCreated?.(clientRow); // let parent refresh its clients cache if desired
-  } catch (e) {
-    console.error("Create/select client failed:", e?.message || e);
-    alert(e?.message || "Couldn't create/select client.");
-  } finally {
-    setCreating(false);
-  }
-};
+    } catch (err) {
+      console.error("Failed to create block", err);
+      toast.error(err?.message || "Could not create block");
+    } finally {
+      setSavingBlock(false);
+    }
+  };
+
+  const handleCreateOrSelect = async () => {
+    const fn = newClient.first_name.trim();
+    const ln = newClient.last_name.trim();
+    const em = newClient.email.trim();
+    const mo = newClient.mobile;
+
+    if (!fn || !ln) {
+      toast.error("Enter first and last name.");
+      return;
+    }
+
+    setCreating(true);
+    try {
+      const clientRow = await findOrCreateClient({
+        first_name: fn,
+        last_name: ln,
+        email: em,
+        mobile: mo,
+        requireEmail: false,
+      });
+
+      setSelectedClient(clientRow.id);
+      onClientCreated?.(clientRow);
+      toast.success("Client selected");
+    } catch (e) {
+      console.error("Create/select client failed:", e?.message || e);
+      toast.error(e?.message || "Couldn't create/select client.");
+    } finally {
+      setCreating(false);
+    }
+  };
 
   return (
     <Modal isOpen={isOpen} onClose={onClose}>
       <div>
-        <h3 className="text-lg font-bold mb-2 text-bronze">Select Client</h3>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-lg font-bold text-bronze">
+            {mode === "task" ? "Schedule task (block time)" : "Select Client"}
+          </h3>
+
+          {/* Simple mode toggle */}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className={`px-3 py-1 rounded text-sm border ${
+                mode === "booking" ? "bg-black text-white" : "bg-white text-black"
+              }`}
+              onClick={() => setMode("booking")}
+            >
+              Booking
+            </button>
+            <button
+              type="button"
+              className={`px-3 py-1 rounded text-sm border ${
+                mode === "task" ? "bg-black text-white" : "bg-white text-black"
+              }`}
+              onClick={() => setMode("task")}
+            >
+              Task
+            </button>
+          </div>
+        </div>
 
         {selectedSlot && (
           <>
-            <p className="text-sm text-gray-700 mb-2">
+            <p className="text-sm text-gray-700 mb-1">
               Date: {format(selectedSlot.start, "eeee dd MMMM yyyy")}
             </p>
             <p className="text-sm text-gray-700 mb-3">
@@ -85,79 +248,176 @@ const handleCreateOrSelect = async () => {
           </>
         )}
 
-        {/* Existing clients */}
-        <label className="block text-sm mb-1 text-gray-700">Search existing</label>
-        <Select
-          options={clientOptions}
-          value={clientOptions.find((opt) => opt.value === selectedClient) || null}
-          onChange={(selected) => setSelectedClient(selected?.value)}
-          placeholder="-- Select Client --"
-          styles={{
-            control: (base) => ({ ...base, backgroundColor: "white", color: "black" }),
-            singleValue: (base) => ({ ...base, color: "black" }),
-            option: (base, { isFocused, isSelected }) => ({
-              ...base,
-              backgroundColor: isSelected ? "#9b611e" : isFocused ? "#f1e0c5" : "white",
-              color: "black",
-            }),
-          }}
-        />
+        {/* ---------------- BOOKING MODE ---------------- */}
+        {mode === "booking" && (
+          <>
+            <label className="block text-sm mb-1 text-gray-700">Search existing</label>
+            <Select
+              options={clientOptions}
+              value={clientOptions.find((opt) => opt.value === selectedClient) || null}
+              onChange={(selected) => setSelectedClient(selected?.value)}
+              placeholder="-- Select Client --"
+              styles={{
+                control: (base) => ({ ...base, backgroundColor: "white", color: "black" }),
+                singleValue: (base) => ({ ...base, color: "black" }),
+                option: (base, { isFocused, isSelected }) => ({
+                  ...base,
+                  backgroundColor: isSelected ? "#9b611e" : isFocused ? "#f1e0c5" : "white",
+                  color: "black",
+                }),
+              }}
+            />
 
-        {/* Divider */}
-        <div className="my-3 h-px bg-gray-300" />
+            <div className="my-3 h-px bg-gray-300" />
 
-        {/* New client quick add */}
-        <p className="text-sm font-semibold text-gray-800 mb-2">Or add a new client</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <input
-            className="border rounded px-2 py-1 text-sm"
-            placeholder="First name"
-            value={newClient.first_name}
-            onChange={(e) => setNewClient({ ...newClient, first_name: e.target.value })}
-          />
-          <input
-            className="border rounded px-2 py-1 text-sm"
-            placeholder="Last name"
-            value={newClient.last_name}
-            onChange={(e) => setNewClient({ ...newClient, last_name: e.target.value })}
-          />
-          <input
-            className="border rounded px-2 py-1 text-sm"
-            placeholder="Email (optional)"
-            type="email"
-            value={newClient.email}
-            onChange={(e) => setNewClient({ ...newClient, email: e.target.value })}
-          />
-          <input
-            className="border rounded px-2 py-1 text-sm"
-            placeholder="Mobile (optional)"
-            value={newClient.mobile}
-            onChange={(e) => setNewClient({ ...newClient, mobile: e.target.value })}
-          />
-        </div>
+            <p className="text-sm font-semibold text-gray-800 mb-2">Or add a new client</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <input
+                className="border rounded px-2 py-1 text-sm"
+                placeholder="First name"
+                value={newClient.first_name}
+                onChange={(e) => setNewClient({ ...newClient, first_name: e.target.value })}
+              />
+              <input
+                className="border rounded px-2 py-1 text-sm"
+                placeholder="Last name"
+                value={newClient.last_name}
+                onChange={(e) => setNewClient({ ...newClient, last_name: e.target.value })}
+              />
+              <input
+                className="border rounded px-2 py-1 text-sm"
+                placeholder="Email (optional)"
+                type="email"
+                value={newClient.email}
+                onChange={(e) => setNewClient({ ...newClient, email: e.target.value })}
+              />
+              <input
+                className="border rounded px-2 py-1 text-sm"
+                placeholder="Mobile (optional)"
+                value={newClient.mobile}
+                onChange={(e) => setNewClient({ ...newClient, mobile: e.target.value })}
+              />
+            </div>
 
-        <div className="flex justify-between items-center mt-4">
-          <button onClick={onClose} className="text-gray-500">Cancel</button>
-
-          <div className="flex gap-2">
-            {/* Create/select client first, then you can click Next */}
-            <button
-              onClick={handleCreateOrSelect}
-              className="bg-black text-white px-4 py-2 rounded"
-              disabled={creating}
+            <div className="flex justify-between items-center mt-4">
+              <button onClick={onClose} className="text-gray-500">
+                Cancel
+              </button>
+              <button
+              onClick={() => {
+                onClose?.();
+                onScheduleTask?.(selectedSlot);
+              }}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded transition-colors disabled:bg-indigo-300 disabled:cursor-not-allowed"
             >
-              {creating ? "Saving..." : "Use this client"}
+              Schedule task
             </button>
 
-            <button
-              onClick={onNext}
-              className="bg-bronze text-white px-4 py-2 rounded"
-              disabled={!selectedClient}
-            >
-              Next
-            </button>
-          </div>
-        </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleCreateOrSelect}
+                  className="bg-black text-white px-4 py-2 rounded"
+                  disabled={creating}
+                >
+                  {creating ? "Saving..." : "Use this client"}
+                </button>
+
+                <button
+                  onClick={onNext}
+                  className="bg-bronze text-white px-4 py-2 rounded disabled:bg-bronze/40 disabled:cursor-not-allowed"
+                  disabled={!selectedClient}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+
+            {/* Convenience button */}
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={() => setMode("task")}
+                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded"
+              >
+                Schedule task (holiday / training / block)
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ---------------- TASK MODE ---------------- */}
+        {mode === "task" && (
+          <>
+            <div className="my-3 h-px bg-gray-300" />
+
+            <div className="space-y-3">
+              <p className="text-xs text-gray-600">
+                This creates a <b>blocked</b> hold (no client). Online bookings won’t be made from here.
+                Max 12 hours.
+              </p>
+
+              <div className="space-y-2">
+                <label className="text-sm text-gray-700">Task type</label>
+                <select
+                  className="w-full border rounded px-2 py-2 text-sm"
+                  value={selectedTaskType}
+                  onChange={(e) => setSelectedTaskType(e.target.value)}
+                  disabled={savingBlock || !taskTypes.length}
+                >
+                  {!taskTypes.length && <option value="">Loading...</option>}
+                  {taskTypes.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {findTaskLabel(t.id)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-sm text-gray-700">Start</label>
+                  <input
+                    type="datetime-local"
+                    className="w-full border rounded px-2 py-2 text-sm"
+                    value={toLocalDateTimeValue(blockStart)}
+                    onChange={(e) => setBlockStart(new Date(e.target.value))}
+                    disabled={savingBlock}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm text-gray-700">End</label>
+                  <input
+                    type="datetime-local"
+                    className="w-full border rounded px-2 py-2 text-sm"
+                    value={toLocalDateTimeValue(blockEnd)}
+                    onChange={(e) => setBlockEnd(new Date(e.target.value))}
+                    disabled={savingBlock}
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-between items-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => setMode("booking")}
+                  className="text-gray-500"
+                  disabled={savingBlock}
+                >
+                  Back
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleBlockCreate}
+                  className="bg-gray-900 text-white px-4 py-2 rounded disabled:opacity-60"
+                  disabled={savingBlock || !selectedTaskType}
+                >
+                  {savingBlock ? "Saving..." : "Create Task"}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </Modal>
   );

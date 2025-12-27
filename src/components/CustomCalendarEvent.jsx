@@ -11,6 +11,7 @@ export default function CustomCalendarEvent({
   ...rest
 }) {
   const isBlocked = event.isUnavailable || event.isSalonClosed;
+   const isTask = !!event.isTask;
 
   // KEEP RBC’s computed positioning (top/height/left/width)
   const { className: rbcClassName, style: rbcStyle, ...domHandlers } = rest;
@@ -49,7 +50,44 @@ export default function CustomCalendarEvent({
   const fontSize = Math.min(18, Math.max(10, mins * 0.4));
   const durationLabel =
     mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60 ? `${mins % 60}m` : ""}` : `${Math.round(mins)}m`;
-     const reminderConfirmed = !!event.confirmed_via_reminder;
+    const reminderConfirmed = !!event.confirmed_via_reminder;
+  const subtitle = isTask ? event.description : event.client_name;
+  const footerText = isTask
+    ? event.resourceName || event.stylistName || "Task"
+    : event.stylistName || "Stylist";
+      if (isTask) {
+    return (
+      <div
+        {...domHandlers}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        className={`${rbcClassName ?? ""} rbc-event-content text-white px-[4px] py-[2px] flex flex-col justify-between h-full leading-tight relative`}
+        style={{
+          ...rbcStyle,
+          fontSize: `${fontSize}px`,
+          lineHeight: "1.1",
+          overflow: "hidden",
+          whiteSpace: "normal",
+          textOverflow: "ellipsis",
+          border: event.is_locked ? "2px solid #312e81" : "1px solid #4338ca",
+        }}
+        title={event.title || "Scheduled task"}
+      >
+        <div className="flex items-center justify-between text-[11px] font-semibold">
+          <span className="flex items-center gap-1">
+            {event.is_locked ? "🔒" : "🔓"} Task
+          </span>
+          <span>{durationLabel}</span>
+        </div>
+        <div className="flex-1 flex flex-col items-center justify-center text-center px-1">
+          <span className="font-semibold break-words">{title || "Scheduled task"}</span>
+          {event.details && <span className="text-[10px] break-words opacity-80">{event.details}</span>}
+        </div>
+        <div className="text-center text-[10px]">{event.stylistName || "Column"}</div>
+      </div>
+    );
+  }
+
 
   return (
     <div
@@ -76,9 +114,9 @@ export default function CustomCalendarEvent({
       <div className="absolute top-[2px] right-[4px] text-[10px] font-semibold">{durationLabel}</div>
       <div className="flex-1 flex flex-col items-center justify-center text-center">
         <span className="font-semibold break-words">{title}</span>
-        {event.client_name && <span className="italic break-words">{event.client_name}</span>}
+        {subtitle && <span className="italic break-words">{subtitle}</span>}
       </div>
-      <div className="text-center text-[10px]">{event.stylistName || "Stylist"}</div>
+     <div className="text-center text-[10px]">{footerText}</div>
     </div>
   );
 }

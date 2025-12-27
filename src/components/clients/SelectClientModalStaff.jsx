@@ -14,6 +14,7 @@ export default function SelectClientModalStaff({
   selectedClient,
   setSelectedClient,
   onNext,
+  onScheduleTask,
   onClientCreated,
 }) {
   const defaultClientOptions = useMemo(() => {
@@ -231,6 +232,16 @@ export default function SelectClientModalStaff({
 
           <div className="flex gap-2">
             <button
+              onClick={() => {
+                onClose?.();
+                onScheduleTask?.(selectedSlot);
+              }}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded transition-colors disabled:bg-indigo-300 disabled:cursor-not-allowed"
+            >
+              Schedule task
+            </button>
+
+            <button
               onClick={handleCreateOrSelect}
               className="bg-black text-white px-4 py-2 rounded"
               disabled={creating}
@@ -239,12 +250,12 @@ export default function SelectClientModalStaff({
             </button>
 
   <button
-  onClick={() => onNext?.(selectedOption?.client || null)}
-  className="bg-bronze text-white px-4 py-2 rounded"
-  disabled={!selectedClient}
->
-  Next
-</button>
+              onClick={() => onNext?.(selectedOption?.client || null)}
+              className="bg-bronze text-white px-4 py-2 rounded"
+              disabled={!selectedClient}
+            >
+              Next
+            </button>
 
           </div>
         </div>

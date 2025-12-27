@@ -8,6 +8,7 @@ import CsvClientUploader from "../components/CsvClientUploader";
 import Button from "../components/Button";
 import ImportClientsButton from "../components/ImportClientsButton";
 import {supabase} from "../supabaseClient";
+import TaskTypeManager from "../components/TaskTypeManager.jsx";
 
 export default function Settings() {
   const [seedingStaff, setSeedingStaff] = useState(false);
@@ -63,7 +64,7 @@ export default function Settings() {
     <div className="p-6 text-black space-y-8">
       <h1 className="text-2xl font-bold text-bronze">Settings</h1>
 
-      {/* Seed Data */}
+      {/* Seed Data
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <SettingCard
           title="Seed Staff Data"
@@ -81,40 +82,43 @@ export default function Settings() {
         />
       </div>
 
-      {/* CSV Upload */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <SettingCard
-          title="Import Staff Data"
-          description="Upload a CSV to bulk import staff and services."
-          content={<CsvStaffUploader />}
-        />
-        <SettingCard
-          title="Import Client Data"
-          description="Upload a CSV to bulk import client records and treatment history."
-          content={<CsvClientUploader />}
-        />
-      </div>
+      // {/* CSV Upload */}
+       {/* <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+         <SettingCard */}
+      {/* //     title="Import Staff Data"
+      //     description="Upload a CSV to bulk import staff and services."
+      //     content={<CsvStaffUploader />}
+      //   />
+      //   <SettingCard */}
+      {/* //     title="Import Client Data"
+      //     description="Upload a CSV to bulk import client records and treatment history."
+      //     content={<CsvClientUploader />}
+      //   />
+      // </div> */}
+{/* 
+      // {/* JSON Upload */}
+      {/* // <div className="bg-gray-100 p-4 rounded shadow-sm space-y-3">
+      //   <h2 className="text-lg font-semibold text-bronze">Import Clients from JSON</h2>
+      //   <p className="text-sm text-gray-600">
+      //     Upload pre-formatted clients directly into Supabase (bypasses CSV).
+      //   </p>
+      //   <ImportClientsButton />
+      // </div> */} 
 
-      {/* JSON Upload */}
-      <div className="bg-gray-100 p-4 rounded shadow-sm space-y-3">
-        <h2 className="text-lg font-semibold text-bronze">Import Clients from JSON</h2>
-        <p className="text-sm text-gray-600">
-          Upload pre-formatted clients directly into Supabase (bypasses CSV).
-        </p>
-        <ImportClientsButton />
-      </div>
+      {/* // Export Clients */}
+      {/* // <div className="bg-gray-100 p-4 rounded shadow-sm space-y-3">
+      //   <h2 className="text-lg font-semibold text-bronze">Export Clients</h2>
+      //   <p className="text-sm text-gray-600">
+      //     Download a CSV of all clients in your system.
+      //   </p>
+      //   <Button onClick={exportClientsToCSV}>Export Clients to CSV</Button>
+      // </div>  */}
 
-      {/* Export Clients */}
-      <div className="bg-gray-100 p-4 rounded shadow-sm space-y-3">
-        <h2 className="text-lg font-semibold text-bronze">Export Clients</h2>
-        <p className="text-sm text-gray-600">
-          Download a CSV of all clients in your system.
-        </p>
-        <Button onClick={exportClientsToCSV}>Export Clients to CSV</Button>
-      </div>
+        {/* Task Types for Calendar Blocks */}
+      <TaskTypeManager />
 
       {/* Danger Zone */}
-      <div className="bg-gray-100 p-4 rounded shadow-sm space-y-3">
+      {/* <div className="bg-gray-100 p-4 rounded shadow-sm space-y-3">
         <h2 className="text-lg font-semibold text-bronze">Danger Zone</h2>
         <p className="text-sm text-gray-600">
           This will permanently delete all client records from the database.
@@ -122,7 +126,7 @@ export default function Settings() {
         <Button disabled className="bg-gray-400 cursor-not-allowed">
           Delete All Clients (disabled)
         </Button>
-      </div>
+      </div> */}
     </div>
   );
 }

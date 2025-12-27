@@ -103,6 +103,7 @@ export default function AuditLog() {
   // ✅ Split loading states (prevents flicker)
   const [initialLoading, setInitialLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
+    const initialLoadRef = useRef(true);
 
   const [selectedRow, setSelectedRow] = useState(null);
 
@@ -206,9 +207,14 @@ export default function AuditLog() {
     const myReqId = ++reqIdRef.current;
 
     setErrText("");
-    // ✅ only show big loader on first load
-    if (initialLoading) setInitialLoading(true);
-    else setIsFetching(true);
+   // ✅ only show big loader on first load (avoid double-fetch loops)
+    if (initialLoadRef.current) {
+      initialLoadRef.current = false;
+      setInitialLoading(true);
+      setIsFetching(false);
+    } else {
+      setIsFetching(true);
+    }
 
     try {
       const {
@@ -304,7 +310,7 @@ export default function AuditLog() {
         setIsFetching(false);
       }
     }
-  }, [debouncedFilters, hasAccess, supabase, initialLoading]);
+}, [debouncedFilters, hasAccess, supabase]);
 
   useEffect(() => {
     fetchAudit();
