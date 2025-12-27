@@ -24,6 +24,7 @@ export default function Login() {
 
   const [sending, setSending] = useState(false);       // magic link
   const [submitting, setSubmitting] = useState(false); // doing a login attempt
+  const showPinSubmitting = mode === "pin" && submitting;
 
   // Keep your existing gating
   const keypadDisabled = sending || submitting;
@@ -117,6 +118,20 @@ export default function Login() {
       <div className="absolute inset-0 bg-black bg-opacity-60 z-0" />
 
       <div className="w-full max-w-md z-10 bg-black bg-opacity-80 shadow-xl rounded-3xl flex flex-col items-center p-8 relative">
+        {showPinSubmitting && (
+          <div className="absolute inset-0 z-20 rounded-3xl bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center space-y-3 text-amber-100">
+            <div
+              className="h-12 w-12 rounded-full border-4 border-amber-400 border-t-transparent animate-spin"
+              aria-hidden="true"
+            />
+            <div className="text-lg font-semibold" role="status" aria-live="polite">
+              Signing you in...
+            </div>
+            <p className="text-xs text-amber-100/80 text-center px-6">
+              Hold tight while we load your calendar.
+            </p>
+          </div>
+        )}
         <img
           src={logo}
           alt="Edge HD Logo"
