@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import Modal from "../Modal";
+import Modal from "./Modal";
 import { addWeeks, addMonths, startOfDay, endOfDay } from "date-fns";
 import Select from "react-select";
 import { v4 as uuidv4 } from "uuid";

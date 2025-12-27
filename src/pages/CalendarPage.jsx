@@ -170,6 +170,8 @@ const supabase = auth?.supabaseClient || baseSupabase;
   const [scheduledTasks, setScheduledTasks] = useState([]);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [taskDraft, setTaskDraft] = useState(null);
+    const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
+  const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
 
   const selectedClientRow = useMemo(() => {
      return [
@@ -189,18 +191,18 @@ const supabase = auth?.supabaseClient || baseSupabase;
     };
   }, [selectedClientRow]);
 
-  const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
-  const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
+
 
   // ✅ Include cancelled in view (we color them red below)
   const calendarEvents = useMemo(() => {
     return [
       ...(events || []),
       ...(taskEvents || []),
+      ...(scheduledTasks || []),
       ...unavailableBlocks,
       ...salonClosedBlocks,
     ];
-  }, [events, taskEvents, unavailableBlocks, salonClosedBlocks]);
+  }, [events, scheduledTasks, taskEvents, unavailableBlocks, salonClosedBlocks]);
 
   const isAdmin = currentUser?.permission?.toLowerCase() === "admin";
 
@@ -630,10 +632,11 @@ const supabase = auth?.supabaseClient || baseSupabase;
     setStep(1);
  }, []);
 
-  const handleOpenScheduleTask = (slot) => {
+const handleOpenScheduleTask = (slot, editingTask = null) => {
     setIsModalOpen(false);
     setTaskDraft({
       slot: slot || selectedSlot,
+       editingTask,
     });
     setTaskModalOpen(true);
   };
@@ -643,7 +646,46 @@ const supabase = auth?.supabaseClient || baseSupabase;
     setTaskDraft(null);
   };
 
-  const handleSaveTask = ({ instances, replaceSeriesId, replaceSingleId }) => {
+const handleSaveTask = async ({ instances, replaceSeriesId, replaceSingleId }) => {
+    if (taskDraft?.editingTask?.isScheduleBlock && taskDraft.editingTask.id) {
+      const updated = instances?.[0];
+      if (!updated) return;
+
+      setEvents((prev) =>
+        prev.map((ev) =>
+          ev.id === taskDraft.editingTask.id
+            ? {
+                ...ev,
+                ...updated,
+                id: ev.id,
+                resourceId: updated.resourceId,
+                resource_id: updated.resourceId,
+                title: updated.title || ev.title,
+                isScheduleBlock: true,
+              }
+            : ev
+        )
+      );
+
+      try {
+        await supabase
+          .from("bookings")
+          .update({
+            start: updated.start,
+            end: updated.end,
+            resource_id: updated.resourceId,
+            title: updated.title || taskDraft.editingTask.title,
+          })
+          .eq("id", taskDraft.editingTask.id);
+      } catch (error) {
+        console.error("Failed to update scheduled task block", error);
+        toast.error("Could not update the scheduled task block");
+      } finally {
+        handleCloseTaskModal();
+      }
+      return;
+    }
+
     setScheduledTasks((prev) => {
       let next = [...prev];
 
@@ -663,6 +705,7 @@ const supabase = auth?.supabaseClient || baseSupabase;
 
       return [...next, ...withNames];
     });
+     handleCloseTaskModal();
   };
 
 
@@ -823,28 +866,40 @@ const supabase = auth?.supabaseClient || baseSupabase;
           setStep(1);
         }}
         onSelectEvent={(event) => {
-        if (event.isUnavailable || event.isSalonClosed || event.isTask) return;
+
+       if (event.isUnavailable || event.isSalonClosed || event.isTask) return;
+
+          if (event.isScheduleBlock || event.isScheduledTask) {
+            handleOpenScheduleTask(
+              {
+                start: event.start,
+                end: event.end,
+                resourceId: event.resourceId,
+              },
+              event
+            );
+            return;
+          }
+
           setSelectedBooking(coerceEventForPopup(event));
         }}
         onEventDrop={moveEvent}
         resizable
         onEventResize={moveEvent}
         eventPropGetter={(event) => {
-          if (event.isTask) {
+          if (event.isScheduledTask || event.isScheduleBlock) {
             return {
               style: {
                 zIndex: 2,
-                backgroundColor: event.color || "#0ea5e9",
+                backgroundImage:
+                  "linear-gradient(135deg, #d0a36c, #b0702e, #391f04)",
                 color: "#fff",
-                border: "none",
-                opacity: 0.9,
+                border: "1px solid #d0a36c",
+                opacity: 0.95,
               },
-              title: event.description
-                ? `${event.title}: ${event.description}`
-                : event.title,
+              title: event.title,
             };
           }
-
 
           if (event.isUnavailable) {
             return {
@@ -866,18 +921,7 @@ const supabase = auth?.supabaseClient || baseSupabase;
             };
           }
 
-          if (event.isScheduleBlock) {
-            return {
-              style: {
-                backgroundColor: "#6b7280",
-                opacity: 0.9,
-                border: "none",
-                color: "#fff",
-              },
-            };
-          }
-
-          const status = String(event.status || "").trim().toLowerCase();
+                   const status = String(event.status || "").trim().toLowerCase();
 
           // ✅ Cancelled = red
           if (isCancelledStatus(status)) {
@@ -1081,6 +1125,14 @@ const supabase = auth?.supabaseClient || baseSupabase;
           />
         </>
       )}
+       <ScheduleTaskModal
+        isOpen={taskModalOpen}
+        onClose={handleCloseTaskModal}
+        slot={taskDraft?.slot}
+        stylists={stylistList}
+        editingTask={taskDraft?.editingTask}
+        onSave={handleSaveTask}
+      />
     </div>
   );
 }
