@@ -31,9 +31,9 @@ export default function SelectClientModal({
     [clients]
   );
 
-  // ---- MODE: "booking" (client) vs "task" (block) ----
+  // ---- MODE kept for existing logic, but UI toggle removed.
+  // We keep it locked to "booking" so the top Booking/Task buttons are gone.
   const [mode, setMode] = useState("booking"); // "booking" | "task"
-
   useEffect(() => {
     if (!isOpen) return;
     setMode("booking");
@@ -48,7 +48,7 @@ export default function SelectClientModal({
     mobile: "",
   });
 
-  // --- Task blocks ---
+  // --- Task blocks (existing logic kept, but no longer shown since mode is locked) ---
   const [taskTypes, setTaskTypes] = useState([]);
   const [selectedTaskType, setSelectedTaskType] = useState("");
   const [blockStart, setBlockStart] = useState(null);
@@ -56,7 +56,10 @@ export default function SelectClientModal({
   const [savingBlock, setSavingBlock] = useState(false);
 
   useEffect(() => {
+    // Keep existing logic, but only load task types if mode ever becomes "task"
+    // (Right now it won’t, because we removed the toggle buttons.)
     if (!isOpen || !supabase) return;
+    if (mode !== "task") return;
 
     const fetchTaskTypes = async () => {
       const { data, error } = await supabase.from("schedule_task_types").select("*");
@@ -74,7 +77,7 @@ export default function SelectClientModal({
 
     fetchTaskTypes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, supabase]);
+  }, [isOpen, supabase, mode]);
 
   useEffect(() => {
     if (!selectedSlot?.start || !selectedSlot?.end) return;
@@ -84,14 +87,7 @@ export default function SelectClientModal({
 
   const findTaskLabel = (id) => {
     const row = taskTypes.find((t) => t.id === id) || {};
-    return (
-      row.name ||
-      row.title ||
-      row.label ||
-      row.task_type ||
-      row.type ||
-      "Blocked"
-    );
+    return row.name || row.title || row.label || row.task_type || row.type || "Blocked";
   };
 
   const toLocalDateTimeValue = (d) => {
@@ -159,13 +155,12 @@ export default function SelectClientModal({
       if (error) throw error;
 
       toast.success("Task scheduled (blocked)");
-  try {
-  onBlockCreated?.(data);
-} catch (e) {
-  console.warn("onBlockCreated callback failed:", e);
-}
-onClose?.();
-
+      try {
+        onBlockCreated?.(data);
+      } catch (e) {
+        console.warn("onBlockCreated callback failed:", e);
+      }
+      onClose?.();
     } catch (err) {
       console.error("Failed to create block", err);
       toast.error(err?.message || "Could not create block");
@@ -209,46 +204,24 @@ onClose?.();
   return (
     <Modal isOpen={isOpen} onClose={onClose}>
       <div>
+        {/* ✅ Title stays, but top Booking/Task buttons removed */}
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-lg font-bold text-bronze">
-            {mode === "task" ? "Schedule task (block time)" : "Select Client"}
-          </h3>
-
-          {/* Simple mode toggle */}
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className={`px-3 py-1 rounded text-sm border ${
-                mode === "booking" ? "bg-black text-white" : "bg-white text-black"
-              }`}
-              onClick={() => setMode("booking")}
-            >
-              Booking
-            </button>
-            <button
-              type="button"
-              className={`px-3 py-1 rounded text-sm border ${
-                mode === "task" ? "bg-black text-white" : "bg-white text-black"
-              }`}
-              onClick={() => setMode("task")}
-            >
-              Task
-            </button>
-          </div>
+          <h3 className="text-lg font-bold text-bronze">Select Client</h3>
         </div>
 
         {selectedSlot && (
           <>
             <p className="text-sm text-gray-700 mb-1">
-              Date: {format(selectedSlot.start, "eeee dd MMMM yyyy")}
+              Date: {format(new Date(selectedSlot.start), "eeee dd MMMM yyyy")}
             </p>
             <p className="text-sm text-gray-700 mb-3">
-              Time: {format(selectedSlot.start, "HH:mm")} – {format(selectedSlot.end, "HH:mm")}
+              Time: {format(new Date(selectedSlot.start), "HH:mm")} –{" "}
+              {format(new Date(selectedSlot.end), "HH:mm")}
             </p>
           </>
         )}
 
-        {/* ---------------- BOOKING MODE ---------------- */}
+        {/* ---------------- BOOKING MODE (always shown) ---------------- */}
         {mode === "booking" && (
           <>
             <label className="block text-sm mb-1 text-gray-700">Search existing</label>
@@ -299,22 +272,46 @@ onClose?.();
               />
             </div>
 
+            {/* ✅ Bottom buttons kept exactly like your screenshot */}
             <div className="flex justify-between items-center mt-4">
-              <button onClick={onClose} className="text-gray-500">
+              <button type="button" onClick={onClose} className="text-gray-500">
                 Cancel
               </button>
-              <button
-              onClick={() => {
-                onClose?.();
-                onScheduleTask?.(selectedSlot);
-              }}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded transition-colors disabled:bg-indigo-300 disabled:cursor-not-allowed"
-            >
-              Schedule task
-            </button>
+
+<button
+  type="button"
+  onClick={() => {
+    console.log("[SelectClientModal] Schedule task clicked", {
+      hasOnScheduleTask: typeof onScheduleTask === "function",
+      selectedSlot,
+    });
+
+    // IMPORTANT: pass Dates (ScheduleTaskModal expects Dates)
+    const slotToSend = selectedSlot
+      ? {
+          ...selectedSlot,
+          start: new Date(selectedSlot.start),
+          end: new Date(selectedSlot.end),
+        }
+      : null;
+
+    if (!slotToSend?.start || !slotToSend?.end || isNaN(slotToSend.start) || isNaN(slotToSend.end)) {
+      toast.error("Slot time is missing/invalid");
+      return;
+    }
+
+    // Let parent handle closing + opening modal (best)
+    onScheduleTask?.(slotToSend);
+  }}
+  className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded transition-colors disabled:bg-indigo-300 disabled:cursor-not-allowed"
+>
+  Schedule task
+</button>
+
 
               <div className="flex gap-2">
                 <button
+                  type="button"
                   onClick={handleCreateOrSelect}
                   className="bg-black text-white px-4 py-2 rounded"
                   disabled={creating}
@@ -323,6 +320,7 @@ onClose?.();
                 </button>
 
                 <button
+                  type="button"
                   onClick={onNext}
                   className="bg-bronze text-white px-4 py-2 rounded disabled:bg-bronze/40 disabled:cursor-not-allowed"
                   disabled={!selectedClient}
@@ -331,21 +329,10 @@ onClose?.();
                 </button>
               </div>
             </div>
-
-            {/* Convenience button */}
-            <div className="mt-3">
-              <button
-                type="button"
-                onClick={() => setMode("task")}
-                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded"
-              >
-                Schedule task (holiday / training / block)
-              </button>
-            </div>
           </>
         )}
 
-        {/* ---------------- TASK MODE ---------------- */}
+        {/* ---------------- TASK MODE (logic kept, UI hidden because mode is locked) ---------------- */}
         {mode === "task" && (
           <>
             <div className="my-3 h-px bg-gray-300" />

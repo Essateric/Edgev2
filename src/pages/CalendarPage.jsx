@@ -1018,6 +1018,7 @@ const handleSaveTask = async ({ instances, replaceSeriesId, replaceSingleId }) =
       setClientObj(clients.find((c) => c.id === id));
     }}
     onNext={() => setStep(2)}
+     onScheduleTask={handleOpenScheduleTask} 
     onClientCreated={(c) => {
       setClients((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c]));
       setSelectedClient(c.id);
@@ -1048,6 +1049,7 @@ const handleSaveTask = async ({ instances, replaceSeriesId, replaceSingleId }) =
       if (data) setClientObj(data);
     }}
     onNext={() => setStep(2)}
+     onScheduleTask={handleOpenScheduleTask} 
     onClientCreated={(c) => {
       setClients((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c]));
       setSelectedClient(c.id);
@@ -1126,6 +1128,7 @@ const handleSaveTask = async ({ instances, replaceSeriesId, replaceSingleId }) =
         </>
       )}
        <ScheduleTaskModal
+        supabaseClient={supabase}
         isOpen={taskModalOpen}
         onClose={handleCloseTaskModal}
         slot={taskDraft?.slot}

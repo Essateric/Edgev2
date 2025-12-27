@@ -3,6 +3,7 @@ import Modal from "./Modal";
 import { addWeeks, addMonths, startOfDay, endOfDay } from "date-fns";
 import Select from "react-select";
 import { v4 as uuidv4 } from "uuid";
+import baseSupabase from "../supabaseClient"; // ✅ adjust if your path differs
 
 const recurrenceOptions = [
   { value: "none", label: "No repeat" },
@@ -10,6 +11,8 @@ const recurrenceOptions = [
   { value: "fortnightly", label: "Fortnightly" },
   { value: "monthly", label: "Monthly" },
 ];
+
+const CUSTOM_TYPE = "__custom__";
 
 const safeId = () => {
   if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
@@ -23,8 +26,18 @@ export default function ScheduleTaskModal({
   stylists,
   editingTask,
   onSave,
+  supabaseClient,
 }) {
-  const [title, setTitle] = useState("Scheduled task");
+  const supabase = supabaseClient || baseSupabase;
+
+  // --- Task types ---
+  const [taskTypes, setTaskTypes] = useState([]);
+  const [taskTypeId, setTaskTypeId] = useState(""); // schedule_task_types.id or CUSTOM_TYPE
+  const [typesLoading, setTypesLoading] = useState(false);
+  const [typesError, setTypesError] = useState("");
+
+  // --- Form ---
+  const [title, setTitle] = useState("Scheduled task"); // used only when Custom
   const [details, setDetails] = useState("");
   const [allDay, setAllDay] = useState(false);
   const [lock, setLock] = useState(false);
@@ -35,11 +48,83 @@ export default function ScheduleTaskModal({
   const [start, setStart] = useState(slot?.start || new Date());
   const [end, setEnd] = useState(slot?.end || new Date());
 
+  // -------- load task types on open --------
+  useEffect(() => {
+    let alive = true;
+    if (!isOpen) return;
+
+    setTypesError("");
+    setTypesLoading(true);
+
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("schedule_task_types")
+          .select("id, name, category, description, color, sort_order, is_active")
+          .eq("is_active", true)
+          .order("category", { ascending: true })
+          .order("sort_order", { ascending: true })
+          .order("name", { ascending: true });
+
+        if (!alive) return;
+
+        if (error) {
+          console.error("[ScheduleTaskModal] schedule_task_types error:", error);
+          setTaskTypes([]);
+          setTypesError(error.message || "Failed to load task types");
+          setTypesLoading(false);
+          return;
+        }
+
+        setTaskTypes(data || []);
+        setTypesLoading(false);
+      } catch (e) {
+        console.error("[ScheduleTaskModal] schedule_task_types crash:", e);
+        if (!alive) return;
+        setTaskTypes([]);
+        setTypesError(e?.message || "Failed to load task types");
+        setTypesLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [isOpen, supabase]);
+
+  const taskTypeMap = useMemo(() => {
+    const m = new Map();
+    (taskTypes || []).forEach((t) => m.set(t.id, t));
+    return m;
+  }, [taskTypes]);
+
+  const taskTypeOptions = useMemo(() => {
+    const byCat = new Map();
+
+    for (const t of taskTypes || []) {
+      const cat = t.category || "Other";
+      if (!byCat.has(cat)) byCat.set(cat, []);
+      byCat.get(cat).push({ value: t.id, label: t.name });
+    }
+
+    const groups = Array.from(byCat.entries()).map(([label, options]) => ({
+      label,
+      options,
+    }));
+
+    groups.push({
+      label: "Custom",
+      options: [{ value: CUSTOM_TYPE, label: "Custom title…" }],
+    });
+
+    return groups;
+  }, [taskTypes]);
+
+  // -------- reset form on open --------
   useEffect(() => {
     if (!isOpen) return;
 
     if (editingTask) {
-      setTitle(editingTask.title || "Scheduled task");
       setDetails(editingTask.details || "");
       setAllDay(!!editingTask.allDay);
       setLock(!!editingTask.is_locked);
@@ -49,10 +134,35 @@ export default function ScheduleTaskModal({
       setSelectedStylistIds([editingTask.resourceId].filter(Boolean));
       setStart(new Date(editingTask.start));
       setEnd(new Date(editingTask.end));
+
+      const existingTypeId =
+        editingTask.task_type_id ||
+        editingTask.taskTypeId ||
+        editingTask.schedule_task_type_id ||
+        "";
+
+      if (existingTypeId && taskTypeMap.has(existingTypeId)) {
+        setTaskTypeId(existingTypeId);
+        setTitle(taskTypeMap.get(existingTypeId)?.name || editingTask.title || "Scheduled task");
+      } else {
+        // fallback: match by title
+        const byName = (taskTypes || []).find(
+          (t) =>
+            String(t.name || "").toLowerCase() ===
+            String(editingTask.title || "").toLowerCase()
+        );
+        if (byName?.id) {
+          setTaskTypeId(byName.id);
+          setTitle(byName.name);
+        } else {
+          setTaskTypeId(CUSTOM_TYPE);
+          setTitle(editingTask.title || "Scheduled task");
+        }
+      }
       return;
     }
 
-    setTitle("Scheduled task");
+    // new
     setDetails("");
     setAllDay(false);
     setLock(false);
@@ -62,12 +172,37 @@ export default function ScheduleTaskModal({
     setSelectedStylistIds([slot?.resourceId].filter(Boolean));
     setStart(slot?.start || new Date());
     setEnd(slot?.end || new Date());
-  }, [isOpen, editingTask, slot]);
+
+    // default select first type if available (once loaded)
+    const first = (taskTypes || [])[0];
+    if (first?.id) {
+      setTaskTypeId(first.id);
+      setTitle(first.name || "Scheduled task");
+    } else {
+      setTaskTypeId(CUSTOM_TYPE);
+      setTitle("Scheduled task");
+    }
+  }, [isOpen, editingTask, slot, taskTypes, taskTypeMap]);
+
+  // sync title to selected type (unless custom)
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!taskTypeId || taskTypeId === CUSTOM_TYPE) return;
+    const t = taskTypeMap.get(taskTypeId);
+    if (t?.name) setTitle(t.name);
+  }, [taskTypeId, taskTypeMap, isOpen]);
 
   const stylistOptions = useMemo(
     () => (stylists || []).map((s) => ({ value: s.id, label: s.title || s.name || "Unknown" })),
     [stylists]
   );
+
+  const selectedTypeOption = useMemo(() => {
+    if (!taskTypeId) return null;
+    if (taskTypeId === CUSTOM_TYPE) return { value: CUSTOM_TYPE, label: "Custom title…" };
+    const t = taskTypeMap.get(taskTypeId);
+    return t ? { value: t.id, label: t.name } : null;
+  }, [taskTypeId, taskTypeMap]);
 
   const clampEnd = (s, e) => {
     if (!e || e <= s) return new Date(s.getTime() + 30 * 60000);
@@ -77,9 +212,17 @@ export default function ScheduleTaskModal({
   const buildOccurrences = () => {
     const baseStart = allDay ? startOfDay(start) : start;
     const baseEnd = allDay ? endOfDay(end) : clampEnd(baseStart, end);
+
     const seriesId = editingTask?.seriesId || safeId();
     const count = Math.max(1, Number(occurrences) || 1);
     const resources = selectedStylistIds.length ? selectedStylistIds : [null];
+
+    const typeRow = taskTypeId && taskTypeId !== CUSTOM_TYPE ? taskTypeMap.get(taskTypeId) : null;
+
+    const resolvedTitle =
+      taskTypeId === CUSTOM_TYPE
+        ? (title || "Scheduled task")
+        : (typeRow?.name || title || "Scheduled task");
 
     const instances = [];
 
@@ -102,7 +245,7 @@ export default function ScheduleTaskModal({
         instances.push({
           id: safeId(),
           seriesId,
-          title: title || "Scheduled task",
+          title: resolvedTitle,
           details,
           start: s,
           end: e,
@@ -112,6 +255,12 @@ export default function ScheduleTaskModal({
           recurrence,
           repeatCount: count,
           is_locked: lock,
+
+          // ✅ store task type data
+          task_type_id: taskTypeId !== CUSTOM_TYPE ? taskTypeId : null,
+          task_type_name: typeRow?.name || (taskTypeId === CUSTOM_TYPE ? resolvedTitle : null),
+          task_type_category: typeRow?.category || null,
+          task_type_color: typeRow?.color || null,
         });
       }
     });
@@ -119,30 +268,50 @@ export default function ScheduleTaskModal({
     return { seriesId, instances };
   };
 
+  const canSave = selectedStylistIds.length > 0 && (!!taskTypeId || !!title);
+
   const handleSave = () => {
     const { seriesId, instances } = buildOccurrences();
-    const payload = {
+    onSave?.({
       seriesId,
       replaceSeriesId: applySeries ? editingTask?.seriesId : null,
       replaceSingleId: !applySeries ? editingTask?.id : null,
       instances,
-    };
-    onSave?.(payload);
+    });
     onClose?.();
   };
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={editingTask ? "Edit scheduled task" : "New scheduled task"}>
       <div className="space-y-3">
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-1">Title</label>
-          <input
-            className="w-full border rounded px-2 py-1 text-sm"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Bank holiday, team meeting, maintenance…"
-          />
+        {/* ✅ visible marker so you KNOW this file is being used */}
+        <div className="text-[11px] text-gray-400">
+          task types loaded: {typesLoading ? "loading…" : String(taskTypes?.length || 0)}
         </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-1">Task type</label>
+          <Select
+            options={taskTypeOptions}
+            value={selectedTypeOption}
+            onChange={(opt) => setTaskTypeId(opt?.value || CUSTOM_TYPE)}
+            placeholder={typesLoading ? "Loading task types…" : "Choose a task type…"}
+            styles={{ control: (base) => ({ ...base, minHeight: "38px" }) }}
+          />
+          {!!typesError && <p className="text-xs text-red-600 mt-1">{typesError}</p>}
+        </div>
+
+        {taskTypeId === CUSTOM_TYPE && (
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Title</label>
+            <input
+              className="w-full border rounded px-2 py-1 text-sm"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Bank holiday, training, maintenance…"
+            />
+          </div>
+        )}
 
         <div>
           <label className="block text-sm font-semibold text-gray-700 mb-1">Details (optional)</label>
@@ -195,9 +364,7 @@ export default function ScheduleTaskModal({
             value={stylistOptions.filter((o) => selectedStylistIds.includes(o.value))}
             onChange={(opts) => setSelectedStylistIds((opts || []).map((o) => o.value))}
             placeholder="Choose columns to block"
-            styles={{
-              control: (base) => ({ ...base, minHeight: "38px" }),
-            }}
+            styles={{ control: (base) => ({ ...base, minHeight: "38px" }) }}
           />
           {!selectedStylistIds.length && (
             <p className="text-xs text-amber-700 mt-1">Select at least one column to place the task.</p>
@@ -211,9 +378,7 @@ export default function ScheduleTaskModal({
               options={recurrenceOptions}
               value={recurrenceOptions.find((o) => o.value === recurrence)}
               onChange={(opt) => setRecurrence(opt?.value || "none")}
-              styles={{
-                control: (base) => ({ ...base, minHeight: "38px" }),
-              }}
+              styles={{ control: (base) => ({ ...base, minHeight: "38px" }) }}
             />
           </div>
           <div>
@@ -247,7 +412,7 @@ export default function ScheduleTaskModal({
           <button
             onClick={handleSave}
             className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded disabled:bg-indigo-300 disabled:cursor-not-allowed text-sm"
-            disabled={!selectedStylistIds.length}
+            disabled={!canSave}
           >
             {editingTask ? "Update task" : "Create task"}
           </button>
@@ -265,4 +430,3 @@ const toInputValue = (d) => {
     dt.getHours()
   )}:${pad(dt.getMinutes())}`;
 };
-
