@@ -694,32 +694,39 @@ const handleSaveTask = async ({ action, payload }) => {
     // ---------- DELETE ----------
     if (action === "delete") {
       const meta = payload?.editingMeta || {};
-      const scopeAll = !!payload?.applyToSeries && !!meta.repeat_series_id;
+   const deleteScope = payload?.deleteScope || "occurrence"; // single | occurrence | series
+      const hasSeries = !!meta.repeat_series_id;
 
-      // grab rows for audit
+      // Determine match conditions
+      const where =
+        deleteScope === "series" && hasSeries
+          ? { repeat_series_id: meta.repeat_series_id }
+          : deleteScope === "single" && meta.id
+          ? { id: meta.id }
+          : { booking_id: meta.booking_id };
+
+      // grab rows for audit + UI update
+
+
       const { data: beforeRows } = await supabase
         .from("bookings")
         .select("id,booking_id,repeat_series_id,resource_id,start,end,title,status,is_locked,client_id")
-        .match(
-          scopeAll
-            ? { repeat_series_id: meta.repeat_series_id }
-            : { booking_id: meta.booking_id }
-        );
-
-      const del = scopeAll
-        ? supabase.from("bookings").delete().eq("repeat_series_id", meta.repeat_series_id)
-        : supabase.from("bookings").delete().eq("booking_id", meta.booking_id);
-
+       .match(where);
+       const del = supabase.from("bookings").delete().match(where);
       const { error } = await del;
       if (error) throw error;
 
       // local UI remove immediately
       setEvents((prev) =>
-        prev.filter((ev) =>
-          scopeAll
-            ? ev.repeat_series_id !== meta.repeat_series_id
-            : ev.booking_id !== meta.booking_id
-        )
+        prev.filter((ev) => {
+          if (deleteScope === "series" && hasSeries) {
+            return ev.repeat_series_id !== meta.repeat_series_id;
+          }
+          if (deleteScope === "single" && meta.id) {
+            return ev.id !== meta.id;
+          }
+          return ev.booking_id !== meta.booking_id;
+        })
       );
 
       // audit
@@ -729,10 +736,15 @@ const handleSaveTask = async ({ action, payload }) => {
 
         await logEvent({
           entityType: "scheduled_task",
-          entityId: scopeAll ? meta.repeat_series_id : meta.booking_id,
+          entityId:
+            deleteScope === "series" && hasSeries
+              ? meta.repeat_series_id
+              : deleteScope === "single" && meta.id
+              ? meta.id
+              : meta.booking_id,
           action: "scheduled_task_deleted",
           details: {
-            scope: scopeAll ? "series" : "one",
+           scope: deleteScope,
             repeat_series_id: meta.repeat_series_id || null,
             booking_id: meta.booking_id || null,
             deleted_rows: (beforeRows || []).map((r) => ({
@@ -776,8 +788,8 @@ const handleSaveTask = async ({ action, payload }) => {
         occurrences,
       });
 
-      const seriesId =
-        repeatRule && repeatRule !== "none" && occ.length > 1 ? uuidv4() : null;
+     const wantsSeries = repeatRule && repeatRule !== "none";
+      const seriesId = wantsSeries ? uuidv4() : null;
 
       const rows = [];
       for (const o of occ) {

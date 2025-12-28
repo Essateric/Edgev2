@@ -100,6 +100,7 @@ export default function ScheduleTaskModal({
 
   // Only show series checkbox if editing a real series
   const [applyToSeries, setApplyToSeries] = useState(false);
+   const [deleteScope, setDeleteScope] = useState("occurrence"); // single | occurrence | series
 
   const [saving, setSaving] = useState(false);
 
@@ -184,6 +185,7 @@ export default function ScheduleTaskModal({
 
     // Only meaningful if this is a series
     setApplyToSeries(false);
+     setDeleteScope(editingSeriesId ? "occurrence" : "single");
 
     // Default staff:
     // - If editing, we try to show all staff in this booking group (multi-staff block)
@@ -276,11 +278,14 @@ export default function ScheduleTaskModal({
 
   const onDelete = async () => {
     if (!isEditing) return;
-    const ok = window.confirm(
-      applyToSeries && editingSeriesId
+   const scopeLabel =
+      deleteScope === "series"
         ? "Delete ALL occurrences in this series?"
-        : "Delete this scheduled task?"
-    );
+       : deleteScope === "single"
+        ? "Delete ONLY this staff slot?"
+        : "Delete this entire occurrence (all staff)?";
+
+    const ok = window.confirm(scopeLabel);
     if (!ok) return;
 
     setSaving(true);
@@ -289,6 +294,7 @@ export default function ScheduleTaskModal({
         action: "delete",
         payload: {
           applyToSeries: !!applyToSeries,
+              deleteScope,
           editingMeta: {
             id: editingTask?.id,
             booking_id: editingBookingGroupId,
@@ -519,6 +525,53 @@ export default function ScheduleTaskModal({
             />
             Apply changes to entire series
           </label>
+        )}
+
+         {isEditing && (
+          <div className="mb-3">
+            <p className="text-sm font-semibold text-gray-700 mb-1">
+              Delete scope
+            </p>
+            <div className="flex flex-col gap-1 text-sm text-gray-700">
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="delete-scope"
+                  value="single"
+                  checked={deleteScope === "single"}
+                  onChange={() => setDeleteScope("single")}
+                  disabled={saving}
+                />
+                Delete only this staff column
+              </label>
+
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="delete-scope"
+                  value="occurrence"
+                  checked={deleteScope === "occurrence"}
+                  onChange={() => setDeleteScope("occurrence")}
+                  disabled={saving}
+                />
+                Delete this occurrence (all selected staff)
+              </label>
+
+              {editingSeriesId && (
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="delete-scope"
+                    value="series"
+                    checked={deleteScope === "series"}
+                    onChange={() => setDeleteScope("series")}
+                    disabled={saving}
+                  />
+                  Delete every occurrence in this series
+                </label>
+              )}
+            </div>
+          </div>
         )}
 
         {/* Footer buttons */}
