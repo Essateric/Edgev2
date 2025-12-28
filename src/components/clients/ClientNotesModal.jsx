@@ -632,7 +632,7 @@ export default function ClientNotesModal({
   const fullName = useMemo(() => {
     if (!client) return "Client details";
     return (
-      `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim() ||
+      "Client Name: " + `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim() ||
       "Client details"
     );
   }, [client]);
@@ -646,7 +646,7 @@ export default function ClientNotesModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Client Details"
+      title="Previous Services"
       className="w-full max-w-[640px]"
       zIndex={modalZIndex}
     >
@@ -654,79 +654,7 @@ export default function ClientNotesModal({
         <div className="flex items-start justify-between gap-3">
           <h3 className="text-lg font-semibold">{fullName}</h3>
 
-          {effectiveClientId ? (
-            <button
-              className="text-xs text-blue-600 underline"
-              onClick={() => setShowFullHistory(true)}
-              type="button"
-            >
-              Full history
-            </button>
-          ) : null}
-        </div>
-
-        {/* EMAIL */}
-        <div>
-          <p className="text-sm font-semibold mb-1">Email</p>
-
-          {!isEditingEmail ? (
-            <div className="flex items-center gap-2 text-sm">
-              <span className="flex-1">
-                {emailToShow ? (
-                  <a className="underline" href={`mailto:${emailToShow}`}>
-                    {emailToShow}
-                  </a>
-                ) : (
-                  <span className="text-gray-500">No email</span>
-                )}
-              </span>
-              <button
-                className="text-blue-600 underline"
-                onClick={() => setIsEditingEmail(true)}
-                type="button"
-              >
-                Edit
-              </button>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-2">
-                <input
-                  type="email"
-                  className={`flex-1 border rounded px-2 py-1 text-sm ${
-                    emailIsInvalid ? "border-red-500" : ""
-                  }`}
-                  placeholder="name@example.com"
-                  value={emailInput}
-                  onChange={(e) => setEmailInput(e.target.value)}
-                  aria-invalid={emailIsInvalid}
-                />
-                <Button
-                  onClick={handleSaveEmail}
-                  disabled={savingEmail || emailIsInvalid}
-                  className="text-sm"
-                >
-                  {savingEmail ? "Saving..." : "Save"}
-                </Button>
-                <Button
-                  onClick={() => {
-                    setIsEditingEmail(false);
-                    setEmailInput(client?.email || clientEmail || "");
-                    setEmailError("");
-                  }}
-                  className="text-sm"
-                >
-                  Cancel
-                </Button>
-              </div>
-              {(emailError || emailIsInvalid) && (
-                <p className="text-xs text-red-600">
-                  {emailError || "Enter a valid email address (e.g. alex@example.com)"}
-                </p>
-              )}
-            </div>
-          )}
-        </div>
+               </div>
 
         {/* HISTORY TABLE */}
         <div>
@@ -799,94 +727,6 @@ export default function ClientNotesModal({
             </div>
           )}
         </div>
-
-        {/* ADD NOTE */}
-        <div className="flex gap-2">
-          <input
-            className="border flex-1 px-2 py-1 rounded bg-white text-gray-900 placeholder-gray-500"
-            placeholder={
-              notesClientReady ? "Enter note..." : "Notes not ready (sign in needed)"
-            }
-            value={noteContent}
-            onChange={(e) => setNoteContent(e.target.value)}
-            disabled={!notesClientReady}
-          />
-          <Button onClick={handleAddNote} disabled={!notesClientReady}>
-            Add Note
-          </Button>
-        </div>
-
-        {/* NOTES LIST (paginated, 4 per page) */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-sm font-semibold">Notes</p>
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-gray-600">
-                {pageInfo(notesPage, notes.length, NOTES_PAGE_SIZE)}
-              </span>
-              <div className="flex gap-1">
-                <button
-                  className="px-2 py-1 border rounded disabled:opacity-40"
-                  onClick={() => setNotesPage((p) => Math.max(1, p - 1))}
-                  disabled={notesPage === 1}
-                  type="button"
-                >
-                  Previous
-                </button>
-                <button
-                  className="px-2 py-1 border rounded disabled:opacity-40"
-                  onClick={() =>
-                    setNotesPage((p) =>
-                      p * NOTES_PAGE_SIZE >= notes.length ? p : p + 1
-                    )
-                  }
-                  disabled={notesPage * NOTES_PAGE_SIZE >= notes.length}
-                  type="button"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-2 max-h-[300px] overflow-auto bg-white p-1 rounded">
-            {paginatedNotes.map((note) => {
-              const key = note.booking_id ? String(note.booking_id) : "";
-              const meta =
-                (key && bookingMetaByRowId[key]) ||
-                (key && bookingMetaByGroupId[key]) ||
-                null;
-
-              return (
-                <div
-                  key={note.id}
-                  className="border rounded p-2 text-sm bg-white text-gray-900"
-                >
-                  <div>{note.note_content}</div>
-                  <div className="text-xs text-gray-500">
-                    {new Date(note.created_at).toLocaleString()} by{" "}
-                    {note.created_by || "Unknown"}
-                    {meta ? (
-                      <>
-                        {" "}
-                        ·{" "}
-                        <span className="italic">
-                          for {meta.title} on {meta.when}
-                        </span>
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            })}
-            {notes.length === 0 && (
-              <div className="text-sm text-gray-500 bg-white border rounded p-2">
-                No notes for this client yet.
-              </div>
-            )}
-          </div>
-        </div>
-
         {/* Optional full history view */}
         {showFullHistory && (
           <div className="border rounded p-2 bg-white">
