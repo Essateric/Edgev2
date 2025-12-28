@@ -12,6 +12,7 @@ import { useAuth } from "../../contexts/AuthContext";
  * - isOpen, onClose
  * - clientId (required)  ✅ should be clients.id (uuid)
  * - bookingId (optional) ✅ should be bookings.id (uuid) OR sometimes a legacy group id (bookings.booking_id text)
+ * - bookingGroupId (optional) ✅ explicit legacy group id (bookings.booking_id text)
  */
 export default function ClientNotesModal({
   isOpen,
@@ -55,37 +56,17 @@ export default function ClientNotesModal({
   // 🔹 current signed-in user (PIN auth etc)
   const { currentUser, supabaseClient, authLoading } = useAuth();
 
-  // ✅ IMPORTANT: use token-backed client when available (same behavior as BookingPopUp)
+  // ✅ use token-backed client when available
   const db = supabaseClient || baseSupabase;
-  const notesDb = supabaseClient || baseSupabase; // client_notes requires authenticated session
+  const notesDb = supabaseClient || baseSupabase;
 
   const [notesSessionReady, setNotesSessionReady] = useState(false);
   const notesClientReady = notesSessionReady && !authLoading;
 
-  useEffect(() => {
-    let cancelled = false;
-    setNotesSessionReady(false);
-
-    if (!notesDb || authLoading) return undefined;
-
-    (async () => {
-      try {
-        const { data, error } = await notesDb.auth.getSession();
-        if (cancelled) return;
-        setNotesSessionReady(!error && !!data?.session);
-      } catch {
-        if (!cancelled) setNotesSessionReady(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [notesDb, authLoading, currentUser?.token]);
-
   // Internal: resolved IDs (fixes “wrong id passed in” issues)
   const [effectiveClientId, setEffectiveClientId] = useState(null);
   const [effectiveBookingRowId, setEffectiveBookingRowId] = useState(null);
+  const [effectiveBookingGroupId, setEffectiveBookingGroupId] = useState(null);
 
   // -------- helpers --------
   const isValidEmail = (s) =>
@@ -169,46 +150,117 @@ export default function ClientNotesModal({
     return who.name || "Stylist";
   };
 
-  const loadNotes = async ({ cid, bookingRowId, bookingGroupId }) => {
-    if (!notesClientReady) {
-      setNotes([]);
-      return;
-    }
+  // --- Notes session readiness (hydrate from PIN token if needed) ---
+  useEffect(() => {
+    if (!notesDb || authLoading) return;
 
-    const filters = [];
-    if (cid) filters.push(`client_id.eq.${cid}`);
-    if (bookingRowId) filters.push(`booking_id.eq.${bookingRowId}`);
-    // Some older rows may have booking_id populated with the legacy group id (text)
-    if (bookingGroupId) filters.push(`booking_id.eq.${bookingGroupId}`);
+    let cancelled = false;
 
-    if (!filters.length) {
-      setNotes([]);
-      return;
-    }
+    const run = async () => {
+      setNotesSessionReady(false);
 
-    const res = await notesDb
-      .from("client_notes")
-      .select("id, client_id, note_content, created_by, created_at, booking_id")
-      .or(filters.join(","))
-      .order("created_at", { ascending: false });
+      try {
+        const { data, error } = await notesDb.auth.getSession();
+        if (cancelled) return;
 
-    if (res.error) {
-      console.error("Error fetching notes:", res.error.message);
-      setNotes([]);
-      return;
-    }
+        if (!error && data?.session) {
+          setNotesSessionReady(true);
+          return;
+        }
 
-    // Deduplicate by id in case multiple filters overlap the same row
-    const unique = [];
-    const seen = new Set();
-    for (const n of res.data || []) {
-      if (n?.id && !seen.has(n.id)) {
-        seen.add(n.id);
-        unique.push(n);
+        if (currentUser?.token && currentUser?.refresh_token) {
+          const { error: setErr } = await notesDb.auth.setSession({
+            access_token: currentUser.token,
+            refresh_token: currentUser.refresh_token,
+          });
+
+          if (cancelled) return;
+
+          if (!setErr) {
+            const { data: afterSet } = await notesDb.auth.getSession();
+            if (!cancelled) setNotesSessionReady(!!afterSet?.session);
+            return;
+          }
+        }
+
+        if (!cancelled) setNotesSessionReady(false);
+      } catch {
+        if (!cancelled) setNotesSessionReady(false);
       }
-    }
-    setNotes(unique);
-  };
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [notesDb, authLoading, currentUser?.token, currentUser?.refresh_token]);
+
+  // --- Notes loader (robust when bookingGroupId is not uuid) ---
+  const loadNotes = useCallback(
+    async ({ cid, bookingRowId, bookingGroupId: groupId }) => {
+      if (!notesClientReady) {
+        setNotes([]);
+        return;
+      }
+
+      const makeFilters = ({ includeGroup }) => {
+        const f = [];
+        if (cid) f.push(`client_id.eq.${cid}`);
+        if (bookingRowId) f.push(`booking_id.eq.${bookingRowId}`);
+        if (includeGroup && groupId) f.push(`booking_id.eq.${groupId}`);
+        return f;
+      };
+
+      let filters = makeFilters({ includeGroup: true });
+
+      if (!filters.length) {
+        setNotes([]);
+        return;
+      }
+
+      const runQuery = async (orString) => {
+        return await notesDb
+          .from("client_notes")
+          .select("id, client_id, note_content, created_by, created_at, booking_id")
+          .or(orString)
+          .order("created_at", { ascending: false });
+      };
+
+      let res = await runQuery(filters.join(","));
+
+      // If booking_id column is UUID and groupId is text, Supabase can error.
+      // Retry without the group filter so we still show client / row-based notes.
+      if (
+        res?.error &&
+        groupId &&
+        !isUuid(groupId) &&
+        /invalid input syntax for type uuid/i.test(res.error.message || "")
+      ) {
+        filters = makeFilters({ includeGroup: false });
+        if (filters.length) {
+          res = await runQuery(filters.join(","));
+        }
+      }
+
+      if (res.error) {
+        console.error("Error fetching notes:", res.error.message);
+        setNotes([]);
+        return;
+      }
+
+      const unique = [];
+      const seen = new Set();
+      for (const n of res.data || []) {
+        if (n?.id && !seen.has(n.id)) {
+          seen.add(n.id);
+          unique.push(n);
+        }
+      }
+      setNotes(unique);
+    },
+    [notesClientReady, notesDb]
+  );
 
   // -------- resolve correct client + booking ids on open --------
   useEffect(() => {
@@ -222,13 +274,24 @@ export default function ClientNotesModal({
     setSavingEmail(false);
     setShowFullHistory(false);
 
+    // reset resolved ids on open
+    setEffectiveClientId(null);
+    setEffectiveBookingRowId(null);
+    setEffectiveBookingGroupId(null);
+    setRepeatSeriesId(null);
+
     (async () => {
       let resolvedClientId = isUuid(clientId) ? clientId : null;
       let resolvedBookingRowId = isUuid(bookingId) ? bookingId : null;
 
+      // Start with an explicit group id if provided, otherwise infer from bookingId when it's non-uuid
+      let resolvedGroupId =
+        (bookingGroupId && String(bookingGroupId).trim()) ||
+        (!isUuid(bookingId) && bookingId ? String(bookingId).trim() : null);
+
       if (bookingId) {
-        // Case A: bookingId is a booking row uuid
         if (isUuid(bookingId)) {
+          // Case A: bookingId is a booking row uuid
           const { data, error } = await db
             .from("bookings")
             .select("id, client_id, repeat_series_id, booking_id")
@@ -238,18 +301,20 @@ export default function ClientNotesModal({
           if (!error && data?.id) {
             resolvedBookingRowId = data.id;
             if (!resolvedClientId && data.client_id) resolvedClientId = data.client_id;
-             if (data.repeat_series_id) setRepeatSeriesId(data.repeat_series_id);
-            if (data.booking_id && !bookingGroupId) {
-              // capture the group's booking_id if the caller didn't pass one
-              bookingGroupId = data.booking_id;
+            if (data.repeat_series_id) setRepeatSeriesId(data.repeat_series_id);
+            if (data.booking_id && !resolvedGroupId) {
+              resolvedGroupId = String(data.booking_id).trim();
             }
           }
         } else {
           // Case B: bookingId is a booking group id (bookings.booking_id text)
+          const group = String(bookingId).trim();
+          if (!resolvedGroupId) resolvedGroupId = group;
+
           const { data, error } = await db
             .from("bookings")
             .select("id, client_id, repeat_series_id, booking_id")
-            .eq("booking_id", bookingId)
+            .eq("booking_id", group)
             .order("start", { ascending: false })
             .limit(1)
             .maybeSingle();
@@ -257,7 +322,10 @@ export default function ClientNotesModal({
           if (!error && data?.id) {
             resolvedBookingRowId = data.id;
             if (!resolvedClientId && data.client_id) resolvedClientId = data.client_id;
-              if (data.repeat_series_id) setRepeatSeriesId(data.repeat_series_id);
+            if (data.repeat_series_id) setRepeatSeriesId(data.repeat_series_id);
+            if (data.booking_id && !resolvedGroupId) {
+              resolvedGroupId = String(data.booking_id).trim();
+            }
           }
         }
       }
@@ -266,16 +334,21 @@ export default function ClientNotesModal({
 
       setEffectiveClientId(resolvedClientId || null);
       setEffectiveBookingRowId(resolvedBookingRowId || null);
+      setEffectiveBookingGroupId(resolvedGroupId || null);
 
       if (!resolvedClientId) {
-        console.warn("[ClientNotesModal] No resolved client id:", { clientId, bookingId });
+        console.warn("[ClientNotesModal] No resolved client id:", {
+          clientId,
+          bookingId,
+          bookingGroupId,
+        });
       }
     })();
 
     return () => {
       active = false;
     };
-  }, [isOpen, clientId, bookingId, db]);
+  }, [isOpen, clientId, bookingId, bookingGroupId, db]);
 
   // Client + stylist name on open (uses effectiveClientId)
   useEffect(() => {
@@ -325,28 +398,28 @@ export default function ClientNotesModal({
     };
   }, [isOpen, effectiveClientId, clientId, bookingId, clientEmail, db]);
 
-  // Notes on open ✅ (FIXED BRACES)
+  // Notes on open
   useEffect(() => {
-    if (isOpen && effectiveClientId) {
-      const groupId = bookingGroupId || (!isUuid(bookingId) ? bookingId : null);
-      const bookingRow =
-        effectiveBookingRowId || (isUuid(bookingId) ? bookingId : null);
+    if (!isOpen) return;
 
+    // fetch notes if we have ANY useful identifier
+    if (effectiveClientId || effectiveBookingRowId || effectiveBookingGroupId) {
       loadNotes({
         cid: effectiveClientId,
-        bookingRowId: bookingRow,
-        bookingGroupId: groupId,
+        bookingRowId: effectiveBookingRowId,
+        bookingGroupId: effectiveBookingGroupId,
       });
-
       setNotesPage(1);
+    } else {
+      setNotes([]);
     }
   }, [
     isOpen,
     effectiveClientId,
     effectiveBookingRowId,
-    bookingId,
-    bookingGroupId,
+    effectiveBookingGroupId,
     notesClientReady,
+    loadNotes,
   ]);
 
   // --- Load history (bookings) when opened ---
@@ -354,15 +427,15 @@ export default function ClientNotesModal({
     if (!isOpen || !effectiveClientId) return;
 
     const filters = [];
-    if (effectiveClientId) filters.push(`client_id.eq.${effectiveClientId}`);
-    if (bookingId) filters.push(`booking_id.eq.${bookingId}`);
-    if (effectiveBookingRowId) filters.push(`id.eq.${effectiveBookingRowId}`);
+    filters.push(`client_id.eq.${effectiveClientId}`);
 
-    if (!filters.length) {
-      setHistory([]);
-      setBookingMetaByRowId({});
-      setBookingMetaByGroupId({});
-      return;
+    // If we have a group id, include it (optional, helps context in some edge cases)
+    if (effectiveBookingGroupId) {
+      filters.push(`booking_id.eq.${effectiveBookingGroupId}`);
+    }
+
+    if (effectiveBookingRowId) {
+      filters.push(`id.eq.${effectiveBookingRowId}`);
     }
 
     const { data, error } = await db
@@ -426,21 +499,19 @@ export default function ClientNotesModal({
         title: (b.category ? `${b.category}: ` : "") + (b.title || ""),
       };
       byRow[b.id] = meta;
-      if (b.booking_id) byGroup[b.booking_id] = meta; // bookings.booking_id (text)
+      if (b.booking_id) byGroup[b.booking_id] = meta;
     });
 
     setBookingMetaByRowId(byRow);
     setBookingMetaByGroupId(byGroup);
-  }, [bookingId, db, effectiveBookingRowId, effectiveClientId, isOpen]);
+  }, [db, effectiveBookingRowId, effectiveBookingGroupId, effectiveClientId, isOpen]);
 
   useEffect(() => {
     let active = true;
-
     (async () => {
       await loadHistory();
       if (!active) return;
     })();
-
     return () => {
       active = false;
     };
@@ -482,6 +553,11 @@ export default function ClientNotesModal({
     const text = noteContent.trim();
     if (!text) return;
 
+    if (!notesClientReady) {
+      alert("Notes are not ready yet. Please sign in again or reopen the modal.");
+      return;
+    }
+
     if (!effectiveClientId) {
       alert("Couldn't find the client for this booking. Please refresh and try again.");
       return;
@@ -490,7 +566,7 @@ export default function ClientNotesModal({
     const who = await getCurrentStaffIdentity();
     const authorName = who.name || staffName || "Stylist";
 
-    // Only write booking_id if we have a real booking row uuid (FK expects bookings.id)
+    // Only write booking_id if we have a real booking row uuid
     const safeBookingRowId =
       (effectiveBookingRowId && isUuid(effectiveBookingRowId) && effectiveBookingRowId) ||
       (bookingId && isUuid(bookingId) && bookingId) ||
@@ -514,7 +590,7 @@ export default function ClientNotesModal({
     await loadNotes({
       cid: effectiveClientId,
       bookingRowId: effectiveBookingRowId,
-      bookingGroupId: !isUuid(bookingId) ? bookingId : null,
+      bookingGroupId: effectiveBookingGroupId,
     });
     setNotesPage(1);
   };
@@ -561,7 +637,7 @@ export default function ClientNotesModal({
     );
   }, [client]);
 
-  // ✅ EMAIL FIX: always show a value even if clients fetch fails (RLS / timing / etc)
+  // ✅ always show a value even if clients fetch fails
   const emailToShow = useMemo(() => {
     return String(client?.email || clientEmail || "").trim();
   }, [client?.email, clientEmail]);
@@ -728,11 +804,16 @@ export default function ClientNotesModal({
         <div className="flex gap-2">
           <input
             className="border flex-1 px-2 py-1 rounded bg-white text-gray-900 placeholder-gray-500"
-            placeholder="Enter note..."
+            placeholder={
+              notesClientReady ? "Enter note..." : "Notes not ready (sign in needed)"
+            }
             value={noteContent}
             onChange={(e) => setNoteContent(e.target.value)}
+            disabled={!notesClientReady}
           />
-          <Button onClick={handleAddNote}>Add Note</Button>
+          <Button onClick={handleAddNote} disabled={!notesClientReady}>
+            Add Note
+          </Button>
         </div>
 
         {/* NOTES LIST (paginated, 4 per page) */}

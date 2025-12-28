@@ -99,6 +99,16 @@ function guessRepeatLabel(series) {
   return "Repeat (custom)";
 }
 
+/* ✅ helpers for displaying staff name instead of email */
+const isEmail = (s) =>
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
+
+const toFirstName = (s) => {
+  const v = String(s || "").trim();
+  if (!v) return "Unknown";
+  return v.split(/\s+/)[0] || "Unknown";
+};
+
 export default function BookingPopUp(props) {
   const { isOpen, booking } = props;
   if (!isOpen || !booking) return null;
@@ -188,9 +198,25 @@ function BookingPopUpBody({
     supabase: supabaseClient,
   });
 
+  const [newNoteText, setNewNoteText] = useState(""); // kept (existing)
+  const NOTES_PAGE_SIZE = 4;
+  const [notesPage, setNotesPage] = useState(1);
+  const [noteContent, setNoteContent] = useState("");
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteError, setNoteError] = useState("");
+
   // DOB
   const { dobInput, setDobInput, savingDOB, dobError, saveDOB } =
     useSaveClientDOB();
+
+  useEffect(() => {
+    setNotesPage(1);
+  }, [isOpen]);
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(notes.length / NOTES_PAGE_SIZE));
+    setNotesPage((p) => Math.min(p, maxPage));
+  }, [notes.length]);
 
   useEffect(() => {
     if (!displayClient) return;
@@ -229,6 +255,35 @@ function BookingPopUpBody({
     (Array.isArray(relatedBookings) &&
       relatedBookings.some((r) => r.source === "public"));
 
+  const { bookingMetaByRowId, bookingMetaByGroupId } = useMemo(() => {
+    const byRowId = {};
+    const byGroupId = {};
+
+    (relatedBookings || []).forEach((row) => {
+      if (!row) return;
+      const start = getStart(row);
+      const when = start ? format(start, "dd MMM yyyy • HH:mm") : "Unknown date";
+      const label = row.title || row.category || "Booking";
+
+      if (row.id) byRowId[row.id] = { when, label };
+      if (row.booking_id) byGroupId[row.booking_id] = { when, label };
+    });
+
+    return { bookingMetaByRowId: byRowId, bookingMetaByGroupId: byGroupId };
+  }, [relatedBookings]);
+
+  const paginatedNotes = useMemo(() => {
+    const start = (notesPage - 1) * NOTES_PAGE_SIZE;
+    return notes.slice(start, start + NOTES_PAGE_SIZE);
+  }, [notes, notesPage]);
+
+  const notesPageInfo = useMemo(() => {
+    if (!notes.length) return "No notes yet";
+    const start = (notesPage - 1) * NOTES_PAGE_SIZE + 1;
+    const end = Math.min(notesPage * NOTES_PAGE_SIZE, notes.length);
+    return `${start}-${end} of ${notes.length}`;
+  }, [notes.length, notesPage]);
+
   // ✅ lock derived (treat the group as locked if ANY row is locked)
   const derivedLocked = useMemo(() => {
     const fromGroup =
@@ -262,6 +317,43 @@ function BookingPopUpBody({
   const getStylistName = (resourceId) => {
     if (!resourceId) return "—";
     return stylistNameById.get(resourceId) || "—";
+  };
+
+  // ✅ NEW: email -> staff.name map (from your staff table screenshot)
+  const staffNameByEmail = useMemo(() => {
+    const m = new Map();
+    (stylistList || []).forEach((s) => {
+      const email = String(s?.email || "").trim().toLowerCase();
+      if (!email) return;
+
+      // use the staff table column: `name`
+      const name = String(s?.name || "").trim();
+      if (!name) return;
+
+      m.set(email, name);
+    });
+    return m;
+  }, [stylistList]);
+
+  // ✅ display "by Martin" for staff notes (stored as email), "by client" for client notes
+  const formatCreatedByLabel = (raw) => {
+    const v = String(raw || "").trim();
+    if (!v) return "Unknown";
+
+    const lower = v.toLowerCase();
+
+    // notes from online booking form
+    if (lower === "client" || lower === "customer") return "client";
+
+    // staff notes stored as email -> show staff.name
+    if (isEmail(v)) {
+      const staffName = staffNameByEmail.get(lower);
+      if (staffName) return toFirstName(staffName);
+      return v; // fallback if we cannot match
+    }
+
+    // already a name
+    return toFirstName(v);
   };
 
   // ✅ Repeat series list used in UI (dedupe + sort)
@@ -407,7 +499,7 @@ function BookingPopUpBody({
           },
           actorId,
           actorEmail,
-           supabaseClient,
+          supabaseClient,
         });
       } catch (auditErr) {
         console.warn("Failed to audit cancelled booking", auditErr);
@@ -453,16 +545,20 @@ function BookingPopUpBody({
     const text = (noteText || "").trim();
     if (!text) return { ok: false, error: { message: "Empty note" } };
 
-    const { data: authData } = await supabaseClient.auth.getUser();
+    // ✅ IMPORTANT: your Supabase client uses accessToken option, so NO supabase.auth.getUser()
+    const actorEmail =
+      currentStaff?.email ||
+      currentUser?.email ||
+      currentUser?.user?.email ||
+      null;
+
     const payload = {
       client_id: clientId,
       note_content: text,
       booking_id: bookingId ?? null,
-      created_by:
-        currentStaff?.name ||
-        currentStaff?.email ||
-        authData?.user?.email ||
-        "unknown",
+
+      // ✅ store email for auditing; UI will display staff.name via map
+      created_by: actorEmail || "unknown",
     };
 
     const { data, error } = await supabaseClient
@@ -473,6 +569,42 @@ function BookingPopUpBody({
 
     if (error) return { ok: false, error };
     return { ok: true, data };
+  };
+
+  const handleAddNote = async () => {
+    setNoteError("");
+
+    if (!displayClient?.id) {
+      setNoteError("This booking is not linked to a client.");
+      return;
+    }
+
+    const content = (noteContent || "").trim();
+    if (!content) {
+      setNoteError("Please enter a note before adding it.");
+      return;
+    }
+
+    setNoteSaving(true);
+    try {
+      const res = await handleAddNoteSafe({
+        clientId: displayClient.id,
+        noteText: content,
+        bookingId: booking?.id || null,
+      });
+
+      if (!res.ok) {
+        throw new Error(res.error?.message || "Failed to add note");
+      }
+
+      setNotes((prev) => [res.data, ...(prev || [])]);
+      setNoteContent("");
+      setNotesPage(1);
+    } catch (e) {
+      setNoteError(e?.message || "Failed to add note");
+    } finally {
+      setNoteSaving(false);
+    }
   };
 
   // ✅ lock/unlock booking group
@@ -692,6 +824,130 @@ function BookingPopUpBody({
               )}
             </div>
           </div>
+
+          {/* Notes inline view */}
+          <div className="mt-6">
+            <div className="border rounded-lg bg-white p-3 shadow-sm">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-base font-semibold text-gray-900">Notes</p>
+                </div>
+                <div className="text-xs text-gray-600">
+                  {notesLoading ? "Loading…" : notesPageInfo}
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-start">
+                <textarea
+                  className="flex-1 rounded border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-emerald-600 focus:outline-none focus:ring-1 focus:ring-emerald-600"
+                  placeholder="Add a quick note for this client..."
+                  rows={2}
+                  value={noteContent}
+                  onChange={(e) => setNoteContent(e.target.value)}
+                  disabled={noteSaving}
+                />
+                <div className="flex gap-2 sm:flex-col">
+                  <button
+                    type="button"
+                    onClick={handleAddNote}
+                    disabled={noteSaving}
+                    className="rounded bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    {noteSaving ? "Adding…" : "Add note"}
+                  </button>
+                </div>
+              </div>
+              {noteError && (
+                <p className="mt-1 text-xs text-red-600">{noteError}</p>
+              )}
+
+              <div className="mt-3 flex items-center justify-between text-xs text-gray-700">
+                <div className="flex items-center gap-2">
+                  {notesLoading ? (
+                    <span className="text-gray-500">Loading notes…</span>
+                  ) : (
+                    <span className="font-medium text-gray-800">
+                      {notesPageInfo}
+                    </span>
+                  )}
+                </div>
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setNotesPage((p) => Math.max(1, p - 1))}
+                    disabled={notesPage === 1}
+                    className="rounded border border-gray-300 px-3 py-1 font-medium text-gray-800 disabled:opacity-50"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setNotesPage((p) =>
+                        p * NOTES_PAGE_SIZE >= notes.length ? p : p + 1
+                      )
+                    }
+                    disabled={notesPage * NOTES_PAGE_SIZE >= notes.length}
+                    className="rounded border border-gray-300 px-3 py-1 font-medium text-gray-800 disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-3 space-y-3 max-h-[320px] overflow-y-auto pr-1">
+                {notesLoading ? (
+                  <div className="text-sm text-gray-500">Loading notes…</div>
+                ) : notes.length === 0 ? (
+                  <div className="text-sm text-gray-500 border rounded p-3 bg-gray-50">
+                    No notes for this client yet.
+                  </div>
+                ) : (
+                  paginatedNotes.map((note) => {
+                    const created = note.created_at
+                      ? new Date(note.created_at)
+                      : null;
+                    const createdLabel =
+                      created && !Number.isNaN(created.getTime())
+                        ? format(created, "dd MMM yyyy • HH:mm")
+                        : "Unknown time";
+                    const bookingKey = note.booking_id
+                      ? String(note.booking_id)
+                      : null;
+                    const meta =
+                      (bookingKey && bookingMetaByRowId[bookingKey]) ||
+                      (bookingKey && bookingMetaByGroupId[bookingKey]) ||
+                      null;
+
+                    return (
+                      <div
+                        key={note.id}
+                        className="rounded border bg-gray-50 p-3 shadow-sm"
+                      >
+                        <p className="text-sm whitespace-pre-line text-gray-900">
+                          {note.note_content}
+                        </p>
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-600">
+                          <span>{createdLabel}</span>
+                          <span className="h-1 w-1 rounded-full bg-gray-400" />
+                          {/* ✅ FIX: show staff.name instead of email when possible */}
+                          <span>by {formatCreatedByLabel(note.created_by)}</span>
+                          {meta && (
+                            <>
+                              <span className="h-1 w-1 rounded-full bg-gray-400" />
+                              <span className="text-gray-500">
+                                {meta.label} • {meta.when}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Actions row */}
@@ -769,7 +1025,9 @@ function BookingPopUpBody({
       >
         <div className="flex flex-col gap-5">
           <div className="space-y-1">
-            <h2 className="text-xl font-semibold text-gray-900">Cancel booking</h2>
+            <h2 className="text-xl font-semibold text-gray-900">
+              Cancel booking
+            </h2>
             <p className="text-sm text-gray-800">
               Select a cancellation reason and add a comment for auditing.
             </p>
