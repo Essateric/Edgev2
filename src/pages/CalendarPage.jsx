@@ -334,6 +334,8 @@ const supabase = auth?.supabaseClient || baseSupabase;
           staff.map((s) => ({
             id: s.id,
             title: s.name,
+            name: s.name,
+            email: s.email,
             weeklyHours: s.weekly_hours || {},
           }))
         );
