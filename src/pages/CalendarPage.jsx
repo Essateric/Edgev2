@@ -1408,7 +1408,10 @@ const handleSaveTask = async ({ action, payload }) => {
     onNext={() => setStep(2)}
      onScheduleTask={handleOpenScheduleTask} 
     onClientCreated={(c) => {
-      setClients((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c]));
+     setClients((prev) => {
+        const already = prev.some((p) => p.id === c.id);
+        return already ? prev : [c, ...prev];
+      });
       setSelectedClient(c.id);
       setClientObj(c);
     }}
@@ -1439,7 +1442,10 @@ const handleSaveTask = async ({ action, payload }) => {
     onNext={() => setStep(2)}
      onScheduleTask={handleOpenScheduleTask} 
     onClientCreated={(c) => {
-      setClients((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c]));
+      ssetClients((prev) => {
+        const already = prev.some((p) => p.id === c.id);
+        return already ? prev : [c, ...prev];
+      });
       setSelectedClient(c.id);
       setClientObj(c);
     }}

@@ -15,7 +15,7 @@ export default function ManageClients() {
   const [lastName, setLastName] = useState("");
   const [mobile, setMobile] = useState("");
    const [email, setEmail] = useState("");
-     const normalizePhone = (s = "") => String(s).replace(/[^\d]/g, "");
+    //  const normalizePhone = (s = "") => String(s).replace(/[^\d]/g, "");
 
   // search & sort
   const [search, setSearch] = useState("");
@@ -172,20 +172,18 @@ const handleAddClient = async () => {
   setInfoMsg("");
   setErrorMsg("");
 
-  const fn = firstName.trim();
-  const ln = lastName.trim();
-  const mo = mobile.trim();
-  const em = email.trim();
+   const trimmedFirst = firstName.trim();
+  const trimmedLast = lastName.trim();
+  const trimmedEmail = email.trim();
+  const trimmedMobile = mobile.trim();
 
-  const normMobile = normalizePhone(mo);
-
-  // validation (pick one set of rules)
-  if (!fn || !ln) {
-    setErrorMsg("First and last name are required.");
+  if (!trimmedFirst || !trimmedLast) {
+    setErrorMsg("First name and last name are required.");
     return;
   }
 
-  if (!normMobile && !em) {
+
+  if (!trimmedEmail && !trimmedMobile) {
     setErrorMsg("Enter at least an email or mobile number.");
     return;
   }
@@ -196,16 +194,16 @@ const handleAddClient = async () => {
   }
 
   setLoading(true);
+  
 
   try {
-    const { error } = await db.from("clients").insert([
-      {
-        first_name: fn,
-        last_name: ln || null,
-        mobile: mo || null,
-        email: em || null,
-      },
-    ]);
+     const { existing } = await findOrCreateClientStaff(db, {
+      first_name: trimmedFirst,
+      last_name: trimmedLast,
+      email: trimmedEmail,
+      mobile: trimmedMobile,
+    });
+
 
     if (error) throw error;
 
@@ -216,12 +214,16 @@ const handleAddClient = async () => {
 
     setCurrentPage(1);
     setSortKey("newest");
-
-    setInfoMsg("Client added successfully.");
+setInfoMsg(
+      existing
+        ? "Client already exists; information was updated if missing."
+        : "Client added successfully."
+    );
     await fetchClients();
   } catch (err) {
-    console.error("Failed to add client:", err?.message || err);
-    setErrorMsg(err?.message || "Failed to add client");
+    const message = err?.message || String(err) || "Failed to add client";
+    console.error("Failed to add client:", message);
+    setErrorMsg(message);
   } finally {
     setLoading(false);
   }
