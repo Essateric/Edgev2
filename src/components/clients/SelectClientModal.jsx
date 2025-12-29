@@ -316,7 +316,7 @@ export default function SelectClientModal({
                   className="bg-black text-white px-4 py-2 rounded"
                   disabled={creating}
                 >
-                  {creating ? "Saving..." : "Use this client"}
+                  {creating ? "Saving..." : "Add client"}
                 </button>
 
                 <button

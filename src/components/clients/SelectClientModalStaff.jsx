@@ -118,10 +118,14 @@ export default function SelectClientModalStaff({
     const fn = newClient.first_name.trim();
     const ln = newClient.last_name.trim();
     const em = newClient.email.trim();
-    const mo = newClient.mobile;
+   const mo = newClient.mobile.trim();
 
     if (!fn || !ln) {
       alert("Enter first and last name.");
+      return;
+    }
+    if (!em && !mo) {
+      alert("Enter at least a mobile number or email.");
       return;
     }
     if (!supabaseClient) {
@@ -131,7 +135,7 @@ export default function SelectClientModalStaff({
 
     setCreating(true);
     try {
-      const clientRow = await findOrCreateClientStaff(supabaseClient, {
+      const { client: clientRow, existing } = await findOrCreateClientStaff(supabaseClient, {
         first_name: fn,
         last_name: ln,
         email: em,
@@ -143,6 +147,9 @@ export default function SelectClientModalStaff({
 
       setSelectedClient(clientRow.id);
       setSelectedOption({ value: clientRow.id, label, client: clientRow });
+       if (existing) {
+        alert("This client already exists and has been selected.");
+      }
 
       onClientCreated?.(clientRow);
     } catch (e) {
@@ -246,7 +253,7 @@ export default function SelectClientModalStaff({
               className="bg-black text-white px-4 py-2 rounded"
               disabled={creating}
             >
-              {creating ? "Saving..." : "Use this client"}
+              {creating ? "Saving..." : "Add client"}
             </button>
 
   <button
