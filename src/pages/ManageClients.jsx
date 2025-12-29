@@ -3,6 +3,7 @@ import { supabase } from "../supabaseClient";
 import Button from "../components/Button";
 import Card from "../components/Card";
 import { useAuth } from "../contexts/AuthContext";
+import { findOrCreateClientStaff } from "../lib/findOrCreateClientStaff.js";
 
 const COLS = "id,first_name,last_name,mobile,email,notes,created_at";
 
@@ -29,6 +30,7 @@ export default function ManageClients() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+   const [infoMsg, setInfoMsg] = useState("");
 
   const from = (currentPage - 1) * rowsPerPage;
   const to = from + rowsPerPage - 1;
@@ -36,30 +38,34 @@ export default function ManageClients() {
 
   // figure out if current user is an admin (based on staff.permission)
 useEffect(() => {
-  let mounted = true;
-  (async () => {
-    try {
-         const { data } = await db.auth.getUser();
-      const email = data?.user?.email;
-      if (!email) {
-        if (mounted) setIsAdmin(false);
-        return;
-      }
-       const { data: staffRow, error } = await db
-        .from("staff")
-        .select("permission")
-        .eq("email", email)
-        .maybeSingle();
+    let mounted = true;
+    (async () => {
+      try {
+        const { data } = await db.auth.getUser();
+        const email = data?.user?.email;
+        if (!email) {
+          if (mounted) setIsAdmin(false);
+          return;
+        }
+        const { data: staffRow, error } = await db
+          .from("staff")
+          .select("permission")
+          .eq("email", email)
+          .maybeSingle();
 
-      const ok =
-        !error && staffRow && ["admin", "owner", "manager"].includes(staffRow.permission);
-      if (mounted) setIsAdmin(!!ok);
-    } catch {
-      if (mounted) setIsAdmin(false);
-    }
-  })();
-  return () => { mounted = false; };
-}, [db]);
+        const ok =
+          !error && staffRow && ["admin", "owner", "manager"].includes(staffRow.permission);
+        if (mounted) setIsAdmin(!!ok);
+      } catch {
+
+        if (mounted) setIsAdmin(false);
+      }
+      })();
+    return () => {
+      mounted = false;
+    };
+  }, [db]);
+
 
 
 
@@ -167,6 +173,7 @@ useEffect(() => {
     const ln = lastName.trim();
     const mo = mobile.trim();
    const em = email.trim();
+
     const normMobile = normalizePhone(mo);
     if (!fn) {
       setErrorMsg("First name is required.");
@@ -185,6 +192,13 @@ useEffect(() => {
 
     setErrorMsg("");
 
+     if (!fn || !ln) {
+      setErrorMsg("First and last name are required.");
+      return;
+    }
+    if (!em && !mo) {
+      setErrorMsg("Enter at least an email or mobile number.");
+
  const { error } = await db.from("clients").insert([
         {
           first_name: fn,
@@ -201,14 +215,7 @@ useEffect(() => {
       return;
     }
 
-    setFirstName("");
-    setLastName("");
-    setMobile("");
-     setEmail("");
-    setCurrentPage(1);
-    setSortKey("newest");
-    await fetchClients();
-     setLoading(false);
+         setLoading(false);
   };
 
   const handleDeleteClient = async (client) => {
@@ -321,6 +328,7 @@ useEffect(() => {
           />
           <Button onClick={handleAddClient}>Add</Button>
         </div>
+         {infoMsg && <p className="text-sm text-green-700">{infoMsg}</p>}
         {errorMsg && <p className="text-sm text-red-600">{errorMsg}</p>}
       </Card>
 

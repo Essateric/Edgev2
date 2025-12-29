@@ -389,6 +389,43 @@ const supabase = auth?.supabaseClient || baseSupabase;
   }, [currentUser?.id, supabase]);
 
   useEffect(() => {
+    if (!supabase) return undefined;
+
+    const channel = supabase
+      .channel("clients-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "clients" },
+        (payload) => {
+          setClients((prev = []) => {
+            const row = payload.new || payload.old;
+            if (!row?.id) return prev;
+
+            if (payload.eventType === "DELETE") {
+              return prev.filter((c) => c.id !== row.id);
+            }
+
+            const exists = prev.some((c) => c.id === row.id);
+            const merged = {
+              ...(prev.find((c) => c.id === row.id) || {}),
+              ...row,
+            };
+
+            return exists
+              ? prev.map((c) => (c.id === row.id ? merged : c))
+              : [...prev, row];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [supabase]);
+
+
+  useEffect(() => {
     if (!currentUser?.id) return;
     if (!supabase) return;
 
