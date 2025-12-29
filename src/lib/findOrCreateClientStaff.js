@@ -37,29 +37,30 @@ export async function findOrCreateClientStaff(
   if (!em && !mo) throw new Error("Enter a mobile number or email.");
   if (em && !isEmail(em)) throw new Error("Please enter a valid email address.");
 
-  const canLookup = !!em || !!mo;
-  let q = supabaseClient.from("clients").select("id, first_name, last_name, email, mobile").limit(50);
+const buildNameClause = () => `and(first_name.ilike.${fn},last_name.ilike.${ln})`;
   const ors = [];
 
  if (em) {
-    ors.push(`email.eq.${em}`, `email.ilike.${em}`);
-    if (emDomain) {
-      ors.push(`email.ilike.%@${emDomain}`);
-    }
+    ors.push(buildNameClause() + `,email.ilike.${em}`);
+    ors.push(buildNameClause() + `,email.eq.${em}`);
   }
   if (mo) {
     const phoneLike = `%${mo}%`;
-    ors.push(`mobile.eq.${mo}`, `mobile.ilike.${phoneLike}`);
-  }
-  if (fn && ln) {
-    ors.push(`and(first_name.ilike.${fn},last_name.ilike.${ln})`);
+  ors.push(buildNameClause() + `,mobile.eq.${mo}`);
+    ors.push(buildNameClause() + `,mobile.ilike.${phoneLike}`);
   }
 
-  if (ors.length) {
-    q = q.or(ors.join(","));
+ // Broader fallback: same names + same email domain
+  if (emDomain) {
+    ors.push(buildNameClause() + `,email.ilike.%@${emDomain}`);
   }
 
-  const { data: found, error: findErr } = await q;
+const { data: found, error: findErr } = await supabaseClient
+    .from("clients")
+    .select("id, first_name, last_name, email, mobile")
+    .or(ors.join(","))
+    .limit(100);
+    
   if (findErr) throw findErr;
 
   const pickBestMatch = () => {

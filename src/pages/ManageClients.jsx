@@ -168,55 +168,64 @@ useEffect(() => {
     fetchClients();
   }, [fetchClients, currentPage, rowsPerPage]);
 
-  const handleAddClient = async () => {
-    const fn = firstName.trim();
-    const ln = lastName.trim();
-    const mo = mobile.trim();
-   const em = email.trim();
+const handleAddClient = async () => {
+  setInfoMsg("");
+  setErrorMsg("");
 
-    const normMobile = normalizePhone(mo);
-    if (!fn) {
-      setErrorMsg("First name is required.");
-      return;
-    }
-    if (!normMobile && !em) {
-      setErrorMsg("Provide an email or phone number.");
-      return;
-    }
+  const fn = firstName.trim();
+  const ln = lastName.trim();
+  const mo = mobile.trim();
+  const em = email.trim();
 
-    if (!db) {
-      setErrorMsg("No Supabase client available.");
-      return;
-    }
-    setLoading(true);
+  const normMobile = normalizePhone(mo);
 
-    setErrorMsg("");
+  // validation (pick one set of rules)
+  if (!fn || !ln) {
+    setErrorMsg("First and last name are required.");
+    return;
+  }
 
-     if (!fn || !ln) {
-      setErrorMsg("First and last name are required.");
-      return;
-    }
-    if (!em && !mo) {
-      setErrorMsg("Enter at least an email or mobile number.");
+  if (!normMobile && !em) {
+    setErrorMsg("Enter at least an email or mobile number.");
+    return;
+  }
 
- const { error } = await db.from("clients").insert([
-        {
-          first_name: fn,
-          last_name: ln || null,
-          mobile: mo || null,
-          email: em || null,
-        },
-      ]);
+  if (!db) {
+    setErrorMsg("No Supabase client available.");
+    return;
+  }
 
-    if (error) {
-      console.error("Failed to add client:", error.message);
-      setErrorMsg(error.message);
-      setLoading(false);
-      return;
-    }
+  setLoading(true);
 
-         setLoading(false);
-  };
+  try {
+    const { error } = await db.from("clients").insert([
+      {
+        first_name: fn,
+        last_name: ln || null,
+        mobile: mo || null,
+        email: em || null,
+      },
+    ]);
+
+    if (error) throw error;
+
+    setFirstName("");
+    setLastName("");
+    setMobile("");
+    setEmail("");
+
+    setCurrentPage(1);
+    setSortKey("newest");
+
+    setInfoMsg("Client added successfully.");
+    await fetchClients();
+  } catch (err) {
+    console.error("Failed to add client:", err?.message || err);
+    setErrorMsg(err?.message || "Failed to add client");
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleDeleteClient = async (client) => {
     if (!isAdmin) return;
