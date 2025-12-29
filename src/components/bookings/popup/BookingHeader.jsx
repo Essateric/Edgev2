@@ -85,7 +85,7 @@ export default function BookingHeader({
       </div>
 
       <Button onClick={onOpenDetails} className="text-sm">
-        View Details
+      Previous Services
       </Button>
     </div>
   );

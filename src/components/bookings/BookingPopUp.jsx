@@ -679,8 +679,15 @@ function BookingPopUpBody({
 
   const hasSeries = !!booking?.repeat_series_id;
 
-  return (
-    <ModalLarge isOpen={isOpen} onClose={onClose} hideCloseIcon zIndex={50}>
+  return ( 
+  <ModalLarge
+      isOpen={isOpen}
+      onClose={onClose}
+      hideCloseIcon
+      zIndex={50}
+      contentClassName="booking-popup booking-popup--larger-text"
+    >
+
       <div className="modal-panel">
         {/* Header region */}
         <div className="modal-panel__header">
