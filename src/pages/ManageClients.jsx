@@ -13,6 +13,8 @@ export default function ManageClients() {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [mobile, setMobile] = useState("");
+   const [email, setEmail] = useState("");
+     const normalizePhone = (s = "") => String(s).replace(/[^\d]/g, "");
 
   // search & sort
   const [search, setSearch] = useState("");
@@ -164,30 +166,49 @@ useEffect(() => {
     const fn = firstName.trim();
     const ln = lastName.trim();
     const mo = mobile.trim();
-    if (!fn || !mo) return;
+   const em = email.trim();
+    const normMobile = normalizePhone(mo);
+    if (!fn) {
+      setErrorMsg("First name is required.");
+      return;
+    }
+    if (!normMobile && !em) {
+      setErrorMsg("Provide an email or phone number.");
+      return;
+    }
+
+    if (!db) {
+      setErrorMsg("No Supabase client available.");
+      return;
+    }
+    setLoading(true);
 
     setErrorMsg("");
 
-  const { error } = await db.from("clients").insert([
-      {
-        first_name: fn,
-        last_name: ln || null,
-        mobile: mo,
-      },
-    ]);
+ const { error } = await db.from("clients").insert([
+        {
+          first_name: fn,
+          last_name: ln || null,
+          mobile: mo || null,
+          email: em || null,
+        },
+      ]);
 
     if (error) {
       console.error("Failed to add client:", error.message);
       setErrorMsg(error.message);
+      setLoading(false);
       return;
     }
 
     setFirstName("");
     setLastName("");
     setMobile("");
+     setEmail("");
     setCurrentPage(1);
     setSortKey("newest");
     await fetchClients();
+     setLoading(false);
   };
 
   const handleDeleteClient = async (client) => {
@@ -289,6 +310,13 @@ useEffect(() => {
             placeholder="Phone Number"
             value={mobile}
             onChange={(e) => setMobile(e.target.value)}
+            className="border rounded p-2 flex-1 min-w-[150px] text-gray-700"
+          />
+           <input
+            type="email"
+            placeholder="Email (optional)"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             className="border rounded p-2 flex-1 min-w-[150px] text-gray-700"
           />
           <Button onClick={handleAddClient}>Add</Button>
