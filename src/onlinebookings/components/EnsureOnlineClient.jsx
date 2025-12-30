@@ -41,7 +41,7 @@ export default function EnsureOnlineClient({ defaultValues = {}, onDone }) {
       const { data, error: qErr } = await supabase
         .from("clients")
         .select("id, first_name, last_name, email, mobile")
-        .ilike("email", emailClean)
+        .eq("email", emailClean)
         .maybeSingle();
 
       if (qErr) throw qErr;

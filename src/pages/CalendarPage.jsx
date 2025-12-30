@@ -166,8 +166,21 @@ const mapBookingRowToEvent = useCallback (
   [stylistList]
 );
 
+const normalizeRole = (r) =>
+  String(r || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " "); // handles senior_stylist / senior-stylist too
+
+
+
  const auth = useAuth();
 const { currentUser, pageLoading, authLoading, supabaseClient } = auth;
+const isAdmin = normalizeRole(currentUser?.permission) === "admin";
+const canSendReminders = ["admin", "senior stylist"].includes(
+  normalizeRole(currentUser?.permission)
+);
+
 
 const navigate = useNavigate();
 const [bootingOut, setBootingOut] = useState(false);
@@ -270,7 +283,8 @@ if (bootingOut) return <PageLoader />;
     ];
   }, [events, scheduledTasks, taskEvents, unavailableBlocks, salonClosedBlocks]);
 
-  const isAdmin = currentUser?.permission?.toLowerCase() === "admin";
+
+
 
   const coerceEventForPopup = (ev) => {
     const rid = ev.resource_id ?? ev.resourceId ?? ev.stylist_id ?? null;
@@ -1556,23 +1570,24 @@ const handleSaveTask = async ({ action, payload }) => {
         }}
       />
 
-      {isAdmin && (
-        <>
-          <button
-            onClick={() => setShowReminders(true)}
-            className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 bg-black text-white rounded-full shadow-lg px-5 py-3"
-            title="Send Reminders"
-          >
-            Send Reminders
-          </button>
+  {canSendReminders && (
+  <>
+    <button
+      onClick={() => setShowReminders(true)}
+      className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 bg-black text-white rounded-full shadow-lg px-5 py-3"
+      title="Send Reminders"
+    >
+      Send Reminders
+    </button>
 
-          <RemindersDialog
-            isOpen={showReminders}
-            onClose={() => setShowReminders(false)}
-            defaultWeekFromDate={visibleDate}
-          />
-        </>
-      )}
+    <RemindersDialog
+      isOpen={showReminders}
+      onClose={() => setShowReminders(false)}
+      defaultWeekFromDate={visibleDate}
+    />
+  </>
+)}
+
        <ScheduleTaskModal
         supabaseClient={supabase}
         isOpen={taskModalOpen}

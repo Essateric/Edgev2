@@ -65,80 +65,33 @@ async function findOrCreateClientId({ first, last, email, mobileN }) {
   const firstN = String(first || "").trim();
   const lastN = String(last || "").trim();
   const emailN = String(email || "").trim().toLowerCase();
-  const mobileNN = normalizePhone(mobileN || "");
-  const normalizedEmail = normalizeEmailForMatch(emailN);
-  const emDomain = emailDomain(emailN);
+  const mobileDigits = normalizePhone(mobileN || ""); // digits only
 
   if (!firstN || !lastN) throw new Error("First name and last name are required.");
-  if (!emailN && !mobileNN) throw new Error("Email or mobile is required.");
+  if (!emailN && !mobileDigits) throw new Error("Email or mobile is required.");
 
-  // 1) EMAIL path (preferred)
-  if (emailN) {
-  const emailFilters = [`email.ilike.${emailN}`, `email.eq.${emailN}`];
-    if (emDomain) emailFilters.push(`email.ilike.%@${emDomain}`);
+  // 1) NAME-FIRST: fetch only same-name rows
+  const { data: sameName, error: nameErr } = await supabase
+    .from("clients")
+    .select("id, first_name, last_name, email, mobile")
+    .ilike("first_name", firstN)
+    .ilike("last_name", lastN)
+    .limit(200);
 
-    const { data: candidates, error: findErr } = await supabase
-      .from("clients")
-      .select("id, first_name, last_name, email, mobile")
-.or(emailFilters.join(","))
-      .limit(50);
+  if (nameErr) throw nameErr;
 
-    if (findErr) throw findErr;
+  const list = sameName || [];
 
-    const pickExisting = () => {
-      if (!Array.isArray(candidates) || !candidates.length) return null;
-
-      // Exact/normalized email match (handles dotted Gmail variants)
-      const byEmail = candidates.find(
-        (r) => r.email && normalizeEmailForMatch(r.email) === normalizedEmail
-      );
-      if (byEmail) return byEmail;
-
-      // Same domain and matching names as a fallback
-      const byDomainAndName = candidates.find(
-        (r) =>
-          emailDomain(r.email) === emDomain &&
-          normName(r.first_name) === normName(firstN) &&
-          normName(r.last_name) === normName(lastN)
-      );
-      if (byDomainAndName) return byDomainAndName;
-
-      return candidates[0];
-    };
-
-    const existing = pickExisting();
-
-    if (existing?.id) {
-      // Patch missing bits (non-destructive)
-      const patch = {};
-      if (!existing.first_name && firstN) patch.first_name = firstN;
-      if (!existing.last_name && lastN) patch.last_name = lastN;
-       if (!existing.email && emailN) patch.email = emailN;
-      if (!existing.mobile && mobileNN) patch.mobile = mobileNN;
-
-      if (Object.keys(patch).length) {
-        const { error: updErr } = await supabase
-          .from("clients")
-          .update(patch)
-          .eq("id", existing.id);
-
-        if (updErr) throw updErr;
-      }
-
-      return existing.id;
-    }
-
-    // Create new
+  // 2) If name does NOT exist -> create new row immediately
+  if (list.length === 0) {
     const { data: created, error: insErr } = await supabase
       .from("clients")
-      .insert([
-        {
-          first_name: firstN,
-          last_name: lastN || null,
-          email: emailN,
-          mobile: mobileNN || null,
-        },
-      ])
+      .insert([{
+        first_name: firstN,
+        last_name: lastN,
+        email: emailN || null,
+        mobile: mobileDigits || null,
+      }])
       .select("id")
       .single();
 
@@ -146,64 +99,54 @@ async function findOrCreateClientId({ first, last, email, mobileN }) {
     return created.id;
   }
 
-  // 2) MOBILE path (only if no email)
-  {
-    // If mobile is empty after normalization, we can't search safely
-    if (!mobileNN) throw new Error("Valid mobile is required when email is missing.");
+  // 3) Name exists -> try match by email/mobile WITHIN those same-name rows
+  const emailMatch = emailN
+    ? list.find(r => (r.email || "").trim().toLowerCase() === emailN)
+    : null;
 
-    const { data: candidates, error: mobErr } = await supabase
-      .from("clients")
-      .select("id, first_name, last_name, email, mobile")
-      .or(`mobile.eq.${mobileNN},mobile.ilike.%${mobileNN}%`)
-      .limit(25);
+  const mobileMatch = mobileDigits
+    ? list.find(r => normalizePhone(r.mobile || "") === mobileDigits)
+    : null;
 
-    if (mobErr) throw mobErr;
+  // If both provided but match different rows, do NOT guess
+  if (emailMatch && mobileMatch && emailMatch.id !== mobileMatch.id) {
+    throw new Error("Details conflict: email and mobile match different existing clients.");
+  }
 
-    const firstKey = normName(firstN);
-    const lastKey = normName(lastN);
+  const existing = emailMatch || mobileMatch;
 
-    const match =
-      (candidates || []).find((r) => {
-        const rMob = normalizePhone(r?.mobile || "");
-        const rFirst = normName(r?.first_name);
-        const rLast = normName(r?.last_name);
-        return rMob === mobileNN && rFirst === firstKey && rLast === lastKey;
-      }) || null;
+  if (existing?.id) {
+    // Patch missing bits only
+    const patch = {};
+    if (!existing.email && emailN) patch.email = emailN;
+    if (!existing.mobile && mobileDigits) patch.mobile = mobileDigits;
 
-    if (match?.id) {
-      // Patch missing bits
-      const patch = {};
-      if (!match.first_name && firstN) patch.first_name = firstN;
-      if (!match.last_name && lastN) patch.last_name = lastN;
+    if (Object.keys(patch).length) {
+      const { error: updErr } = await supabase
+        .from("clients")
+        .update(patch)
+        .eq("id", existing.id);
 
-      if (Object.keys(patch).length) {
-        const { error: updErr } = await supabase
-          .from("clients")
-          .update(patch)
-          .eq("id", match.id);
-        if (updErr) throw updErr;
-      }
-
-      return match.id;
+      if (updErr) throw updErr;
     }
 
-    // Create new
-    const { data: created, error: insErr } = await supabase
-      .from("clients")
-      .insert([
-        {
-          first_name: firstN,
-          last_name: lastN || null,
-          email: null,
-          mobile: mobileNN,
-        },
-      ])
-      .select("id")
-      .single();
-
-    if (insErr) throw insErr;
-    return created.id;
+    return existing.id;
   }
+
+  // 4) Same name but different contact -> treat as a new person, create new row
+  const { data: created, error: insErr } = await supabase
+    .from("clients")
+    .insert([{
+      first_name: firstN,
+      last_name: lastN,
+      email: emailN || null,
+      mobile: mobileDigits || null,
+    }])
+    .select("id")
+    .single();
+
+  if (insErr) throw insErr;
+  return created.id;
 }
 
 export default function PublicBookingPage() {
@@ -612,8 +555,9 @@ if (rawNotes) {
           client_id: clientId,
           client_name: `${first} ${last}`.trim(),
         })
-        .eq("booking_id", bookingId)
-        .is("client_id", null);
+     .eq("booking_id", bookingId)
+.or(`client_id.is.null,client_id.neq.${clientId}`);
+
 
       if (linkErr) {
         console.warn("Post-insert booking link failed:", linkErr.message);
