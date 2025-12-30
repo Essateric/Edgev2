@@ -133,10 +133,19 @@ const isConfirmedStatus = (status) => {
 };
 
 export default function CalendarPage() {
+   const navigate = useNavigate();              // ✅ ADD THIS
+  const [bootingOut, setBootingOut] = useState(false); // ✅ ADD THIS
+
+    const auth = useAuth();
+  const { currentUser, pageLoading, authLoading, supabaseClient } = auth;
+
+  const supabase = supabaseClient;
+  const hasUser = !!currentUser;
+
+  const isAdmin =
+    String(currentUser?.permission || "").trim().toLowerCase() === "admin";
   const [stylistList, setStylistList] = useState([]);
 
-    // Add subtle quarter-hour labels to each calendar grid cell
-  useAddGridTimeLabels(9, 20, 15);
 
 const mapBookingRowToEvent = useCallback (
   (b, fallbackConfirmed = false) => {
@@ -166,27 +175,6 @@ const mapBookingRowToEvent = useCallback (
   [stylistList]
 );
 
-const normalizeRole = (r) =>
-  String(r || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[_-]+/g, " "); // handles senior_stylist / senior-stylist too
-
-
-
- const auth = useAuth();
-const { currentUser, pageLoading, authLoading, supabaseClient } = auth;
-const isAdmin = normalizeRole(currentUser?.permission) === "admin";
-const canSendReminders = ["admin", "senior stylist"].includes(
-  normalizeRole(currentUser?.permission)
-);
-
-
-const navigate = useNavigate();
-const [bootingOut, setBootingOut] = useState(false);
-
-const supabase = supabaseClient;
-
 // ✅ Option 2: force logout + redirect if session/client missing
 useEffect(() => {
   if (authLoading) return;
@@ -204,8 +192,6 @@ useEffect(() => {
 // While we are logging out + redirecting
 if (bootingOut) return <PageLoader />;
 
-
-  const hasUser = !!currentUser;
 
   const [clients, setClients] = useState([]);
   const [events, setEvents] = useState([]);
@@ -282,8 +268,6 @@ if (bootingOut) return <PageLoader />;
       ...salonClosedBlocks,
     ];
   }, [events, scheduledTasks, taskEvents, unavailableBlocks, salonClosedBlocks]);
-
-
 
 
   const coerceEventForPopup = (ev) => {
@@ -1283,7 +1267,7 @@ const handleSaveTask = async ({ action, payload }) => {
         min={new Date(2025, 0, 1, 9, 0)}
         max={new Date(2025, 0, 1, 20, 0)}
         scrollToTime={new Date(2025, 0, 1, 9, 0)}
-        selectable
+      selectable="ignoreEvents"
         showNowIndicator
         onRangeChange={(range) => {
           if (Array.isArray(range)) setVisibleDate(range[0]);
@@ -1342,25 +1326,29 @@ const handleSaveTask = async ({ action, payload }) => {
             };
           }
 
-          if (event.isUnavailable) {
-            return {
-              style: {
-                backgroundColor: "#36454F",
-                opacity: 0.7,
-                border: "none",
-              },
-            };
-          }
-
-          if (event.isSalonClosed) {
-            return {
-              style: {
-                backgroundColor: "#333333",
-                opacity: 0.7,
-                border: "none",
-              },
-            };
-          }
+           if (event.isUnavailable) {
+    return {
+      className: "rbc-unavailable-block",
+      style: {
+        backgroundColor: "#36454F",
+        opacity: 0.7,
+        border: "none",
+        pointerEvents: "none", // ✅ lets click/drag pass through
+      },
+    };
+  }
+ // ✅ Non-working / salon closed blocks (click-through)
+  if (event.isSalonClosed) {
+    return {
+      className: "rbc-salonclosed-block",
+      style: {
+        backgroundColor: "#333333",
+        opacity: 0.7,
+        border: "none",
+        pointerEvents: "none",
+      },
+    };
+  }
 
                    const status = String(event.status || "").trim().toLowerCase();
 
@@ -1570,24 +1558,23 @@ const handleSaveTask = async ({ action, payload }) => {
         }}
       />
 
-  {canSendReminders && (
-  <>
-    <button
-      onClick={() => setShowReminders(true)}
-      className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 bg-black text-white rounded-full shadow-lg px-5 py-3"
-      title="Send Reminders"
-    >
-      Send Reminders
-    </button>
+      {isAdmin && (
+        <>
+          <button
+            onClick={() => setShowReminders(true)}
+            className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 bg-black text-white rounded-full shadow-lg px-5 py-3"
+            title="Send Reminders"
+          >
+            Send Reminders
+          </button>
 
-    <RemindersDialog
-      isOpen={showReminders}
-      onClose={() => setShowReminders(false)}
-      defaultWeekFromDate={visibleDate}
-    />
-  </>
-)}
-
+          <RemindersDialog
+            isOpen={showReminders}
+            onClose={() => setShowReminders(false)}
+            defaultWeekFromDate={visibleDate}
+          />
+        </>
+      )}
        <ScheduleTaskModal
         supabaseClient={supabase}
         isOpen={taskModalOpen}

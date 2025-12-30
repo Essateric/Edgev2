@@ -17,9 +17,9 @@ export default function ProtectedRoute({ children, requiredRole, requiredRoles }
     return <Navigate to="/login" replace />;
   }
 
-  // Admin can see everything
-  const userRole = String(currentUser.permission || "").trim().toLowerCase();
-  if (userRole === "admin") return children;
+  // ✅ Admin-like roles can see everything
+  const isAdminLike = hasAnyRole(currentUser, ["admin", "senior stylist"]);
+  if (isAdminLike) return children;
 
   // If requiredRoles provided, allow any of them
   if (Array.isArray(requiredRoles) && requiredRoles.length) {
