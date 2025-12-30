@@ -1,31 +1,37 @@
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { Navigate } from "react-router-dom";
+import { hasAnyRole } from "../utils/roleUtils";
 
 /**
- * Wraps content to restrict access by auth and (optionally) by role.
- * @param {React.ReactNode} children - The page to protect
- * @param {string} [requiredRole] - Optional role required for access
+ * Wraps content to restrict access by auth and role(s).
+ * @param {React.ReactNode} children
+ * @param {string} [requiredRole] - single role (backwards compatible)
+ * @param {string[]} [requiredRoles] - multiple allowed roles (any-of)
  */
-export default function ProtectedRoute({ children, requiredRole }) {
-  const { currentUser, authLoading } = useAuth(); // ✅ use currentUser
+export default function ProtectedRoute({ children, requiredRole, requiredRoles }) {
+  const { currentUser, authLoading } = useAuth();
 
-  // While loading, show nothing (or a spinner)
   if (authLoading) return null;
 
-  // Not logged in? Redirect to login
   if (!currentUser) {
     return <Navigate to="/login" replace />;
   }
 
-  // Role check (optional)
-  const userRole = currentUser.permission?.toLowerCase();
-  const neededRole = requiredRole?.toLowerCase();
+  // Admin can see everything
+  const userRole = String(currentUser.permission || "").trim().toLowerCase();
+  if (userRole === "admin") return children;
 
-  if (neededRole && userRole !== neededRole) {
-    // Allow admin to see everything
-    if (userRole !== "admin") {
-      return <Navigate to="/" replace />;
-    }
+  // If requiredRoles provided, allow any of them
+  if (Array.isArray(requiredRoles) && requiredRoles.length) {
+    const ok = hasAnyRole(currentUser, requiredRoles);
+    if (!ok) return <Navigate to="/" replace />;
+    return children;
+  }
+
+  // Backwards compatible: single requiredRole
+  if (requiredRole) {
+    const ok = hasAnyRole(currentUser, [requiredRole]);
+    if (!ok) return <Navigate to="/" replace />;
   }
 
   return children;

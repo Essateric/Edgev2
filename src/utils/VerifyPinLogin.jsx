@@ -4,7 +4,7 @@ import { supabase } from '../supabaseClient';
 export const verifyPinLogin = async (pin) => {
   const { data: staffList, error } = await supabase
     .from('staff')
-    .select('id, name, role, pin_hash');
+    .select('id, name, permission, pin_hash');
 
   if (error || !staffList) {
     console.error("❌ Error fetching staff list:", error);

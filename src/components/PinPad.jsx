@@ -21,7 +21,7 @@ export default function PinPad({
 
   const handleNumberClick = (number) => {
     if (disabled) return;
-    if (value.length < 6) onChange(value + number);
+    if (value.length < 4) onChange(value + number);
   };
 
   const handleClear = () => {
@@ -50,7 +50,7 @@ export default function PinPad({
 
     const handleKeyDown = (e) => {
       // digits
-      if (!disabled && e.key >= "0" && e.key <= "9" && value.length < 6) {
+      if (!disabled && e.key >= "0" && e.key <= "9" && value.length < 4) {
         onChange(value + e.key);
       }
       // enter

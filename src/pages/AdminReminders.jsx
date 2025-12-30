@@ -4,6 +4,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import supabase from "../../supabaseClient"; // ✅ default export
 import { REMINDER_DEFAULT_TEMPLATE } from "../../utils/Reminders";
+import { hasAnyRole } from "../../utils/roleUtils";
+
 
 // ===== Helpers =====
 const mondayStartOfWeek = (d) => {
@@ -76,6 +78,8 @@ export default function RemindersDialog({
 
   const [channel, setChannel] = useState("email");
   const [template, setTemplate] = useState(REMINDER_DEFAULT_TEMPLATE);
+  const canUseReminders = hasAnyRole(currentUser, ["admin", "senior stylist"]);
+
 
   const [loadingBookings, setLoadingBookings] = useState(false);
   const [sending, setSending] = useState(false);
@@ -281,6 +285,13 @@ export default function RemindersDialog({
   };
 
   const onSend = async () => {
+
+    if (!canSendReminders) {
+  setSending(false);
+  setError("You don’t have permission to send reminders.");
+  return;
+}
+
     setError("");
     setResult(null);
     setSending(true);
@@ -328,6 +339,26 @@ export default function RemindersDialog({
   };
 
   if (!isOpen) return null;
+
+  if (!canUseReminders) {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-end lg:items-center justify-center bg-black/40 p-0 lg:p-6">
+      <div className="w-full lg:max-w-md bg-white text-gray-900 rounded-t-2xl lg:rounded-2xl shadow-xl p-4">
+        <h2 className="text-lg font-semibold">Reminders</h2>
+        <p className="mt-2 text-sm text-gray-700">
+          You don’t have permission to send reminders. Ask an Admin or Senior Stylist.
+        </p>
+        <button
+          className="mt-4 px-3 py-2 bg-black text-white rounded"
+          onClick={onClose}
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
 
   return (
     <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-6">

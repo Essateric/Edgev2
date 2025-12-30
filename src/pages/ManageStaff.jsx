@@ -21,14 +21,13 @@ const defaultWeeklyHours = Object.fromEntries(
   daysOrder.map((day) => [day, { start: "", end: "", off: false }])
 );
 
-// 🔹 Central list of roles (includes the new "Colour Specialist")
 export const ROLE_OPTIONS = [
   "Business Owner",
   "Admin",
   "Manager",
   "Senior Stylist",
   "Stylist",
-  "Colour Specialist", // NEW
+  "Colour Specialist",
   "Apprentice",
   "Reception",
 ];
@@ -46,19 +45,21 @@ export default function ManageStaff() {
 
   const [showAddModal, setShowAddModal] = useState(false);
 
-  // 🔹 New: Role editing modal state
   const [showRoleModal, setShowRoleModal] = useState(false);
   const [roleStaff, setRoleStaff] = useState(null);
 
- const { currentUser, pageLoading, authLoading, supabaseClient } = useAuth();
+  // ✅ NEW: Change PIN modal state
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pinStaff, setPinStaff] = useState(null);
 
+  const { currentUser, pageLoading, authLoading, supabaseClient } = useAuth();
   const [loading, setLoading] = useState(true);
 
- const supabase = supabaseClient || defaultSupabase;
+  const supabase = supabaseClient || defaultSupabase;
 
-  // Fetch staff and services data from DB
   useEffect(() => {
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const withTimeout = async (promise, ms, label) => {
@@ -81,7 +82,7 @@ export default function ManageStaff() {
   const fetchData = async () => {
     setLoading(true);
     try {
-       const { data: staffData, error: staffError } = await withTimeout(
+      const { data: staffData, error: staffError } = await withTimeout(
         supabase.from("staff").select("*"),
         5000,
         "staff fetch"
@@ -128,23 +129,24 @@ export default function ManageStaff() {
     );
   };
 
-  // Called when user clicks 'Edit Hours' button for a staff member
   const openHoursModal = (member) => {
     setModalStaff(member);
     setModalHours(normalizeWeeklyHours(member.weekly_hours));
     setShowHoursModal(true);
   };
 
-  // PATCH-style save: Only changed days are updated, the rest remain.
-  // Accept latestHours as parameter (comes from the modal!)
   const saveModalHours = async (latestHours) => {
     if (!currentUser?.token) {
       alert("❌ You must be logged in to update staff hours.");
       return;
     }
 
-   const { data: oldData, error: fetchError } = await withTimeout(
-      supabase.from("staff").select("weekly_hours").eq("id", modalStaff.id).single(),
+    const { data: oldData, error: fetchError } = await withTimeout(
+      supabase
+        .from("staff")
+        .select("weekly_hours")
+        .eq("id", modalStaff.id)
+        .single(),
       5000,
       "load weekly hours"
     );
@@ -154,7 +156,6 @@ export default function ManageStaff() {
       return;
     }
 
-    // 2) Compute only changed days
     const oldHours = oldData?.weekly_hours || {};
     const changes = {};
     for (const day of daysOrder) {
@@ -178,12 +179,13 @@ export default function ManageStaff() {
       return;
     }
 
-    // 3) Merge and log
     const updatedWeeklyHours = { ...oldHours, ...changes };
 
-// 4) Update — reuse Supabase; DO NOT call .select() here
     const { error: updateError } = await withTimeout(
-      supabase.from("staff").update({ weekly_hours: updatedWeeklyHours }).eq("id", modalStaff.id),
+      supabase
+        .from("staff")
+        .update({ weekly_hours: updatedWeeklyHours })
+        .eq("id", modalStaff.id),
       5000,
       "update weekly hours"
     );
@@ -193,13 +195,11 @@ export default function ManageStaff() {
       return;
     }
 
-    // ✅ Success
     alert("✅ Hours updated successfully.");
     await fetchData();
     setShowHoursModal(false);
   };
 
-  // Delete staff by id (uses Edge Function)
   const handleDelete = async (id) => {
     if (!currentUser?.token) {
       alert("❌ You must be logged in to delete staff.");
@@ -212,7 +212,6 @@ export default function ManageStaff() {
     if (!confirm) return;
 
     try {
-      // Call your Edge Function instead of Supabase admin API directly!
       const res = await fetch(
         "https://vmtcofezozrblfxudauk.supabase.co/functions/v1/delete-staff",
         {
@@ -249,13 +248,11 @@ export default function ManageStaff() {
     setEditServicesStaff(null);
   };
 
-  // 🔹 Open role editor (click name or button)
   const openRoleModal = (staffMember) => {
     setRoleStaff(staffMember);
     setShowRoleModal(true);
   };
 
-  // 🔹 Save role to DB
   const saveRole = async (newRole) => {
     if (!currentUser?.token) {
       alert("❌ You must be logged in to update roles.");
@@ -265,6 +262,7 @@ export default function ManageStaff() {
       alert("❌ No staff member selected.");
       return;
     }
+
     const { error } = await withTimeout(
       supabase.from("staff").update({ permission: newRole }).eq("id", roleStaff.id),
       5000,
@@ -282,9 +280,61 @@ export default function ManageStaff() {
     await fetchData();
   };
 
-  if (pageLoading || authLoading || loading) {
-    return <PageLoader />;
-  }
+  // ✅ NEW: open pin modal
+  const openPinModal = (staffMember) => {
+    setPinStaff(staffMember);
+    setShowPinModal(true);
+  };
+
+  // ✅ NEW: save pin via Edge Function
+  const savePin = async (newPin) => {
+    if (!currentUser?.token) {
+      alert("❌ You must be logged in to change PINs.");
+      return;
+    }
+    if (!pinStaff?.id) {
+      alert("❌ No staff member selected.");
+      return;
+    }
+
+    const pin = String(newPin || "").trim();
+    if (!/^\d{4}$/.test(pin)) {
+      alert("❌ PIN must be exactly 4 digits.");
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        "https://vmtcofezozrblfxudauk.supabase.co/functions/v1/hash-pin",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + currentUser.token,
+          },
+          body: JSON.stringify({ staff_id: pinStaff.id, pin }),
+        }
+      );
+
+      const result = await res.json();
+
+      if (!res.ok) {
+        alert("❌ Failed to update PIN: " + (result?.error || "Unknown error"));
+        if (result?.logs) console.error(result.logs);
+        return;
+      }
+
+      alert(`✅ PIN updated for ${pinStaff.name}.`);
+      setShowPinModal(false);
+      setPinStaff(null);
+      await fetchData();
+    } catch (err) {
+      console.error("❌ Error updating PIN:", err);
+      alert("❌ Error updating PIN.");
+    }
+  };
+
+  if (pageLoading || authLoading || loading) return <PageLoader />;
 
   return (
     <div className="p-6">
@@ -315,12 +365,8 @@ export default function ManageStaff() {
                   >
                     {member.name}
                   </h4>
-                  <p className="text-sm text-gray-500">
-                    Email: {member.email || "N/A"}
-                  </p>
-                  <p className="text-sm text-gray-500">
-                    Role: {member.permission || "—"}
-                  </p>
+                  <p className="text-sm text-gray-500">Email: {member.email || "N/A"}</p>
+                  <p className="text-sm text-gray-500">Role: {member.permission || "—"}</p>
 
                   <div className="mt-2">
                     <h5 className="text-md font-semibold mb-1">Hours:</h5>
@@ -366,6 +412,16 @@ export default function ManageStaff() {
                   >
                     Edit Role
                   </button>
+
+                  {/* ✅ NEW */}
+                  <button
+                    onClick={() => openPinModal(member)}
+                    className="bg-amber-600 text-white px-3 py-1 rounded"
+                    title="Change this staff member's PIN"
+                  >
+                    Change PIN
+                  </button>
+
                   <button
                     onClick={() => handleDelete(member.id)}
                     className="bg-red-600 text-white px-3 py-1 rounded"
@@ -385,7 +441,7 @@ export default function ManageStaff() {
           hours={modalHours}
           setHours={setModalHours}
           onClose={() => setShowHoursModal(false)}
-          onSave={saveModalHours} // Don't call with modalHours here!
+          onSave={saveModalHours}
         />
       )}
 
@@ -397,7 +453,6 @@ export default function ManageStaff() {
         />
       )}
 
-      {/* 🔹 Role editor modal */}
       {showRoleModal && (
         <EditRoleModal
           open={showRoleModal}
@@ -411,12 +466,23 @@ export default function ManageStaff() {
         />
       )}
 
+      {/* ✅ NEW PIN modal */}
+      {showPinModal && (
+        <EditPinModal
+          staff={pinStaff}
+          onClose={() => {
+            setShowPinModal(false);
+            setPinStaff(null);
+          }}
+          onSave={savePin}
+        />
+      )}
+
       {showAddModal && (
         <AddNewStaffModal
           open={showAddModal}
           onClose={() => setShowAddModal(false)}
           onSaved={fetchData}
-          // 🔹 If your AddNewStaffModal supports it, pass the same options
           roleOptions={ROLE_OPTIONS}
         />
       )}
@@ -424,7 +490,7 @@ export default function ManageStaff() {
   );
 }
 
-/* ========= Simple role editor modal (local component) ========= */
+/* ========= Role editor modal ========= */
 function EditRoleModal({ open, staff, roleOptions = [], onClose, onSave }) {
   const [selected, setSelected] = useState(staff?.permission || "");
 
@@ -453,10 +519,7 @@ function EditRoleModal({ open, staff, roleOptions = [], onClose, onSave }) {
         </select>
 
         <div className="flex justify-end gap-2">
-          <button
-            className="px-4 py-2 rounded bg-gray-200 text-gray-800"
-            onClick={onClose}
-          >
+          <button className="px-4 py-2 rounded bg-gray-200 text-gray-800" onClick={onClose}>
             Cancel
           </button>
           <button
@@ -465,6 +528,77 @@ function EditRoleModal({ open, staff, roleOptions = [], onClose, onSave }) {
             onClick={() => onSave(selected)}
           >
             Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ========= NEW: PIN editor modal ========= */
+function EditPinModal({ staff, onClose, onSave }) {
+  const [pin, setPin] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const canSave = /^\d{4}$/.test(pin) && pin === confirm && !saving;
+
+  const handleSave = async () => {
+    if (!canSave) return;
+    setSaving(true);
+    try {
+      await onSave(pin);
+    } finally {
+      setSaving(false);
+      setPin("");
+      setConfirm("");
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-5">
+        <h3 className="text-xl font-semibold mb-2 text-gray-800">Change PIN</h3>
+        <p className="text-sm text-gray-600 mb-4">
+          Set a new 4-digit PIN for <b>{staff?.name}</b>.
+        </p>
+
+        <label className="block text-sm text-gray-700 mb-1">New PIN</label>
+        <input
+          type="password"
+          inputMode="numeric"
+          pattern="\d*"
+          maxLength={4}
+          className="w-full border rounded p-2 mb-3"
+          value={pin}
+          onChange={(e) => setPin(e.target.value.replace(/[^\d]/g, "").slice(0, 4))}
+        />
+
+        <label className="block text-sm text-gray-700 mb-1">Confirm PIN</label>
+        <input
+          type="password"
+          inputMode="numeric"
+          pattern="\d*"
+          maxLength={4}
+          className="w-full border rounded p-2 mb-4"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value.replace(/[^\d]/g, "").slice(0, 4))}
+        />
+
+        {pin && confirm && pin !== confirm && (
+          <div className="text-sm text-red-600 mb-3">Pins do not match.</div>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button className="px-4 py-2 rounded bg-gray-200 text-gray-800" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="px-4 py-2 rounded bg-amber-600 text-white disabled:opacity-50"
+            disabled={!canSave}
+            onClick={handleSave}
+          >
+            {saving ? "Saving..." : "Save PIN"}
           </button>
         </div>
       </div>
