@@ -5,13 +5,27 @@ import { format } from "date-fns";
 import toast from "react-hot-toast";
 import { v4 as uuidv4 } from "uuid";
 import { supabase as defaultSupabase } from "../../supabaseClient";
-import { findOrCreateClient } from "../../onlinebookings/lib/findOrCreateClient.js";
 
 const escapeLike = (str = "") =>
   String(str)
     .replace(/[%_]/g, "\\$&") // escape LIKE wildcards
     .replace(/,/g, " ") // commas can break PostgREST logic strings
     .trim();
+
+    const normalizePhoneDigits = (s = "") => String(s || "").replace(/\D/g, "");
+
+const makePhoneTokens = (digits = "") => {
+  const d = String(digits || "");
+  const tokens = [d, d.slice(-6), d.slice(0, 6)]
+    .map((t) => (t || "").trim())
+    .filter((t) => t.length >= 4);
+  return [...new Set(tokens)];
+};
+
+const namesEqualCI = (a = "", b = "") =>
+  String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+
+
 
 export default function SelectClientModal({
   isOpen,
@@ -274,42 +288,144 @@ export default function SelectClientModal({
     [supabase]
   );
 
-  const handleCreateOrSelect = async () => {
-    const fn = newClient.first_name.trim();
-    const ln = newClient.last_name.trim();
-    const em = newClient.email.trim();
-    const mo = newClient.mobile;
+const handleCreateOrSelect = async () => {
+  const fn = newClient.first_name.trim();
+  const ln = newClient.last_name.trim();
+  const em = newClient.email.trim();
+  const rawMobile = newClient.mobile.trim();
 
-    if (!fn || !ln) {
-      toast.error("Enter first and last name.");
+  if (!fn || !ln) {
+    toast.error("Enter first and last name.");
+    return;
+  }
+  if (!em && !rawMobile) {
+    toast.error("Enter at least a mobile number or email.");
+    return;
+  }
+  if (!supabase) {
+    toast.error("No Supabase client available.");
+    return;
+  }
+
+  const mobileDigits = normalizePhoneDigits(rawMobile);
+
+  setCreating(true);
+  try {
+    // 1) same-name clients (case-insensitive exact)
+    const { data: sameName, error: sameNameErr } = await supabase
+      .from("clients")
+      .select("id, first_name, last_name, mobile, email")
+      .ilike("first_name", fn)
+      .ilike("last_name", ln)
+      .limit(200);
+
+    if (sameNameErr) throw sameNameErr;
+
+    const sameNameList = sameName ?? [];
+    const nameAlreadyExists = sameNameList.length > 0;
+
+    // If name exists, require mobile (ManageClients rule)
+    if (nameAlreadyExists && !mobileDigits) {
+      toast.error(
+        "That first + last name already exists. Please add a mobile number so we can confirm this is a different client."
+      );
       return;
     }
 
-    setCreating(true);
-    try {
-      const clientRow = await findOrCreateClient({
-        first_name: fn,
-        last_name: ln,
-        email: em,
-        mobile: mo,
-        requireEmail: false,
+    // 2) if mobile entered, stop duplicates
+    if (mobileDigits) {
+      // 2a) same name + same mobile -> select existing
+      const dupSameName = sameNameList.find((r) => {
+        const rDigits = normalizePhoneDigits(r.mobile || "");
+        return rDigits && rDigits === mobileDigits;
       });
 
-      const name = `${clientRow.first_name ?? ""} ${clientRow.last_name ?? ""}`.trim();
-      const label = clientRow.mobile ? `${name} — ${clientRow.mobile}` : name;
+      if (dupSameName) {
+        const name = `${dupSameName.first_name ?? ""} ${dupSameName.last_name ?? ""}`.trim();
+        const label = dupSameName.mobile ? `${name} — ${dupSameName.mobile}` : name;
 
-      setSelectedClient(clientRow.id);
-      setSelectedOption({ value: clientRow.id, label, client: clientRow });
+        setSelectedClient(dupSameName.id);
+        setSelectedOption({ value: dupSameName.id, label, client: dupSameName });
 
-      onClientCreated?.(clientRow);
-      toast.success("Client selected");
-    } catch (e) {
-      console.error("Create/select client failed:", e?.message || e);
-      toast.error(e?.message || "Couldn't create/select client.");
-    } finally {
-      setCreating(false);
+        onClientCreated?.(dupSameName);
+        toast.success("Client already existed — selected.");
+        return;
+      }
+
+      // 2b) mobile used by ANY client -> select that client
+      const tokens = makePhoneTokens(mobileDigits);
+      if (tokens.length) {
+        const orClause = tokens.map((t) => `mobile.ilike.%${t}%`).join(",");
+
+        const { data: phoneCandidates, error: phoneErr } = await supabase
+          .from("clients")
+          .select("id, first_name, last_name, mobile, email")
+          .or(orClause)
+          .limit(200);
+
+        if (phoneErr) throw phoneErr;
+
+        const exactPhoneMatch = (phoneCandidates ?? []).find((r) => {
+          const rDigits = normalizePhoneDigits(r.mobile || "");
+          return rDigits && rDigits === mobileDigits;
+        });
+
+        if (exactPhoneMatch) {
+          const sameNameAsMatch =
+            namesEqualCI(exactPhoneMatch.first_name, fn) &&
+            namesEqualCI(exactPhoneMatch.last_name, ln);
+
+          const name = `${exactPhoneMatch.first_name ?? ""} ${exactPhoneMatch.last_name ?? ""}`.trim();
+          const label = exactPhoneMatch.mobile ? `${name} — ${exactPhoneMatch.mobile}` : name;
+
+          setSelectedClient(exactPhoneMatch.id);
+          setSelectedOption({ value: exactPhoneMatch.id, label, client: exactPhoneMatch });
+
+          onClientCreated?.(exactPhoneMatch);
+
+          toast.success(
+            sameNameAsMatch
+              ? "Client already existed — selected."
+              : `That phone number is already used by ${name} — selected existing client.`
+          );
+          return;
+        }
+      }
     }
-  };
+
+    // 3) insert new client
+    const { data: inserted, error: insErr } = await supabase
+      .from("clients")
+      .insert([
+        {
+          first_name: fn,
+          last_name: ln || null,
+          mobile: rawMobile || null,
+          email: em || null,
+        },
+      ])
+      .select("id, first_name, last_name, mobile, email")
+      .single();
+
+    if (insErr) throw insErr;
+
+    const name = `${inserted.first_name ?? ""} ${inserted.last_name ?? ""}`.trim();
+    const label = inserted.mobile ? `${name} — ${inserted.mobile}` : name;
+
+    setSelectedClient(inserted.id);
+    setSelectedOption({ value: inserted.id, label, client: inserted });
+
+    setNewClient({ first_name: "", last_name: "", email: "", mobile: "" });
+
+    onClientCreated?.(inserted);
+    toast.success("Client added and selected.");
+  } catch (e) {
+    console.error("[SelectClientModal] create/select failed:", e);
+    toast.error(e?.message || "Couldn't create/select client.");
+  } finally {
+    setCreating(false);
+  }
+};
 
   return (
     <Modal isOpen={isOpen} onClose={onClose}>
