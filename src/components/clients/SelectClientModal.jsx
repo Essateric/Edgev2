@@ -1,11 +1,17 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import Modal from "../Modal";
-import Select from "react-select";
+import AsyncSelect from "react-select/async";
 import { format } from "date-fns";
 import toast from "react-hot-toast";
 import { v4 as uuidv4 } from "uuid";
 import { supabase as defaultSupabase } from "../../supabaseClient";
 import { findOrCreateClient } from "../../onlinebookings/lib/findOrCreateClient.js";
+
+const escapeLike = (str = "") =>
+  String(str)
+    .replace(/[%_]/g, "\\$&") // escape LIKE wildcards
+    .replace(/,/g, " ") // commas can break PostgREST logic strings
+    .trim();
 
 export default function SelectClientModal({
   isOpen,
@@ -22,14 +28,66 @@ export default function SelectClientModal({
 }) {
   const supabase = supabaseClient || defaultSupabase;
 
-  const clientOptions = useMemo(
-    () =>
-      (clients || []).map((c) => ({
-        value: c.id,
-        label: `${c.first_name ?? ""} ${c.last_name ?? ""} — ${c.mobile ?? ""}`.trim(),
-      })),
-    [clients]
-  );
+  // Local options only used as a fast initial cache (AsyncSelect still queries DB)
+  const defaultClientOptions = useMemo(() => {
+    return (clients || []).map((c) => {
+      const name = `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
+      const label = c.mobile ? `${name} — ${c.mobile}` : name;
+      return { value: c.id, label, client: c };
+    });
+  }, [clients]);
+
+  // Keep selected option visible even if it’s not in the default list
+  const [selectedOption, setSelectedOption] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function hydrateSelected() {
+      if (!isOpen) return;
+
+      if (!selectedClient) {
+        setSelectedOption(null);
+        return;
+      }
+
+      if (selectedOption?.value === selectedClient) return;
+
+      // try local cache first
+      const local = (clients || []).find((c) => c.id === selectedClient);
+      if (local) {
+        const name = `${local.first_name ?? ""} ${local.last_name ?? ""}`.trim();
+        const label = local.mobile ? `${name} — ${local.mobile}` : name;
+        setSelectedOption({ value: local.id, label, client: local });
+        return;
+      }
+
+      if (!supabase) return;
+
+      const { data, error } = await supabase
+        .from("clients")
+        .select("id, first_name, last_name, mobile, email")
+        .eq("id", selectedClient)
+        .maybeSingle();
+
+      if (!alive) return;
+
+      if (error) {
+        console.error("[SelectClientModal] hydrate error:", error);
+        return;
+      }
+      if (!data?.id) return;
+
+      const name = `${data.first_name ?? ""} ${data.last_name ?? ""}`.trim();
+      const label = data.mobile ? `${name} — ${data.mobile}` : name;
+      setSelectedOption({ value: data.id, label, client: data });
+    }
+
+    hydrateSelected();
+    return () => {
+      alive = false;
+    };
+  }, [isOpen, selectedClient, selectedOption, supabase, clients]);
 
   // ---- MODE kept for existing logic, but UI toggle removed.
   // We keep it locked to "booking" so the top Booking/Task buttons are gone.
@@ -56,8 +114,6 @@ export default function SelectClientModal({
   const [savingBlock, setSavingBlock] = useState(false);
 
   useEffect(() => {
-    // Keep existing logic, but only load task types if mode ever becomes "task"
-    // (Right now it won’t, because we removed the toggle buttons.)
     if (!isOpen || !supabase) return;
     if (mode !== "task") return;
 
@@ -169,6 +225,55 @@ export default function SelectClientModal({
     }
   };
 
+  // ✅ SAME search style as ManageClients (contains anywhere)
+  const loadClientOptions = useCallback(
+    async (inputValue) => {
+      if (!supabase) return [];
+
+      const s = String(inputValue || "").trim();
+      const safe = escapeLike(s);
+      const digits = s.replace(/\D/g, "");
+      const like = `%${safe}%`;
+
+      try {
+        let q = supabase
+          .from("clients")
+          .select("id, first_name, last_name, mobile, email, created_at")
+          .limit(200);
+
+        if (s) {
+          const ors = [
+            `first_name.ilike.${like}`,
+            `last_name.ilike.${like}`,
+            `email.ilike.${like}`,
+            `mobile.ilike.%${s}%`,
+          ];
+          if (digits && digits !== s) ors.push(`mobile.ilike.%${digits}%`);
+
+          q = q
+            .or(ors.join(","))
+            .order("first_name", { ascending: true, nullsFirst: true })
+            .order("last_name", { ascending: true, nullsFirst: true });
+        } else {
+          q = q.order("created_at", { ascending: false, nullsFirst: true });
+        }
+
+        const { data, error } = await q;
+        if (error) throw error;
+
+        return (data || []).map((c) => {
+          const name = `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
+          const label = c.mobile ? `${name} — ${c.mobile}` : name;
+          return { value: c.id, label, client: c };
+        });
+      } catch (err) {
+        console.error("[SelectClientModal] client search error:", err);
+        return [];
+      }
+    },
+    [supabase]
+  );
+
   const handleCreateOrSelect = async () => {
     const fn = newClient.first_name.trim();
     const ln = newClient.last_name.trim();
@@ -190,7 +295,12 @@ export default function SelectClientModal({
         requireEmail: false,
       });
 
+      const name = `${clientRow.first_name ?? ""} ${clientRow.last_name ?? ""}`.trim();
+      const label = clientRow.mobile ? `${name} — ${clientRow.mobile}` : name;
+
       setSelectedClient(clientRow.id);
+      setSelectedOption({ value: clientRow.id, label, client: clientRow });
+
       onClientCreated?.(clientRow);
       toast.success("Client selected");
     } catch (e) {
@@ -204,7 +314,6 @@ export default function SelectClientModal({
   return (
     <Modal isOpen={isOpen} onClose={onClose}>
       <div>
-        {/* ✅ Title stays, but top Booking/Task buttons removed */}
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-lg font-bold text-bronze">Select Client</h3>
         </div>
@@ -221,15 +330,21 @@ export default function SelectClientModal({
           </>
         )}
 
-        {/* ---------------- BOOKING MODE (always shown) ---------------- */}
         {mode === "booking" && (
           <>
             <label className="block text-sm mb-1 text-gray-700">Search existing</label>
-            <Select
-              options={clientOptions}
-              value={clientOptions.find((opt) => opt.value === selectedClient) || null}
-              onChange={(selected) => setSelectedClient(selected?.value)}
+
+            <AsyncSelect
+              defaultOptions={defaultClientOptions.length ? defaultClientOptions : true}
+              cacheOptions={false}
+              loadOptions={loadClientOptions}
+              value={selectedOption}
+              onChange={(opt) => {
+                setSelectedOption(opt || null);
+                setSelectedClient(opt?.value || null);
+              }}
               placeholder="-- Select Client --"
+              filterOption={null}
               styles={{
                 control: (base) => ({ ...base, backgroundColor: "white", color: "black" }),
                 singleValue: (base) => ({ ...base, color: "black" }),
@@ -272,42 +387,38 @@ export default function SelectClientModal({
               />
             </div>
 
-            {/* ✅ Bottom buttons kept exactly like your screenshot */}
             <div className="flex justify-between items-center mt-4">
               <button type="button" onClick={onClose} className="text-gray-500">
                 Cancel
               </button>
 
-<button
-  type="button"
-  onClick={() => {
-    console.log("[SelectClientModal] Schedule task clicked", {
-      hasOnScheduleTask: typeof onScheduleTask === "function",
-      selectedSlot,
-    });
+              <button
+                type="button"
+                onClick={() => {
+                  const slotToSend = selectedSlot
+                    ? {
+                        ...selectedSlot,
+                        start: new Date(selectedSlot.start),
+                        end: new Date(selectedSlot.end),
+                      }
+                    : null;
 
-    // IMPORTANT: pass Dates (ScheduleTaskModal expects Dates)
-    const slotToSend = selectedSlot
-      ? {
-          ...selectedSlot,
-          start: new Date(selectedSlot.start),
-          end: new Date(selectedSlot.end),
-        }
-      : null;
+                  if (
+                    !slotToSend?.start ||
+                    !slotToSend?.end ||
+                    isNaN(slotToSend.start) ||
+                    isNaN(slotToSend.end)
+                  ) {
+                    toast.error("Slot time is missing/invalid");
+                    return;
+                  }
 
-    if (!slotToSend?.start || !slotToSend?.end || isNaN(slotToSend.start) || isNaN(slotToSend.end)) {
-      toast.error("Slot time is missing/invalid");
-      return;
-    }
-
-    // Let parent handle closing + opening modal (best)
-    onScheduleTask?.(slotToSend);
-  }}
-  className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded transition-colors disabled:bg-indigo-300 disabled:cursor-not-allowed"
->
-  Schedule task
-</button>
-
+                  onScheduleTask?.(slotToSend);
+                }}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded transition-colors disabled:bg-indigo-300 disabled:cursor-not-allowed"
+              >
+                Schedule task
+              </button>
 
               <div className="flex gap-2">
                 <button
@@ -332,7 +443,6 @@ export default function SelectClientModal({
           </>
         )}
 
-        {/* ---------------- TASK MODE (logic kept, UI hidden because mode is locked) ---------------- */}
         {mode === "task" && (
           <>
             <div className="my-3 h-px bg-gray-300" />

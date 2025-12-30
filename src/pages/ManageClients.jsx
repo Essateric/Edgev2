@@ -3,19 +3,18 @@ import { supabase } from "../supabaseClient";
 import Button from "../components/Button";
 import Card from "../components/Card";
 import { useAuth } from "../contexts/AuthContext";
-import { findOrCreateClientStaff } from "../lib/findOrCreateClientStaff.js";
 
 const COLS = "id,first_name,last_name,mobile,email,notes,created_at";
 
 export default function ManageClients() {
-    const { supabaseClient } = useAuth();
+  const { supabaseClient } = useAuth();
   const db = useMemo(() => supabaseClient || supabase, [supabaseClient]);
+
   const [clients, setClients] = useState([]);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [mobile, setMobile] = useState("");
-   const [email, setEmail] = useState("");
-    //  const normalizePhone = (s = "") => String(s).replace(/[^\d]/g, "");
+  const [email, setEmail] = useState("");
 
   // search & sort
   const [search, setSearch] = useState("");
@@ -30,55 +29,69 @@ export default function ManageClients() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
-   const [infoMsg, setInfoMsg] = useState("");
+  const [infoMsg, setInfoMsg] = useState("");
 
   const from = (currentPage - 1) * rowsPerPage;
   const to = from + rowsPerPage - 1;
   const debouncedSearch = useDebouncedValue(search, 300);
 
+  const normalizePhoneDigits = (s = "") => String(s).replace(/\D/g, "");
+
+  const makePhoneTokens = (digits = "") => {
+    const d = String(digits || "");
+    const tokens = [d, d.slice(-6), d.slice(0, 6)]
+      .map((t) => (t || "").trim())
+      .filter((t) => t.length >= 4);
+    return [...new Set(tokens)];
+  };
+
+  const namesEqualCI = (a = "", b = "") =>
+    String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+
   // figure out if current user is an admin (based on staff.permission)
-useEffect(() => {
+  useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         const { data } = await db.auth.getUser();
-        const email = data?.user?.email;
-        if (!email) {
+        const userEmail = data?.user?.email;
+        if (!userEmail) {
           if (mounted) setIsAdmin(false);
           return;
         }
+
         const { data: staffRow, error } = await db
           .from("staff")
           .select("permission")
-          .eq("email", email)
+          .eq("email", userEmail)
           .maybeSingle();
 
         const ok =
-          !error && staffRow && ["admin", "owner", "manager"].includes(staffRow.permission);
+          !error &&
+          staffRow &&
+          ["admin", "owner", "manager"].includes(staffRow.permission);
+
         if (mounted) setIsAdmin(!!ok);
       } catch {
-
         if (mounted) setIsAdmin(false);
       }
-      })();
+    })();
+
     return () => {
       mounted = false;
     };
   }, [db]);
-
-
-
 
   const fetchClients = useCallback(async () => {
     setLoading(true);
     setErrorMsg("");
 
     const s = debouncedSearch.trim();
-    const digits = s.replace(/[^\d]/g, "");
+    const digits = s.replace(/\D/g, "");
     const like = `%${s.replace(/[%_]/g, "\\$&")}%`;
 
     try {
-        let q = db.from("clients").select(COLS, { count: "exact" });
+      let q = db.from("clients").select(COLS, { count: "exact" });
 
       if (s) {
         const ors = [
@@ -119,12 +132,12 @@ useEffect(() => {
         /created_at/.test(error.message) &&
         (sortKey === "newest" || sortKey === "oldest")
       ) {
-        console.warn(
-          "[ManageClients] created_at missing; falling back to id ordering.",
-          { status, message: error.message }
-        );
+        console.warn("[ManageClients] created_at missing; falling back to id ordering.", {
+          status,
+          message: error.message,
+        });
 
- let fb = db
+        let fb = db
           .from("clients")
           .select("id,first_name,last_name,mobile,email,notes", { count: "exact" });
 
@@ -168,66 +181,148 @@ useEffect(() => {
     fetchClients();
   }, [fetchClients, currentPage, rowsPerPage]);
 
-const handleAddClient = async () => {
-  setInfoMsg("");
-  setErrorMsg("");
+  const handleAddClient = async () => {
+    setInfoMsg("");
+    setErrorMsg("");
 
-   const trimmedFirst = firstName.trim();
-  const trimmedLast = lastName.trim();
-  const trimmedEmail = email.trim();
-  const trimmedMobile = mobile.trim();
+    const fn = firstName.trim();
+    const ln = lastName.trim();
+    const rawMobile = mobile.trim();
+    const em = email.trim();
+    const mobileDigits = normalizePhoneDigits(rawMobile);
 
-  if (!trimmedFirst || !trimmedLast) {
-    setErrorMsg("First name and last name are required.");
-    return;
-  }
+    // base validation
+    if (!fn || !ln) {
+      setErrorMsg("First and last name are required.");
+      return;
+    }
 
+    if (!mobileDigits && !em) {
+      setErrorMsg("Enter at least an email or mobile number.");
+      return;
+    }
 
-  if (!trimmedEmail && !trimmedMobile) {
-    setErrorMsg("Enter at least an email or mobile number.");
-    return;
-  }
+    if (!db) {
+      setErrorMsg("No Supabase client available.");
+      return;
+    }
 
-  if (!db) {
-    setErrorMsg("No Supabase client available.");
-    return;
-  }
+    setLoading(true);
 
-  setLoading(true);
-  
+    try {
+      // 1) find existing clients with same first+last (case-insensitive exact match)
+      const { data: sameName, error: sameNameErr } = await db
+        .from("clients")
+        .select("id,first_name,last_name,mobile,email")
+        .ilike("first_name", fn)
+        .ilike("last_name", ln)
+        .limit(200);
 
-  try {
-     const { existing } = await findOrCreateClientStaff(db, {
-      first_name: trimmedFirst,
-      last_name: trimmedLast,
-      email: trimmedEmail,
-      mobile: trimmedMobile,
-    });
+      if (sameNameErr) throw sameNameErr;
 
+      const sameNameList = sameName ?? [];
+      const nameAlreadyExists = sameNameList.length > 0;
 
-    if (error) throw error;
+      // rule: if name exists, mobile is required (even if email is filled)
+      if (nameAlreadyExists && !mobileDigits) {
+        setErrorMsg(
+          "That first + last name already exists. Please add a mobile number so we can confirm this is a different client."
+        );
+        return;
+      }
 
-    setFirstName("");
-    setLastName("");
-    setMobile("");
-    setEmail("");
+      // 2) if mobile provided, block duplicates:
+      if (mobileDigits) {
+        // 2a) duplicate = same name + same mobile digits
+        const dupSameName = sameNameList.find((r) => {
+          const rDigits = normalizePhoneDigits(r.mobile || "");
+          return rDigits && rDigits === mobileDigits;
+        });
 
-    setCurrentPage(1);
-    setSortKey("newest");
-setInfoMsg(
-      existing
-        ? "Client already exists; information was updated if missing."
-        : "Client added successfully."
-    );
-    await fetchClients();
-  } catch (err) {
-    const message = err?.message || String(err) || "Failed to add client";
-    console.error("Failed to add client:", message);
-    setErrorMsg(message);
-  } finally {
-    setLoading(false);
-  }
-};
+        if (dupSameName) {
+          setErrorMsg(
+            `Client already exists with matching name and number: ${dupSameName.first_name} ${dupSameName.last_name} (${dupSameName.mobile || "no mobile"}).`
+          );
+          return;
+        }
+
+        // 2b) also prevent mobile number being reused by ANY other client
+        // Fetch candidates using tokens (helps when DB has spaces in phone numbers)
+        const tokens = makePhoneTokens(mobileDigits);
+        if (tokens.length) {
+          const orClause = tokens.map((t) => `mobile.ilike.%${t}%`).join(",");
+
+          const { data: phoneCandidates, error: phoneErr } = await db
+            .from("clients")
+            .select("id,first_name,last_name,mobile")
+            .or(orClause)
+            .limit(200);
+
+          if (phoneErr) throw phoneErr;
+
+          const exactPhoneMatch = (phoneCandidates ?? []).find((r) => {
+            const rDigits = normalizePhoneDigits(r.mobile || "");
+            return rDigits && rDigits === mobileDigits;
+          });
+
+          if (exactPhoneMatch) {
+            // if phone match exists with a different name, block
+            const sameNameAsMatch =
+              namesEqualCI(exactPhoneMatch.first_name, fn) &&
+              namesEqualCI(exactPhoneMatch.last_name, ln);
+
+            if (!sameNameAsMatch) {
+              setErrorMsg(
+                `That mobile number is already used by ${exactPhoneMatch.first_name || ""} ${exactPhoneMatch.last_name || ""} (${exactPhoneMatch.mobile || ""}). Please use the existing client instead.`
+              );
+              return;
+            }
+            // if same name we would have hit dupSameName already, but keep safe:
+            setErrorMsg(
+              `Client already exists with matching name and number: ${exactPhoneMatch.first_name || ""} ${exactPhoneMatch.last_name || ""} (${exactPhoneMatch.mobile || ""}).`
+            );
+            return;
+          }
+        }
+      }
+
+      // 3) insert new client
+      // (store mobile as entered; matching uses digits-only in validation)
+      const { data: inserted, error: insErr } = await db
+        .from("clients")
+        .insert([
+          {
+            first_name: fn,
+            last_name: ln || null,
+            mobile: rawMobile || null,
+            email: em || null,
+          },
+        ])
+        .select("id,first_name,last_name,mobile,email")
+        .single();
+
+      if (insErr) throw insErr;
+
+      setFirstName("");
+      setLastName("");
+      setMobile("");
+      setEmail("");
+
+      setCurrentPage(1);
+      setSortKey("newest");
+
+      setInfoMsg("Client added successfully.");
+      await fetchClients();
+
+      // Optional: if you want the new row to appear instantly even without refetch:
+      // setClients((prev) => [inserted, ...prev]);
+    } catch (err) {
+      console.error("Failed to add client:", err?.message || err);
+      setErrorMsg(err?.message || "Failed to add client");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleDeleteClient = async (client) => {
     if (!isAdmin) return;
@@ -239,9 +334,8 @@ setInfoMsg(
     setLoading(true);
     setErrorMsg("");
     try {
-     const { error } = await db.from("clients").delete().eq("id", client.id);
+      const { error } = await db.from("clients").delete().eq("id", client.id);
       if (error) {
-        // typical FK message when bookings exist
         if (/foreign key/i.test(error.message) || /violates/.test(error.message)) {
           setErrorMsg(
             "Cannot delete: this client has related records (e.g. bookings or notes). Consider archiving instead."
@@ -257,10 +351,8 @@ setInfoMsg(
     }
   };
 
-  const showingFrom =
-    totalClients === 0 ? 0 : Math.min(from + 1, totalClients);
-  const showingTo =
-    totalClients === 0 ? 0 : Math.min(from + clients.length, totalClients);
+  const showingFrom = totalClients === 0 ? 0 : Math.min(from + 1, totalClients);
+  const showingTo = totalClients === 0 ? 0 : Math.min(from + clients.length, totalClients);
 
   return (
     <div className="p-4">
@@ -305,9 +397,7 @@ setInfoMsg(
 
       {/* Add New Client */}
       <Card className="mb-4">
-        <h2 className="text-lg font-semibold text-gray-700 mb-2">
-          Add New Client
-        </h2>
+        <h2 className="text-lg font-semibold text-gray-700 mb-2">Add New Client</h2>
         <div className="flex flex-wrap gap-2 mb-3">
           <input
             type="text"
@@ -330,7 +420,7 @@ setInfoMsg(
             onChange={(e) => setMobile(e.target.value)}
             className="border rounded p-2 flex-1 min-w-[150px] text-gray-700"
           />
-           <input
+          <input
             type="email"
             placeholder="Email (optional)"
             value={email}
@@ -339,7 +429,7 @@ setInfoMsg(
           />
           <Button onClick={handleAddClient}>Add</Button>
         </div>
-         {infoMsg && <p className="text-sm text-green-700">{infoMsg}</p>}
+        {infoMsg && <p className="text-sm text-green-700">{infoMsg}</p>}
         {errorMsg && <p className="text-sm text-red-600">{errorMsg}</p>}
       </Card>
 
@@ -416,9 +506,7 @@ setInfoMsg(
             </Button>
             <Button
               onClick={() =>
-                setCurrentPage((p) =>
-                  p * rowsPerPage < totalClients ? p + 1 : p
-                )
+                setCurrentPage((p) => (p * rowsPerPage < totalClients ? p + 1 : p))
               }
               disabled={currentPage * rowsPerPage >= totalClients}
               className="px-3"

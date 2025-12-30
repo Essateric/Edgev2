@@ -1,12 +1,18 @@
 // src/components/clients/SelectClientModalStaff.jsx
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useCallback } from "react";
 import Modal from "../Modal";
 import AsyncSelect from "react-select/async";
 import { format } from "date-fns";
 import { findOrCreateClientStaff } from "../../lib/findOrCreateClientStaff.js";
 
+const escapeLike = (str = "") =>
+  String(str)
+    .replace(/[%_]/g, "\\$&") // escape LIKE wildcards
+    .replace(/,/g, " ") // commas can break PostgREST logic strings
+    .trim();
+
 export default function SelectClientModalStaff({
-  supabaseClient, // ✅ REQUIRED (pass auth.supabaseClient from CalendarPage)
+  supabaseClient,
   isOpen,
   onClose,
   clients, // optional initial cache
@@ -17,14 +23,6 @@ export default function SelectClientModalStaff({
   onScheduleTask,
   onClientCreated,
 }) {
-  const defaultClientOptions = useMemo(() => {
-    return (clients || []).map((c) => {
-      const name = `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
-      const label = c.mobile ? `${name} — ${c.mobile}` : name;
-      return { value: c.id, label, client: c };
-    });
-  }, [clients]);
-
   const [selectedOption, setSelectedOption] = useState(null);
 
   const [creating, setCreating] = useState(false);
@@ -49,9 +47,12 @@ export default function SelectClientModalStaff({
 
       if (selectedOption?.value === selectedClient) return;
 
-      const fromDefaults = defaultClientOptions.find((o) => o.value === selectedClient);
-      if (fromDefaults) {
-        setSelectedOption(fromDefaults);
+      // try local cache first
+      const local = (clients || []).find((c) => c.id === selectedClient);
+      if (local) {
+        const name = `${local.first_name ?? ""} ${local.last_name ?? ""}`.trim();
+        const label = local.mobile ? `${name} — ${local.mobile}` : name;
+        setSelectedOption({ value: local.id, label, client: local });
         return;
       }
 
@@ -61,7 +62,7 @@ export default function SelectClientModalStaff({
         .from("clients")
         .select("id, first_name, last_name, mobile, email")
         .eq("id", selectedClient)
-        .single();
+        .maybeSingle();
 
       if (!alive) return;
 
@@ -69,6 +70,7 @@ export default function SelectClientModalStaff({
         console.error("[SelectClientModalStaff] hydrate error:", error);
         return;
       }
+      if (!data?.id) return;
 
       const name = `${data.first_name ?? ""} ${data.last_name ?? ""}`.trim();
       const label = data.mobile ? `${name} — ${data.mobile}` : name;
@@ -79,59 +81,67 @@ export default function SelectClientModalStaff({
     return () => {
       alive = false;
     };
-  }, [isOpen, selectedClient, selectedOption, defaultClientOptions, supabaseClient]);
+  }, [isOpen, selectedClient, selectedOption, supabaseClient, clients]);
 
-  // ✅ Server-side search from public.clients
-  const loadClientOptions = async (inputValue) => {
+  // ✅ Google-like server search (contains anywhere, narrows as you type)
+const loadClientOptions = useCallback(
+  async (inputValue) => {
     if (!supabaseClient) return [];
 
-    const raw = (inputValue || "").trim();
-    const s = raw.replace(/,/g, " ").trim(); // prevent breaking .or() string
+    const s = String(inputValue || "").trim();
+    const digits = s.replace(/\D/g, "");
+    const safe = s.replace(/[%_]/g, "\\$&").replace(/,/g, " ");
+    const like = `%${safe}%`;
 
-    let q = supabaseClient
-      .from("clients")
-      .select("id, first_name, last_name, mobile, email")
-      .order("first_name", { ascending: true })
-      .limit(100);
+    try {
+      let q = supabaseClient
+        .from("clients")
+        .select("id, first_name, last_name, mobile, email, created_at")
+        .limit(200);
 
-    if (s) {
-      q = q.or(
-        `first_name.ilike.%${s}%,last_name.ilike.%${s}%,mobile.ilike.%${s}%,email.ilike.%${s}%`
-      );
-    }
+      if (s) {
+        const ors = [
+          `first_name.ilike.${like}`,
+          `last_name.ilike.${like}`,
+          `email.ilike.${like}`,
+          `mobile.ilike.%${s}%`,
+        ];
+        if (digits && digits !== s) ors.push(`mobile.ilike.%${digits}%`);
 
-    const { data, error } = await q;
+        q = q
+          .or(ors.join(","))
+          .order("first_name", { ascending: true, nullsFirst: true })
+          .order("last_name", { ascending: true, nullsFirst: true });
+      } else {
+        q = q.order("created_at", { ascending: false, nullsFirst: true });
+      }
 
-    if (error) {
-      console.error("[SelectClientModalStaff] client search error:", error);
+      const { data, error } = await q;
+      if (error) throw error;
+
+      return (data || []).map((c) => {
+        const name = `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
+        const label = c.mobile ? `${name} — ${c.mobile}` : name;
+        return { value: c.id, label, client: c };
+      });
+    } catch (err) {
+      console.error("[SelectClientModalStaff] client search error:", err);
       return [];
     }
+  },
+  [supabaseClient]
+);
 
-    return (data || []).map((c) => {
-      const name = `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
-      const label = c.mobile ? `${name} — ${c.mobile}` : name;
-      return { value: c.id, label, client: c };
-    });
-  };
 
   const handleCreateOrSelect = async () => {
     const fn = newClient.first_name.trim();
     const ln = newClient.last_name.trim();
     const em = newClient.email.trim();
-   const mo = newClient.mobile.trim();
+    const mo = newClient.mobile.trim();
 
-    if (!fn || !ln) {
-      alert("Enter first and last name.");
-      return;
-    }
-    if (!em && !mo) {
-      alert("Enter at least a mobile number or email.");
-      return;
-    }
-    if (!supabaseClient) {
-      alert("Missing staff session. Please log in again.");
-      return;
-    }
+    if (!fn || !ln) return alert("Enter first and last name.");
+    if (!em && !mo) return alert("Enter at least a mobile number or email.");
+    if (!supabaseClient) return alert("Missing staff session. Please log in again.");
 
     setCreating(true);
     try {
@@ -147,9 +157,8 @@ export default function SelectClientModalStaff({
 
       setSelectedClient(clientRow.id);
       setSelectedOption({ value: clientRow.id, label, client: clientRow });
-       if (existing) {
-        alert("This client already exists and has been selected.");
-      }
+
+      if (existing) alert("This client already exists and has been selected.");
 
       onClientCreated?.(clientRow);
     } catch (e) {
@@ -179,8 +188,8 @@ export default function SelectClientModalStaff({
         <label className="block text-sm mb-1 text-gray-700">Search existing</label>
 
         <AsyncSelect
-          cacheOptions
-          defaultOptions={defaultClientOptions.length ? defaultClientOptions : true}
+          defaultOptions // ✅ always load from server when menu opens
+          cacheOptions={false} // ✅ avoid caching empty results during auth/RLS hiccups
           loadOptions={loadClientOptions}
           value={selectedOption}
           onChange={(opt) => {
@@ -256,14 +265,13 @@ export default function SelectClientModalStaff({
               {creating ? "Saving..." : "Add client"}
             </button>
 
-  <button
+            <button
               onClick={() => onNext?.(selectedOption?.client || null)}
               className="bg-bronze text-white px-4 py-2 rounded"
-              disabled={!selectedClient}
+              disabled={!selectedOption?.value}
             >
               Next
             </button>
-
           </div>
         </div>
       </div>

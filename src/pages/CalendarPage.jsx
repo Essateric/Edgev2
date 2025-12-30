@@ -6,6 +6,9 @@ import { format, parse, startOfWeek, getDay } from "date-fns";
 import enGB from "date-fns/locale/en-GB";
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon } from "lucide-react";
 import toast from "react-hot-toast";
+import { useNavigate } from "react-router-dom";
+
+
 
 import CalendarModal from "../components/CalendarModal";
 import BookingPopUp from "../components/bookings/BookingPopUp";
@@ -49,6 +52,33 @@ const localizer = dateFnsLocalizer({
 });
 
 /* ----------------- small date helpers ----------------- */
+
+const CLIENT_SELECT = "id, first_name, last_name, mobile, email, notes, dob, created_at";
+const CLIENT_PAGE_SIZE = 1000;
+
+async function fetchAllClientsPaged(supabase) {
+  let all = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("clients")
+      .select(CLIENT_SELECT)
+      .order("created_at", { ascending: false })
+      .range(from, from + CLIENT_PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const batch = data ?? [];
+    all = all.concat(batch);
+
+    if (batch.length < CLIENT_PAGE_SIZE) break;
+    from += CLIENT_PAGE_SIZE;
+  }
+
+  return all;
+}
+
 
 // keep times as local wall-clock and guarantee at least 1 minute
 const toLocal = (d) => {
@@ -135,12 +165,31 @@ const mapBookingRowToEvent = useCallback (
   },
   [stylistList]
 );
-  const auth = useAuth();
-  const { currentUser, pageLoading, authLoading } = auth;
 
-  
-// ✅ Use context client first, then token client, then anon client
-const supabase = auth?.supabaseClient || baseSupabase;
+ const auth = useAuth();
+const { currentUser, pageLoading, authLoading, supabaseClient } = auth;
+
+const navigate = useNavigate();
+const [bootingOut, setBootingOut] = useState(false);
+
+const supabase = supabaseClient;
+
+// ✅ Option 2: force logout + redirect if session/client missing
+useEffect(() => {
+  if (authLoading) return;
+
+  // If no session or no user, kick out to login
+  if (!supabaseClient || !currentUser) {
+    setBootingOut(true);
+
+    baseSupabase.auth.signOut().finally(() => {
+      navigate("/login", { replace: true });
+    });
+  }
+}, [authLoading, supabaseClient, currentUser, navigate]);
+
+// While we are logging out + redirecting
+if (bootingOut) return <PageLoader />;
 
 
   const hasUser = !!currentUser;
@@ -299,9 +348,12 @@ const supabase = auth?.supabaseClient || baseSupabase;
 
         // ---------- CLIENTS ----------
         dbgLog("clients query: BEFORE", { runId });
-        const { data: clientsData, error: cErr } = await supabase
-          .from("clients")
-          .select("*");
+      const { data: clientsData, error: cErr } = await supabase
+  .from("clients")
+  .select("id, first_name, last_name, mobile, email, notes, dob, created_at")
+  .order("created_at", { ascending: false })
+  .range(0, 999);
+
         dbgLog("clients query: AFTER", {
           runId,
           error: cErr ? cErr.message : null,
@@ -413,7 +465,7 @@ const supabase = auth?.supabaseClient || baseSupabase;
 
             return exists
               ? prev.map((c) => (c.id === row.id ? merged : c))
-              : [...prev, row];
+               : [row, ...prev];
           });
         }
       )
@@ -1442,7 +1494,7 @@ const handleSaveTask = async ({ action, payload }) => {
     onNext={() => setStep(2)}
      onScheduleTask={handleOpenScheduleTask} 
     onClientCreated={(c) => {
-      ssetClients((prev) => {
+      setClients((prev) => {
         const already = prev.some((p) => p.id === c.id);
         return already ? prev : [c, ...prev];
       });
