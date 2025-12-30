@@ -5,11 +5,8 @@ import { corsHeaders } from "../_shared/cors.ts";
 
 console.log("🚀 Login-with-PIN Function Loaded");
 
-
-
 // Helper: derive a strong password from PIN using a server-only secret (pepper)
 async function derivePassword(pepper: string, email: string, staffId: string, pin: string) {
-  
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",
@@ -27,51 +24,45 @@ serve(async (req) => {
   const logs: string[] = [];
 
   try {
-    // ✅ CORS
-    if (req.method === "OPTIONS") {
-      return new Response("OK", { headers: corsHeaders });
-    }
-
+    if (req.method === "OPTIONS") return new Response("OK", { headers: corsHeaders });
     logs.push("🚀 Request received");
 
-    // ✅ Env
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-    const SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY")!;
-    const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;     // ✅ added
-    const PIN_PEPPER = Deno.env.get("PIN_PEPPER")!;          // ✅ added
+    // Prefer the standard name if you can: SUPABASE_SERVICE_ROLE_KEY
+    const SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const PIN_PEPPER = Deno.env.get("PIN_PEPPER")!;
+
     if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !ANON_KEY || !PIN_PEPPER) {
-      logs.push("❌ Missing one or more env vars: SUPABASE_URL / SERVICE_ROLE_KEY / ANON_KEY / PIN_PEPPER");
+      logs.push("❌ Missing env vars");
       return new Response(JSON.stringify({ error: "Server misconfigured", logs }), {
         status: 500,
         headers: { ...corsHeaders, "Cache-Control": "no-store" },
       });
     }
-    logs.push(`🔑 Env SUPABASE_URL: ${SUPABASE_URL}`);
-    logs.push("🔑 Env SERVICE_ROLE_KEY: ✅");
-    logs.push("🔑 Env ANON_KEY: ✅");
-    logs.push("🔑 Env PIN_PEPPER: ✅");
 
-    // ✅ Body & basic validation
     const body = await req.json().catch(() => ({}));
-    const rawPin = body?.pin;
-    if (rawPin === undefined || rawPin === null || String(rawPin).trim() === "") {
-      logs.push("❌ PIN missing in request body");
-      return new Response(JSON.stringify({ error: "PIN required", logs }), {
+    const pin = String(body?.pin ?? "").trim();
+
+    // IMPORTANT: enforce 4 digits only
+    if (!/^\d{4}$/.test(pin)) {
+      logs.push("❌ PIN invalid format (must be 4 digits)");
+      return new Response(JSON.stringify({ error: "PIN must be 4 digits", logs }), {
         status: 400,
         headers: { ...corsHeaders, "Cache-Control": "no-store" },
       });
     }
-    const pin = String(rawPin);
-    logs.push(`🔢 PIN received: ${pin}`);
 
-    // ✅ Admin client
-    const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-    logs.push("🗄️ Supabase admin client initialized");
+    // Admin client (service role)
+    const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
 
-    // ✅ Load staff (select only what we need)
+    // Load staff
     const { data: staffData, error: staffError } = await admin
       .from("staff")
       .select("id,name,email,permission,pin_hash");
+
     if (staffError || !staffData) {
       logs.push(`❌ Failed to fetch staff: ${staffError?.message}`);
       return new Response(JSON.stringify({ error: "Failed to fetch staff", logs }), {
@@ -79,12 +70,10 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Cache-Control": "no-store" },
       });
     }
+
     logs.push(`📄 Staff fetched: ${staffData.length} members`);
 
-    // ✅ Match by PIN
-    const matchedStaff = staffData.find(
-      (s) => s.pin_hash && bcrypt.compareSync(pin, s.pin_hash)
-    );
+    const matchedStaff = staffData.find((s) => s.pin_hash && bcrypt.compareSync(pin, s.pin_hash));
     if (!matchedStaff) {
       logs.push("❌ Invalid PIN");
       return new Response(JSON.stringify({ error: "Invalid PIN", logs }), {
@@ -92,9 +81,7 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Cache-Control": "no-store" },
       });
     }
-    logs.push(`✅ PIN matched for ${matchedStaff.name} (${matchedStaff.email})`);
 
-    // ✅ Must have an email to map to Supabase Auth
     if (!matchedStaff.email) {
       logs.push("❌ Matched staff has no email");
       return new Response(JSON.stringify({ error: "Staff email missing", logs }), {
@@ -103,8 +90,14 @@ serve(async (req) => {
       });
     }
 
-    // ✅ Ensure Auth user exists (auto-create if missing)
-    const { data: userList, error: authError } = await admin.auth.admin.listUsers();
+    // Normalise email (this avoids weird edge cases)
+    const email = String(matchedStaff.email).trim().toLowerCase();
+    logs.push(`✅ PIN matched for staff_id=${matchedStaff.id} email=${email}`);
+
+    const derivedPassword = await derivePassword(PIN_PEPPER, email, String(matchedStaff.id), pin);
+
+    // Find or create auth user (avoid listUsers if possible, but keep it simple here)
+    const { data: userList, error: authError } = await admin.auth.admin.listUsers({ page: 1, perPage: 200 });
     if (authError || !userList) {
       logs.push(`❌ Error fetching auth users: ${authError?.message}`);
       return new Response(JSON.stringify({ error: "Error fetching auth users", logs }), {
@@ -113,75 +106,83 @@ serve(async (req) => {
       });
     }
 
-    let authUser = userList.users.find(
-      (u) => u.email?.toLowerCase() === matchedStaff.email!.toLowerCase()
-    );
+    let authUser = userList.users.find((u) => (u.email || "").toLowerCase() === email);
 
     if (!authUser) {
-      logs.push(`ℹ️ Auth user not found for ${matchedStaff.email} — creating…`);
+      logs.push("ℹ️ Auth user not found — creating with password…");
+
       const { data: created, error: createErr } = await admin.auth.admin.createUser({
-        email: matchedStaff.email!,
-        email_confirm: true, // ✅ no email confirmation needed
+        email,
+        password: derivedPassword,      // ✅ set password at creation time
+        email_confirm: true,            // ✅ confirm immediately
+        user_metadata: {
+          staff_id: matchedStaff.id,
+          name: matchedStaff.name ?? email,
+          permission: matchedStaff.permission ?? "Staff",
+        },
       });
-      if (createErr) {
-        logs.push(`❌ createUser error: ${createErr.message}`);
+
+      if (createErr || !created?.user) {
+        logs.push(`❌ createUser error: ${createErr?.message}`);
         return new Response(JSON.stringify({ error: "Failed to create auth user", logs }), {
           status: 500,
           headers: { ...corsHeaders, "Cache-Control": "no-store" },
         });
       }
+
       authUser = created.user;
-      logs.push(`✅ Created auth user: ${authUser.email} (ID: ${authUser.id})`);
+      logs.push(`✅ Created auth user: ${authUser.email}`);
     } else {
-      logs.push(`👤 Found auth user: ${authUser.email} (ID: ${authUser.id})`);
-    }
+      logs.push(`👤 Found auth user: ${authUser.email}`);
 
-    const permission = matchedStaff.permission ?? "Staff";
-    const name = matchedStaff.name ?? matchedStaff.email!;
-    logs.push(`🔑 Permission: ${permission}`);
-
-    // 🔁 PREVIOUSLY: generate magic link and return token_hash/email_otp
-    // ❌ REMOVE THAT. INSTEAD:
-
-    // ✅ 1) Derive a strong password from PIN (deterministic, server-side secret)
-    const derivedPassword = await derivePassword(
-      PIN_PEPPER,
-      matchedStaff.email!,
-      String(matchedStaff.id),
-      pin,
-    );
-
-    // ✅ 2) Set/update password via admin (service role)
-    const { error: updErr } = await admin.auth.admin.updateUserById(authUser.id, {
-      password: derivedPassword,
-    });
-    if (updErr) {
-      logs.push(`❌ updateUserById error: ${updErr.message}`);
-      return new Response(JSON.stringify({ error: "Failed to set password", logs }), {
-        status: 500,
-        headers: { ...corsHeaders, "Cache-Control": "no-store" },
+      // ✅ update password and also confirm email again (helps if they were unconfirmed)
+      const { error: updErr } = await admin.auth.admin.updateUserById(authUser.id, {
+        password: derivedPassword,
+        // Supabase supports this in many setups; if your version rejects it, remove this line.
+        email_confirm: true as unknown as boolean,
+        user_metadata: {
+          staff_id: matchedStaff.id,
+          name: matchedStaff.name ?? email,
+          permission: matchedStaff.permission ?? "Staff",
+        },
       });
-    }
-    logs.push("🔐 Auth user password updated from PIN-derived secret");
 
-    // ✅ 3) Sign in with anon client to mint a real session (JWTs)
-    const anon = createClient(SUPABASE_URL, ANON_KEY);
+      if (updErr) {
+        logs.push(`❌ updateUserById error: ${updErr.message}`);
+        return new Response(JSON.stringify({ error: "Failed to set password", logs }), {
+          status: 500,
+          headers: { ...corsHeaders, "Cache-Control": "no-store" },
+        });
+      }
+      logs.push("🔐 Password updated");
+    }
+
+    // Mint session
+    const anon = createClient(SUPABASE_URL, ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+
     const { data: signInData, error: signInErr } = await anon.auth.signInWithPassword({
-      email: matchedStaff.email!,
+      email,
       password: derivedPassword,
     });
+
     if (signInErr || !signInData?.session) {
       logs.push(`❌ signInWithPassword error: ${signInErr?.message}`);
-      return new Response(JSON.stringify({ error: "Auth failed", logs }), {
-        status: 401,
-        headers: { ...corsHeaders, "Cache-Control": "no-store" },
-      });
+      return new Response(
+        JSON.stringify({
+          error: "Auth failed",
+          details: signInErr?.message, // ✅ expose real reason while debugging
+          logs,
+        }),
+        { status: 401, headers: { ...corsHeaders, "Cache-Control": "no-store" } },
+      );
     }
-    logs.push("✅ Session minted via signInWithPassword");
+
+    logs.push("✅ Session minted");
 
     const { session } = signInData;
 
-    // ✅ 4) Return flat tokens for the client
     return new Response(
       JSON.stringify({
         access_token: session.access_token,
@@ -189,22 +190,18 @@ serve(async (req) => {
         expires_in: session.expires_in,
         token_type: session.token_type,
         user: session.user,
-        // UI passthrough fields:
-        email: matchedStaff.email,
+        email,
         staff_id: matchedStaff.id,
-        name,
-        permission,
+        name: matchedStaff.name ?? email,
+        permission: matchedStaff.permission ?? "Staff",
         logs,
       }),
-      {
-        status: 200,
-        headers: { ...corsHeaders, "Cache-Control": "no-store" },
-      }
+      { status: 200, headers: { ...corsHeaders, "Cache-Control": "no-store" } },
     );
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    logs.push(`❌ Unexpected error: ${errorMessage}`);
-    return new Response(JSON.stringify({ error: errorMessage, logs }), {
+    const msg = err instanceof Error ? err.message : String(err);
+    logs.push(`❌ Unexpected error: ${msg}`);
+    return new Response(JSON.stringify({ error: msg, logs }), {
       status: 500,
       headers: { ...corsHeaders, "Cache-Control": "no-store" },
     });
