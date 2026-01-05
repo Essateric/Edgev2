@@ -64,90 +64,27 @@ const emailDomain = (s = "") => normalizeEmailForMatch(s).split("@")[1] || "";
 async function findOrCreateClientId({ first, last, email, mobileN }) {
   const firstN = String(first || "").trim();
   const lastN = String(last || "").trim();
-  const emailN = String(email || "").trim().toLowerCase();
-  const mobileDigits = normalizePhone(mobileN || ""); // digits only
+
+  const emailRaw = String(email || "").trim().toLowerCase();
+  const emailN = isValidEmail(emailRaw) ? emailRaw : null;
+
+  const mobileDigits = normalizePhone(mobileN || "");
+  const mobileClean = mobileDigits && mobileDigits.length >= 8 ? mobileDigits : null;
 
   if (!firstN || !lastN) throw new Error("First name and last name are required.");
-  if (!emailN && !mobileDigits) throw new Error("Email or mobile is required.");
+  if (!emailN && !mobileClean) throw new Error("Email or mobile is required.");
 
-  // 1) NAME-FIRST: fetch only same-name rows
-  const { data: sameName, error: nameErr } = await supabase
-    .from("clients")
-    .select("id, first_name, last_name, email, mobile")
-    .ilike("first_name", firstN)
-    .ilike("last_name", lastN)
-    .limit(200);
+  const { data, error } = await supabase.rpc("public_find_or_create_client_strict", {
+    p_first: firstN,
+    p_last: lastN,
+    p_email: emailN,
+    p_mobile: mobileClean,
+  });
 
-  if (nameErr) throw nameErr;
-
-  const list = sameName || [];
-
-  // 2) If name does NOT exist -> create new row immediately
-  if (list.length === 0) {
-    const { data: created, error: insErr } = await supabase
-      .from("clients")
-      .insert([{
-        first_name: firstN,
-        last_name: lastN,
-        email: emailN || null,
-        mobile: mobileDigits || null,
-      }])
-      .select("id")
-      .single();
-
-    if (insErr) throw insErr;
-    return created.id;
-  }
-
-  // 3) Name exists -> try match by email/mobile WITHIN those same-name rows
-  const emailMatch = emailN
-    ? list.find(r => (r.email || "").trim().toLowerCase() === emailN)
-    : null;
-
-  const mobileMatch = mobileDigits
-    ? list.find(r => normalizePhone(r.mobile || "") === mobileDigits)
-    : null;
-
-  // If both provided but match different rows, do NOT guess
-  if (emailMatch && mobileMatch && emailMatch.id !== mobileMatch.id) {
-    throw new Error("Details conflict: email and mobile match different existing clients.");
-  }
-
-  const existing = emailMatch || mobileMatch;
-
-  if (existing?.id) {
-    // Patch missing bits only
-    const patch = {};
-    if (!existing.email && emailN) patch.email = emailN;
-    if (!existing.mobile && mobileDigits) patch.mobile = mobileDigits;
-
-    if (Object.keys(patch).length) {
-      const { error: updErr } = await supabase
-        .from("clients")
-        .update(patch)
-        .eq("id", existing.id);
-
-      if (updErr) throw updErr;
-    }
-
-    return existing.id;
-  }
-
-  // 4) Same name but different contact -> treat as a new person, create new row
-  const { data: created, error: insErr } = await supabase
-    .from("clients")
-    .insert([{
-      first_name: firstN,
-      last_name: lastN,
-      email: emailN || null,
-      mobile: mobileDigits || null,
-    }])
-    .select("id")
-    .single();
-
-  if (insErr) throw insErr;
-  return created.id;
+  if (error) throw error;
+  return data; // uuid
 }
+
 
 export default function PublicBookingPage() {
   const [step, setStep] = useState(1);
@@ -526,6 +463,25 @@ export default function PublicBookingPage() {
       }));
 
       await safeInsertBookings(payloadRows);
+
+      // DEBUG CHECK: ensure DB stored what we think it stored
+const expectedClientId = clientId;
+
+const { data: savedRows, error: verifyErr } = await supabase
+  .from("bookings")
+  .select("id, booking_id, client_id, client_name, start, end")
+  .eq("booking_id", bookingId);
+
+if (verifyErr) throw verifyErr;
+
+const bad = (savedRows || []).filter(r => r.client_id !== expectedClientId);
+if (bad.length) {
+  console.error("CLIENT LINK CORRUPTION DETECTED", { expectedClientId, bad });
+
+  // Optional: hard fail so you don't save corrupted bookings
+  throw new Error("Booking saved with wrong client link. Please try again.");
+}
+
 
       // 6) Client notes (public-safe via RPC)
 const rawNotes = String(client.notes || "").trim();
