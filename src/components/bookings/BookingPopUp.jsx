@@ -204,6 +204,11 @@ function BookingPopUpBody({
   const [noteContent, setNoteContent] = useState("");
   const [noteSaving, setNoteSaving] = useState(false);
   const [noteError, setNoteError] = useState("");
+   const [tagOptions, setTagOptions] = useState([]);
+  const [selectedTagId, setSelectedTagId] = useState(null);
+  const [tagSaving, setTagSaving] = useState(false);
+  const [tagError, setTagError] = useState("");
+
 
   // DOB
   const { dobInput, setDobInput, savingDOB, dobError, saveDOB } =
@@ -227,6 +232,24 @@ function BookingPopUpBody({
       setDobInput("");
     }
   }, [displayClient, setDobInput]);
+
+  useEffect(() => {
+    if (!isOpen || !supabaseClient) return;
+
+    (async () => {
+      const { data, error } = await supabaseClient
+        .from("booking_tags")
+        .select("*")
+        .order("label", { ascending: true });
+
+      if (error) {
+        console.warn("[BookingPopUp] failed to load booking tags", error);
+        setTagOptions([]);
+      } else {
+        setTagOptions(data || []);
+      }
+    })();
+  }, [isOpen, supabaseClient]);
 
   // derived totals
   const serviceTotal = useMemo(
@@ -283,6 +306,21 @@ function BookingPopUpBody({
     const end = Math.min(notesPage * NOTES_PAGE_SIZE, notes.length);
     return `${start}-${end} of ${notes.length}`;
   }, [notes.length, notesPage]);
+
+   const derivedTagId = useMemo(() => {
+    const fromGroup =
+      Array.isArray(relatedBookings) && relatedBookings.length > 0
+        ? relatedBookings.find((r) => r.booking_tag_id)?.booking_tag_id
+        : null;
+
+    if (fromGroup) return fromGroup;
+    return booking?.booking_tag_id || null;
+  }, [relatedBookings, booking?.booking_tag_id]);
+
+  useEffect(() => {
+    setSelectedTagId(derivedTagId || null);
+    setTagError("");
+  }, [derivedTagId]);
 
   // ✅ lock derived (treat the group as locked if ANY row is locked)
   const derivedLocked = useMemo(() => {
@@ -648,6 +686,49 @@ function BookingPopUpBody({
     }
   };
 
+   const handleSaveTag = async (nextTagId) => {
+    if (!supabaseClient) return;
+    setTagError("");
+    setTagSaving(true);
+
+    try {
+      const update = supabaseClient
+        .from("bookings")
+        .update({ booking_tag_id: nextTagId || null });
+
+      if (booking?.booking_id) {
+        update.eq("booking_id", booking.booking_id);
+      } else {
+        update.eq("id", booking.id);
+      }
+
+      const { error } = await update;
+      if (error) throw error;
+
+      setSelectedTagId(nextTagId || null);
+
+      onBookingUpdated?.({
+        id: booking.id,
+        booking_id: booking.booking_id ?? null,
+        booking_tag_id: nextTagId || null,
+      });
+    } catch (e) {
+      console.error("[BookingPopUp] tag update failed:", e);
+      setTagError(e?.message || "Failed to save booking tag");
+      setSelectedTagId(derivedTagId || null);
+    } finally {
+      setTagSaving(false);
+    }
+  };
+
+  const tagLabelById = useMemo(() => {
+    const map = new Map();
+    (tagOptions || []).forEach((t) => {
+      if (t?.id) map.set(t.id, t.label || t.code || "Tag");
+    });
+    return map;
+  }, [tagOptions]);
+
   if (!displayClient && clientLoading) {
     return (
       <ModalLarge isOpen={isOpen} onClose={onClose} zIndex={50}>
@@ -729,6 +810,40 @@ function BookingPopUpBody({
                 )}
                 {!!lockError && (
                   <span className="text-xs text-red-600">{lockError}</span>
+                )}
+              </div>
+            </div>
+            <div className="mt-3 border rounded p-2 bg-white">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-sm font-medium text-gray-800">
+                  Booking tag
+                </label>
+                <span className="text-xs text-gray-500">
+                  Optional label shown on this booking
+                </span>
+              </div>
+              <select
+                className="mt-2 w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-transparent"
+                value={selectedTagId || ""}
+                onChange={(e) => handleSaveTag(e.target.value || null)}
+                disabled={tagSaving}
+              >
+                <option value="">No tag</option>
+                {(tagOptions || [])
+                  .filter((t) => t.is_active !== false)
+                  .map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label} ({t.code})
+                    </option>
+                  ))}
+              </select>
+              <div className="mt-1 flex items-center gap-2 text-xs text-gray-600">
+                {tagSaving && <span>Saving…</span>}
+                {tagError && <span className="text-red-600">{tagError}</span>}
+                {!tagSaving && !tagError && selectedTagId && (
+                  <span className="text-emerald-700">
+                    {tagLabelById.get(selectedTagId) || "Saved"}
+                  </span>
                 )}
               </div>
             </div>

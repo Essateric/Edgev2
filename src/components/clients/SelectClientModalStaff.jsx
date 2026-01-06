@@ -35,6 +35,8 @@ export default function SelectClientModalStaff({
   onNext,
   onScheduleTask,
   onClientCreated,
+  bookingTagId,
+  setBookingTagId,
 }) {
   const [selectedOption, setSelectedOption] = useState(null);
 
@@ -45,6 +47,10 @@ export default function SelectClientModalStaff({
     email: "",
     mobile: "",
   });
+
+     const [tagOptions, setTagOptions] = useState([]);
+    const [tagsLoading, setTagsLoading] = useState(false);
+  
 
   // Keep selected option visible even if it wasn’t in the default list
   useEffect(() => {
@@ -95,6 +101,34 @@ export default function SelectClientModalStaff({
       alive = false;
     };
   }, [isOpen, selectedClient, selectedOption, supabaseClient, clients]);
+
+  useEffect(() => {
+    if (!isOpen || !supabaseClient) return;
+
+    const fetchTags = async () => {
+      setTagsLoading(true);
+      const { data, error } = await supabaseClient
+        .from("booking_tags")
+        .select("*")
+        .eq("is_active", true)
+        .order("label", { ascending: true });
+
+      if (error) {
+        console.warn("[SelectClientModalStaff] failed to load booking tags", error);
+        setTagOptions([]);
+      } else {
+        setTagOptions(data || []);
+      }
+      setTagsLoading(false);
+    };
+
+    fetchTags();
+  }, [isOpen, supabaseClient]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setBookingTagId?.(bookingTagId || null);
+  }, [isOpen, bookingTagId, setBookingTagId]);
 
   // ✅ Google-like server search (contains anywhere, narrows as you type)
 const loadClientOptions = useCallback(
@@ -292,6 +326,26 @@ const handleCreateOrSelect = async () => {
             </p>
           </>
         )}
+
+        <div className="mb-3">
+          <label className="block text-sm mb-1 text-gray-700">Booking tag (optional)</label>
+          <select
+            className="w-full border rounded px-2 py-2 text-sm bg-white"
+            value={bookingTagId || ""}
+            onChange={(e) => setBookingTagId?.(e.target.value || null)}
+            disabled={tagsLoading}
+          >
+            <option value="">No tag</option>
+            {(tagOptions || []).map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label} ({t.code})
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-600 mt-1">
+            Choose a label to attach to this booking when it’s created.
+          </p>
+        </div>
 
         <label className="block text-sm mb-1 text-gray-700">Search existing</label>
 

@@ -218,6 +218,7 @@ export default function ReviewModal({
           category: service.category || "Uncategorised",
           source,
           status,
+           booking_tag_id: reviewData?.booking_tag_id || null,
 
           // ✅ NEW: lock flag stored in DB
           is_locked: !!lockBooking,

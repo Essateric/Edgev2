@@ -39,6 +39,8 @@ export default function SelectClientModal({
   onClientCreated,
   supabaseClient,
   onBlockCreated,
+  bookingTagId,
+  setBookingTagId,
 }) {
   const supabase = supabaseClient || defaultSupabase;
 
@@ -126,6 +128,37 @@ export default function SelectClientModal({
   const [blockStart, setBlockStart] = useState(null);
   const [blockEnd, setBlockEnd] = useState(null);
   const [savingBlock, setSavingBlock] = useState(false);
+   const [tagOptions, setTagOptions] = useState([]);
+  const [tagsLoading, setTagsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen || !supabase) return;
+
+    const fetchTags = async () => {
+      setTagsLoading(true);
+      const { data, error } = await supabase
+        .from("booking_tags")
+        .select("*")
+        .eq("is_active", true)
+        .order("label", { ascending: true });
+
+      if (error) {
+        console.warn("[SelectClientModal] failed to load booking tags", error);
+        setTagOptions([]);
+      } else {
+        setTagOptions(data || []);
+      }
+      setTagsLoading(false);
+    };
+
+    fetchTags();
+  }, [isOpen, supabase]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    // keep local select synced with parent state when modal reopens
+    setBookingTagId?.(bookingTagId || null);
+  }, [isOpen, bookingTagId, setBookingTagId]);
 
   useEffect(() => {
     if (!isOpen || !supabase) return;
@@ -448,6 +481,27 @@ const handleCreateOrSelect = async () => {
 
         {mode === "booking" && (
           <>
+          <div className="mb-3">
+              <label className="block text-sm mb-1 text-gray-700">
+                Booking tag (optional)
+              </label>
+              <select
+                className="w-full border rounded px-2 py-2 text-sm bg-white"
+                value={bookingTagId || ""}
+                onChange={(e) => setBookingTagId?.(e.target.value || null)}
+                disabled={tagsLoading}
+              >
+                <option value="">No tag</option>
+                {(tagOptions || []).map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label} ({t.code})
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-600 mt-1">
+                Choose a label to attach to this booking when it’s created.
+              </p>
+            </div>
             <label className="block text-sm mb-1 text-gray-700">Search existing</label>
 
             <AsyncSelect

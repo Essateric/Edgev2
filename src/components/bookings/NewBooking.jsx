@@ -37,6 +37,7 @@ export default function NewBooking({
   clients,
   selectedClient,
   clientObj,
+   bookingTagId,
   basket,
   setBasket,
   onBack,
@@ -532,6 +533,7 @@ export default function NewBooking({
               client: effectiveClient,
               stylist_id: effectiveStylistId,
               stylist_name: stylistName || "Unknown",
+              booking_tag_id: bookingTagId || null,
 
               // ✅ Base extended props always included (so email/mobile can show later)
               extendedProps: {
@@ -544,6 +546,7 @@ export default function NewBooking({
                 client_dob: effectiveClient?.dob ?? null,
                 stylist_id: effectiveStylistId ?? null,
                 stylist_name: stylistName || "Unknown",
+                     booking_tag_id: bookingTagId || null,
               },
             };
 
