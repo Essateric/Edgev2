@@ -147,33 +147,6 @@ export default function CalendarPage() {
   const [stylistList, setStylistList] = useState([]);
 
 
-const mapBookingRowToEvent = useCallback (
-  (b, fallbackConfirmed = false) => {
-    const stylistRow = stylistList.find((s) => s.id === b.resource_id);
-    const start = b.start ?? b.start_time;
-    const end = b.end ?? b.end_time;
-     const isScheduleBlock =
-      String(b?.status || "").toLowerCase() === "blocked" && !b?.client_id;
-
-      // When realtime updates don’t include booking_confirmations, keep the
-    // previously-known confirmation flag so the green indicator isn’t lost.
-  const confirmed_via_reminder = Boolean(
-  fallbackConfirmed || b?.confirmed_via_reminder
-);
-
-    return {
-      ...b,
-      start: new Date(start),
-      end: new Date(end),
-      resourceId: b.resource_id,
-      stylistName: stylistRow?.title || "Unknown Stylist", // ✅ FIX: stylistList uses `title`
-      title: b.title || (isScheduleBlock ? "Blocked" : "No Service Name"),
-      confirmed_via_reminder,
-       isScheduleBlock,
-    };
-  },
-  [stylistList]
-);
 
 // ✅ Option 2: force logout + redirect if session/client missing
 useEffect(() => {
@@ -217,7 +190,7 @@ if (bootingOut) return <PageLoader />;
   const [selectedClient, setSelectedClient] = useState("");
   const [clientObj, setClientObj] = useState(null);
   const [basket, setBasket] = useState([]);
-
+const [bookingTagId, setBookingTagId] = useState(null);
   const [step, setStep] = useState(1);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedBooking, setSelectedBooking] = useState(null);
@@ -237,6 +210,82 @@ if (bootingOut) return <PageLoader />;
   const [taskDraft, setTaskDraft] = useState(null);
     const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
+  const [bookingTags, setBookingTags] = useState([]);
+
+useEffect(() => {
+  if (!supabase) return;
+
+  (async () => {
+    const { data, error } = await supabase
+      .from("booking_tags")
+      .select("id, code, label, is_active")
+      .eq("is_active", true)
+      .order("label", { ascending: true });
+
+    if (error) {
+      console.warn("[CalendarPage] failed to load booking tags", error);
+      setBookingTags([]);
+    } else {
+      setBookingTags(data || []);
+    }
+  })();
+}, [supabase]);
+
+const tagCodeById = useMemo(() => {
+  const m = new Map();
+  (bookingTags || []).forEach((t) => {
+    if (t?.id) m.set(t.id, t.code || t.label || "");
+  });
+  return m;
+}, [bookingTags]);
+
+const mapBookingRowToEvent = useCallback(
+  (b, fallbackConfirmed = false) => {
+    const stylistRow = stylistList.find((s) => s.id === b.resource_id);
+    const start = b.start ?? b.start_time;
+    const end = b.end ?? b.end_time;
+
+    const isScheduleBlock =
+      String(b?.status || "").toLowerCase() === "blocked" && !b?.client_id;
+
+    const confirmed_via_reminder = Boolean(
+      fallbackConfirmed || b?.confirmed_via_reminder
+    );
+
+    const tagCode = b?.booking_tag_id ? (tagCodeById.get(b.booking_tag_id) || null) : null;
+
+    return {
+      ...b,
+      start: new Date(start),
+      end: new Date(end),
+      resourceId: b.resource_id,
+      stylistName: stylistRow?.title || "Unknown Stylist",
+      title: b.title || (isScheduleBlock ? "Blocked" : "No Service Name"),
+      confirmed_via_reminder,
+      isScheduleBlock,
+      booking_tag_code: tagCode, // ✅ IMPORTANT
+    };
+  },
+  [stylistList, tagCodeById] // ✅ IMPORTANT
+);
+
+useEffect(() => {
+  if (!tagCodeById || tagCodeById.size === 0) return;
+
+  setEvents((prev) =>
+    (prev || []).map((ev) => {
+      const tid = ev?.booking_tag_id || null;
+      const code = tid ? (tagCodeById.get(tid) || null) : null;
+
+      // don't rerender if no change
+      if ((ev?.booking_tag_code || null) === code) return ev;
+
+      return { ...ev, booking_tag_code: code };
+    })
+  );
+}, [tagCodeById]);
+
+
 
   const selectedClientRow = useMemo(() => {
      return [
@@ -398,6 +447,7 @@ if (bootingOut) return <PageLoader />;
 
     const isScheduleBlock =
       String(b?.status || "").toLowerCase() === "blocked" && !b?.client_id;
+      const tagCode = b?.booking_tag_id ? tagCodeById.get(b.booking_tag_id) : null;
 
     return {
       ...b,
@@ -407,6 +457,7 @@ if (bootingOut) return <PageLoader />;
       stylistName: stylistRow?.name || "Unknown Stylist",
       title: b.title || (isScheduleBlock ? "Blocked" : "No Service Name"),
       isScheduleBlock, // ✅ IMPORTANT
+      booking_tag_code: tagCode,
     };
   })
 );
@@ -436,7 +487,8 @@ if (bootingOut) return <PageLoader />;
     return () => {
       dbgLog("effect cleanup", { runId });
     };
-  }, [currentUser?.id, supabase]);
+}, [currentUser?.id, supabase, tagCodeById]);
+
 
   useEffect(() => {
     if (!supabase) return undefined;
@@ -664,7 +716,8 @@ if (bootingOut) return <PageLoader />;
       supabase.removeChannel(channel);
       supabase.removeChannel(confirmationsChannel);
     };
-  }, [supabase, currentUser?.id, stylistList]); // keep stylistList so names update
+ }, [supabase, currentUser?.id, stylistList, mapBookingRowToEvent]);
+
 
   const moveEvent = useCallback(
     async ({ event, start, end, resourceId }) => {
@@ -738,6 +791,7 @@ if (bootingOut) return <PageLoader />;
     setSelectedSlot(null);
     setSelectedClient("");
     setClientObj(null);
+     setBookingTagId(null);
     setBasket([]);
     setReviewData(null);
     setStep(1);
@@ -1182,9 +1236,6 @@ const handleSaveTask = async ({ action, payload }) => {
 
   return (
     <div className="p-4 metallic-bg">
-      <div>
-        <h1 className="text-5xl font-bold metallic-text p-5">The Edge HD Salon</h1>
-      </div>
 
       <div className="flex justify-between items-center mb-4">
         <div className="flex items-center gap-2">
@@ -1438,11 +1489,25 @@ const handleSaveTask = async ({ action, payload }) => {
         }}
         stylistList={stylistList}
         clients={clients}
-        onBookingUpdated={({ booking_id, id, is_locked }) => {
+        onBookingUpdated={({ booking_id, id, is_locked, booking_tag_id }) => {
           setEvents((prev) =>
             prev.map((ev) => {
               const same = booking_id ? ev.booking_id === booking_id : ev.id === id;
-              return same ? { ...ev, is_locked } : ev;
+              const nextTagId =
+          booking_tag_id !== undefined ? booking_tag_id : ev.booking_tag_id;
+
+        const nextTagCode = nextTagId
+          ? (tagCodeById?.get(nextTagId) || null)
+          : null;
+               return same
+                ? {
+                    ...ev,
+                    is_locked:
+                      typeof is_locked === "boolean" ? is_locked : ev.is_locked,
+                          booking_tag_id: nextTagId,
+          booking_tag_code: nextTagCode, 
+                  }
+                : ev;
             })
           );
         }}
@@ -1469,6 +1534,8 @@ const handleSaveTask = async ({ action, payload }) => {
       setSelectedClient(c.id);
       setClientObj(c);
     }}
+    bookingTagId={bookingTagId}
+    setBookingTagId={setBookingTagId}
     supabaseClient={supabase}
     onBlockCreated={handleBlockCreated}
   />
@@ -1478,6 +1545,7 @@ const handleSaveTask = async ({ action, payload }) => {
     isOpen={isModalOpen && step === 1}
     onClose={handleCancelBookingFlow}
     clients={clients}
+    booking={selectedBooking}
     selectedSlot={selectedSlot}
     selectedClient={selectedClient}
     setSelectedClient={async (id) => {
@@ -1502,7 +1570,10 @@ const handleSaveTask = async ({ action, payload }) => {
       });
       setSelectedClient(c.id);
       setClientObj(c);
+      
     }}
+     bookingTagId={bookingTagId}
+    setBookingTagId={setBookingTagId}
   />
 )}
 
@@ -1520,6 +1591,7 @@ const handleSaveTask = async ({ action, payload }) => {
           clients={clients}
           selectedClient={selectedClient}
           clientObj={clientObj}
+          bookingTagId={bookingTagId}
           basket={basket}
           setBasket={setBasket}
           onBack={() => setStep(1)}
@@ -1558,7 +1630,7 @@ const handleSaveTask = async ({ action, payload }) => {
         }}
       />
 
-      {isAdmin && (
+       {hasUser && (
         <>
           <button
             onClick={() => setShowReminders(true)}
