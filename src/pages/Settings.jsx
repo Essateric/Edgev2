@@ -9,6 +9,7 @@ import Button from "../components/Button";
 import ImportClientsButton from "../components/ImportClientsButton";
 import {supabase} from "../supabaseClient";
 import TaskTypeManager from "../components/TaskTypeManager.jsx";
+import BookingTagManager from "../components/BookingTagManager.jsx";
 
 export default function Settings() {
   const [seedingStaff, setSeedingStaff] = useState(false);
@@ -116,6 +117,7 @@ export default function Settings() {
 
         {/* Task Types for Calendar Blocks */}
       <TaskTypeManager />
+        <BookingTagManager />
 
       {/* Danger Zone */}
       {/* <div className="bg-gray-100 p-4 rounded shadow-sm space-y-3">
