@@ -257,9 +257,14 @@ export default function NewBooking({
 
   const getPriceAndDuration = (service) => {
     const row = staffLinks.find((o) => o.service_id === service.id);
+    const baseDuration = Number(service.base_duration ?? 0);
+    const overrideDuration = Number(row?.duration);
     return {
       price: Number(row?.price ?? service.base_price ?? 0),
-      duration: Number(row?.duration ?? service.base_duration ?? 0),
+      duration:
+        Number.isFinite(overrideDuration) && overrideDuration > 0
+          ? overrideDuration
+          : baseDuration,
     };
   };
 

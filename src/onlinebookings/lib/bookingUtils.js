@@ -86,6 +86,7 @@ export function getEffectivePriceAndDuration(
 ) {
   let price = service?.base_price ?? null;
   let duration = service?.base_duration ?? null;
+  const baseDuration = Number(service?.base_duration ?? 0);
 
   if (!service?.id || !staffId || !Array.isArray(staffServiceOverrides)) {
     return { price, duration };
@@ -106,7 +107,11 @@ export function getEffectivePriceAndDuration(
       ov.duration ?? ov.minutes ?? ov.override_duration ?? ov.base_duration
     );
     if (Number.isFinite(candPrice)) price = candPrice;
-    if (Number.isFinite(candDuration)) duration = candDuration;
+    if (Number.isFinite(candDuration) && candDuration > 0) {
+      duration = candDuration;
+    } else if (Number.isFinite(baseDuration)) {
+      duration = baseDuration;
+    }
   }
 
   return { price, duration };

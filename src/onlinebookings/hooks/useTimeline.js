@@ -28,7 +28,11 @@ export default function useTimeline({
     const o = overrides.find((x) => x?.service_id === svc?.id) || null;
 
     const baseDuration = Number(svc?.base_duration ?? 0) || 0;
-    const duration = o?.duration != null ? Number(o.duration) : baseDuration;
+    const overrideDuration = Number(o?.duration);
+    const duration =
+      Number.isFinite(overrideDuration) && overrideDuration > 0
+        ? overrideDuration
+        : baseDuration;
     const price = o?.price != null ? Number(o.price) : null;
 
     return {
