@@ -133,8 +133,13 @@ export default function PublicBookingPage() {
     if (!selectedProvider || !svc) return { duration: null, price: null };
     const o = providerOverrides.find((x) => x?.service_id === svc?.id);
     const baseDuration = Number(svc?.base_duration ?? 0) || 0;
+    const overrideDuration = Number(o?.duration);
+    const duration =
+      Number.isFinite(overrideDuration) && overrideDuration > 0
+        ? overrideDuration
+        : baseDuration;
     return {
-      duration: (o?.duration != null ? Number(o.duration) : baseDuration) || 0,
+      duration: duration || 0,
       price: o?.price != null ? Number(o.price) : null,
     };
   };
