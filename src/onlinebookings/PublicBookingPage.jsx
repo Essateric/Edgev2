@@ -110,9 +110,11 @@ export default function PublicBookingPage() {
 
   // Staff overrides when provider changes (ALWAYS normalize to array)
   const providerOverridesResult = useProviderOverrides(selectedProvider);
-  const providerOverrides = Array.isArray(providerOverridesResult?.overrides)
-    ? providerOverridesResult.overrides
-    : [];
+  const providerOverrides = Array.isArray(providerOverridesResult)
+    ? providerOverridesResult
+    : Array.isArray(providerOverridesResult?.overrides)
+      ? providerOverridesResult.overrides
+      : [];
 
   // Timeline (multi services, chemical gaps, sums & labels)
   const {
