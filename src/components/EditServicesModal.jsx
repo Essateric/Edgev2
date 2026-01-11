@@ -1,8 +1,11 @@
 import React, { useEffect, useState, useMemo } from "react";
-import { supabase } from "../supabaseClient";
+import { supabase as defaultSupabase } from "../supabaseClient";
+import { useAuth } from "../contexts/AuthContext";
 
 export default function EditServicesModal({ staff, servicesList, onClose }) {
   const [rows, setRows] = useState({}); // { [service_id]: { checked, price, mins } }
+  const { supabaseClient } = useAuth();
+  const supabase = supabaseClient || defaultSupabase;
   const categories = useMemo(
     () => Array.from(new Set(servicesList.map((s) => s.category || "Uncategorized"))),
     [servicesList]
@@ -10,6 +13,7 @@ export default function EditServicesModal({ staff, servicesList, onClose }) {
   const [collapsed, setCollapsed] = useState({});
 
   useEffect(() => {
+     if (!staff?.id) return;
     let active = true;
     (async () => {
       const { data, error } = await supabase
@@ -37,8 +41,10 @@ export default function EditServicesModal({ staff, servicesList, onClose }) {
       setRows(map);
     })();
 
-    return () => { active = false; };
-  }, [staff.id]);
+   return () => {
+      active = false;
+    };
+  }, [staff?.id, supabase]);
 
   const onCheck = (service_id, checked) =>
     setRows(prev => ({ ...prev, [service_id]: { ...(prev[service_id] || {}), checked } }));
@@ -119,86 +125,91 @@ export default function EditServicesModal({ staff, servicesList, onClose }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
-        <h3 className="text-xl font-bold mb-4">Edit Services for {staff?.name}</h3>
+      <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="sticky top-0 z-10 bg-white border-b px-6 pt-6 pb-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <h3 className="text-xl font-bold">Edit Services for {staff?.name}</h3>
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="bg-gray-300 px-4 py-2 rounded">Cancel</button>
+              <button onClick={save} className="bg-bronze text-white px-4 py-2 rounded">Save Services</button>
+            </div>
+          </div>    </div>
 
-        {categories.map((cat) => (
-          <div key={cat} className="mb-4">
-            <button
-              onClick={() => setCollapsed((p) => ({ ...p, [cat]: !p[cat] }))}
-              className="w-full text-left text-lg font-semibold text-bronze mb-2"
-            >
-              {collapsed[cat] ? "▼" : "▶"} {cat}
-            </button>
 
-            {!collapsed[cat] && (
-              <table className="w-full text-sm border">
-                <thead>
-                  <tr>
-                    <th className="text-left px-2 py-1">On</th>
-                    <th className="text-left px-2 py-1">Service</th>
-                    <th className="text-left px-2 py-1">Price (£)</th>
-                    <th className="text-left px-2 py-1">Hrs</th>
-                    <th className="text-left px-2 py-1">Mins</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {servicesList.filter(s => (s.category || "Uncategorized") === cat).map((svc) => {
-                    const rec = rows[svc.id] || {};
-                    const total = Number(rec.mins) || 0;
-                    const hrs = Math.floor(total / 60);
-                    const mins = total % 60;
-                    return (
-                      <tr key={svc.id}>
-                        <td className="px-2">
-                          <input
-                            type="checkbox"
-                            checked={!!rec.checked}
-                            onChange={(e) => onCheck(svc.id, e.target.checked)}
-                          />
-                        </td>
-                        <td className="px-2">{svc.name}</td>
-                        <td className="px-2">
-                          <input
-                            type="number"
-                            className="w-24 border px-2 py-1 rounded"
-                            value={rec.price ?? ""}
-                            onChange={(e) => onPrice(svc.id, e.target.value)}
-                            min="0"
-                            step="0.01"
-                          />
-                        </td>
-                        <td className="px-2">
-                          <input
-                            type="number"
-                            className="w-16 border px-2 py-1 rounded"
-                            value={hrs || ""}
-                            onChange={(e) => onHrs(svc.id, e.target.value)}
-                            min="0"
-                          />
-                        </td>
-                        <td className="px-2">
-                          <input
-                            type="number"
-                            className="w-16 border px-2 py-1 rounded"
-                            value={mins || ""}
-                            onChange={(e) => onMins(svc.id, e.target.value)}
-                            min="0"
-                            max="59"
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </div>
-        ))}
+       <div className="px-6 py-4">
+          {categories.map((cat) => (
+            <div key={cat} className="mb-4">
+              <button
+                onClick={() => setCollapsed((p) => ({ ...p, [cat]: !p[cat] }))}
+                className="w-full text-left text-lg font-semibold text-bronze mb-2"
+              >
+                {collapsed[cat] ? "▼" : "▶"} {cat}
+              </button>
 
-        <div className="flex justify-end gap-2 mt-6">
-          <button onClick={onClose} className="bg-gray-300 px-4 py-2 rounded">Cancel</button>
-          <button onClick={save} className="bg-bronze text-white px-4 py-2 rounded">Save Services</button>
+              {!collapsed[cat] && (
+                <table className="w-full text-sm border">
+                  <thead>
+                    <tr>
+                      <th className="text-left px-2 py-1">On</th>
+                      <th className="text-left px-2 py-1">Service</th>
+                      <th className="text-left px-2 py-1">Price (£)</th>
+                      <th className="text-left px-2 py-1">Hrs</th>
+                      <th className="text-left px-2 py-1">Mins</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {servicesList.filter(s => (s.category || "Uncategorized") === cat).map((svc) => {
+                      const rec = rows[svc.id] || {};
+                      const total = Number(rec.mins) || 0;
+                      const hrs = Math.floor(total / 60);
+                      const mins = total % 60;
+                      return (
+                        <tr key={svc.id}>
+                          <td className="px-2">
+                            <input
+                              type="checkbox"
+                              checked={!!rec.checked}
+                              onChange={(e) => onCheck(svc.id, e.target.checked)}
+                            />
+                          </td>
+                          <td className="px-2">{svc.name}</td>
+                          <td className="px-2">
+                            <input
+                              type="number"
+                              className="w-24 border px-2 py-1 rounded"
+                              value={rec.price ?? ""}
+                              onChange={(e) => onPrice(svc.id, e.target.value)}
+                              min="0"
+                              step="0.01"
+                            />
+                          </td>
+                          <td className="px-2">
+                            <input
+                              type="number"
+                              className="w-16 border px-2 py-1 rounded"
+                              value={hrs || ""}
+                              onChange={(e) => onHrs(svc.id, e.target.value)}
+                              min="0"
+                            />
+                          </td>
+                          <td className="px-2">
+                            <input
+                              type="number"
+                              className="w-16 border px-2 py-1 rounded"
+                              value={mins || ""}
+                              onChange={(e) => onMins(svc.id, e.target.value)}
+                              min="0"
+                              max="59"
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          ))}
         </div>
       </div>
     </div>
