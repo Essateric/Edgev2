@@ -830,6 +830,35 @@ const buildOccurrences = ({ start, end, repeatRule, occurrences }) => {
   return out;
 };
 
+const DAY_LABELS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
+const getStaffWorkingWindow = (staffId, date, stylistList) => {
+  if (!staffId || !date) return null;
+  const staff = stylistList.find((s) => s.id === staffId);
+  if (!staff) return null;
+  const dayName = DAY_LABELS[new Date(date).getDay()];
+  const hours = staff?.weeklyHours?.[dayName];
+  if (!hours || hours.off) return null;
+  const [startHour, startMinute] = String(hours.start || "").split(":").map(Number);
+  const [endHour, endMinute] = String(hours.end || "").split(":").map(Number);
+  if (!Number.isFinite(startHour) || !Number.isFinite(endHour)) return null;
+  const start = new Date(date);
+  start.setHours(startHour || 0, startMinute || 0, 0, 0);
+  const end = new Date(date);
+  end.setHours(endHour || 0, endMinute || 0, 0, 0);
+  if (!(end > start)) return null;
+  return { start, end };
+};
+
+
 const handleSaveTask = async ({ action, payload }) => {
   if (!supabase) return;
 
@@ -922,6 +951,7 @@ const handleSaveTask = async ({ action, payload }) => {
         repeatRule,
         occurrences,
         is_locked,
+         allDay,
       } = payload;
 
       const occ = buildOccurrences({
@@ -937,9 +967,32 @@ const handleSaveTask = async ({ action, payload }) => {
       const rows = [];
       for (const o of occ) {
         const groupId = uuidv4();
-        const durMin = Math.round((o.end.getTime() - o.start.getTime()) / 60000);
+        // const durMin = Math.round((o.end.getTime() - o.start.getTime()) / 60000);
 
         for (const staffId of staffIds) {
+          if (allDay) {
+            const window = getStaffWorkingWindow(staffId, o.start, stylistList);
+            if (!window) continue;
+            const durMin = Math.round(
+              (window.end.getTime() - window.start.getTime()) / 60000
+            );
+            rows.push({
+              booking_id: groupId,
+              repeat_series_id: seriesId,
+              client_id: null,
+              resource_id: staffId,
+              start: window.start.toISOString(),
+              end: window.end.toISOString(),
+              title: title || "Scheduled task",
+              status: "blocked",
+              source: "staff",
+              duration: durMin,
+              is_locked: !!is_locked,
+            });
+            continue;
+          }
+
+          const durMin = Math.round((o.end.getTime() - o.start.getTime()) / 60000);
           rows.push({
             booking_id: groupId,
             repeat_series_id: seriesId,
@@ -1010,6 +1063,7 @@ const handleSaveTask = async ({ action, payload }) => {
       const newTitle = payload.title || "Scheduled task";
       const newStaffIds = payload.staffIds || [];
       const newLocked = !!payload.is_locked;
+      const allDay = !!payload.allDay;
 
       if (!meta.booking_id) {
         toast.error("Missing booking group id for update");
@@ -1049,18 +1103,41 @@ const handleSaveTask = async ({ action, payload }) => {
         const nextStart = new Date(groupStart.getTime() + deltaMs);
         const nextEnd = new Date(nextStart.getTime() + newDurMs);
 
-        // Update ALL rows in this group (title/time/lock)
-        const { error: upErr } = await supabase
-          .from("bookings")
-          .update({
-            start: nextStart.toISOString(),
-            end: nextEnd.toISOString(),
-            title: newTitle,
-            is_locked: newLocked,
-          })
-          .eq("booking_id", bookingId);
+       if (allDay) {
+          for (const row of rows) {
+            const window = getStaffWorkingWindow(row.resource_id, nextStart, stylistList);
+            if (!window) {
+              deleteIds.push(row.id);
+              continue;
+            }
 
-        if (upErr) throw upErr;
+            const { error: upErr } = await supabase
+              .from("bookings")
+              .update({
+                start: window.start.toISOString(),
+                end: window.end.toISOString(),
+                title: newTitle,
+                is_locked: newLocked,
+              })
+              .eq("id", row.id);
+
+            if (upErr) throw upErr;
+          }
+        } else {
+          // Update ALL rows in this group (title/time/lock)
+          const { error: upErr } = await supabase
+            .from("bookings")
+            .update({
+              start: nextStart.toISOString(),
+              end: nextEnd.toISOString(),
+              title: newTitle,
+              is_locked: newLocked,
+            })
+            .eq("booking_id", bookingId);
+
+         if (upErr) throw upErr;
+        }
+
 
         const existingStaff = new Set(rows.map((x) => x.resource_id).filter(Boolean));
         const wantedStaff = new Set(newStaffIds);
@@ -1075,6 +1152,26 @@ const handleSaveTask = async ({ action, payload }) => {
         // insert added staff rows
         for (const staffId of newStaffIds) {
           if (!existingStaff.has(staffId)) {
+            if (allDay) {
+              const window = getStaffWorkingWindow(staffId, nextStart, stylistList);
+              if (!window) continue;
+              inserts.push({
+                booking_id: bookingId,
+                repeat_series_id: rows[0].repeat_series_id || null,
+                client_id: null,
+                resource_id: staffId,
+                start: window.start.toISOString(),
+                end: window.end.toISOString(),
+                title: newTitle,
+                status: "blocked",
+                source: "staff",
+                duration: Math.round(
+                  (window.end.getTime() - window.start.getTime()) / 60000
+                ),
+                is_locked: newLocked,
+              });
+              continue;
+            }
             inserts.push({
               booking_id: bookingId,
               repeat_series_id: rows[0].repeat_series_id || null,

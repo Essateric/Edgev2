@@ -28,6 +28,10 @@ const ACTIVITY_GROUPS = [
       { key: "session_ended", label: "Session ended" },
     ],
   },
+    {
+    title: "Services",
+    items: [{ key: "staff_services_saved", label: "Staff services updated" }],
+  },
 ];
 
 function safeJsonStringify(value) {

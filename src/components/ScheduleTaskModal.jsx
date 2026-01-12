@@ -26,6 +26,48 @@ const parseLocalDateTime = (s) => {
   if (!y || !m || !d) return null;
   return new Date(y, (m || 1) - 1, d, hh || 0, mm || 0, 0, 0);
 };
+const DAY_LABELS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
+const getAllDayBounds = (baseDate) => {
+  const safeDate = baseDate ? new Date(baseDate) : new Date();
+  const dayStart = new Date(safeDate);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(safeDate);
+  dayEnd.setHours(23, 59, 59, 999);
+  return { start: dayStart, end: dayEnd };
+};
+
+const getStaffWorkingBounds = (baseDate, staffId, stylists) => {
+  if (!baseDate || !staffId) return null;
+  const staff = (stylists || []).find((s) => s.id === staffId);
+  if (!staff) return null;
+  const dayName = DAY_LABELS[new Date(baseDate).getDay()];
+  const hours = staff?.weeklyHours?.[dayName];
+  if (!hours || hours.off) return null;
+  const [startHour, startMinute] = String(hours.start || "").split(":").map(Number);
+  const [endHour, endMinute] = String(hours.end || "").split(":").map(Number);
+  if (!Number.isFinite(startHour) || !Number.isFinite(endHour)) return null;
+  const start = new Date(baseDate);
+  start.setHours(startHour || 0, startMinute || 0, 0, 0);
+  const end = new Date(baseDate);
+  end.setHours(endHour || 0, endMinute || 0, 0, 0);
+  if (!(end > start)) return null;
+  return { start, end };
+};
+
+const resolveAllDayBounds = (baseDate, staffId, stylists) => {
+  return (
+    getStaffWorkingBounds(baseDate, staffId, stylists) || getAllDayBounds(baseDate)
+  );
+};
 
 export default function ScheduleTaskModal({
   isOpen,
@@ -104,55 +146,19 @@ export default function ScheduleTaskModal({
 
   const [saving, setSaving] = useState(false);
 
-  // Load task types when modal opens
-  useEffect(() => {
-    if (!isOpen || !supabase) return;
-
-    let alive = true;
-    (async () => {
-      const { data, error } = await supabase
-        .from("schedule_task_types")
-        .select("id,name,category,description,color,sort_order,is_active")
-        .eq("is_active", true)
-        .order("sort_order", { ascending: true })
-        .order("category", { ascending: true })
-        .order("name", { ascending: true });
-
-      if (!alive) return;
-
-      if (error) {
-        console.error("[ScheduleTaskModal] load task types failed", error);
-        toast.error("Could not load task types");
-        setTaskTypes([]);
-        return;
-      }
-
-      setTaskTypes(data || []);
-
-      // Default selection
-      if (!taskTypeId && (data || []).length) {
-        // If editing, try match by title -> type name
-        if (isEditing && editingTask?.title) {
-          const match = (data || []).find(
-            (t) =>
-              String(t.name || "").trim().toLowerCase() ===
-              String(editingTask.title || "").trim().toLowerCase()
-          );
-          if (match?.id) {
-            setTaskTypeId(match.id);
-            return;
-          }
-        }
-
-        setTaskTypeId((data || [])[0]?.id || "");
-      }
-    })();
-
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, supabase, isEditing]);
+ useEffect(() => {
+    if (!allDay) return;
+    const baseDate = start || end || slot?.start || new Date();
+    const primaryStaffId = staffIds[0] || slot?.resourceId || null;
+    const bounds = resolveAllDayBounds(baseDate, primaryStaffId, stylists);
+    if (!bounds) return;
+    if (!start || bounds.start.getTime() !== start.getTime()) {
+      setStart(bounds.start);
+    }
+    if (!end || bounds.end.getTime() !== end.getTime()) {
+      setEnd(bounds.end);
+    }
+  }, [allDay, staffIds, slot?.start, slot?.resourceId, start, end, stylists]);
 
   // Init fields when opening
   useEffect(() => {
@@ -236,12 +242,20 @@ export default function ScheduleTaskModal({
 
   const onPrimarySave = async () => {
     if (!supabase) return toast.error("No Supabase client available");
-    if (!start || !end || !(end > start)) return toast.error("End must be after start");
+    const { dayStart, dayEnd } = allDay
+      ? getAllDayBounds(start || end)
+      : { dayStart: start, dayEnd: end };
+
+    if (!dayStart || !dayEnd || !(dayEnd > dayStart)) {
+      return toast.error("End must be after start");
+    }
     if (!taskTypeId) return toast.error("Pick a task type");
     if (!staffIds.length) return toast.error("Pick at least one staff member");
 
-    const durMin = Math.round((end.getTime() - start.getTime()) / 60000);
-    if (durMin > 12 * 60) return toast.error("Tasks can’t be longer than 12 hours.");
+    if (!allDay) {
+      const durMin = Math.round((dayEnd.getTime() - dayStart.getTime()) / 60000);
+      if (durMin > 12 * 60) return toast.error("Tasks can’t be longer than 12 hours.");
+    }
 
     setSaving(true);
     try {
@@ -250,8 +264,8 @@ export default function ScheduleTaskModal({
         payload: {
           taskTypeId,
           title: taskTitle, // derived
-          start,
-          end,
+         start: dayStart,
+          end: dayEnd,
           allDay,
           is_locked: lockTask,
           staffIds,
@@ -410,7 +424,15 @@ export default function ScheduleTaskModal({
             <input
               type="checkbox"
               checked={allDay}
-              onChange={(e) => setAllDay(!!e.target.checked)}
+             onChange={(e) => {
+                const checked = !!e.target.checked;
+                setAllDay(checked);
+                if (checked) {
+                  const { dayStart, dayEnd } = getAllDayBounds(start || end);
+                  setStart(dayStart);
+                  setEnd(dayEnd);
+                }
+              }}
               disabled={saving}
             />
             All day (blocks online bookings)

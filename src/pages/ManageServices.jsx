@@ -4,9 +4,10 @@ import Button from "../components/Button.jsx";
 import toast from "react-hot-toast";
 import { supabase as defaultSupabase } from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
+import { logEvent } from "../lib/logEvent";
 
 export default function ManageServices({ staffId }) {
-  const { supabaseClient } = useAuth();
+   const { currentUser, supabaseClient } = useAuth();
   const supabase = supabaseClient || defaultSupabase;
 
   const withTimeout = async (promise, ms, label) => {
@@ -218,6 +219,32 @@ export default function ManageServices({ staffId }) {
           .in("staff_id", toDelete);
         if (delErr) throw delErr;
       }
+
+      try {
+        const actorEmail = currentUser?.email || currentUser?.user?.email || null;
+        const actorId = currentUser?.id || currentUser?.user?.id || null;
+        const assignedStaffIds = upserts.map((row) => row.staff_id);
+
+        await logEvent({
+          entityType: "staff_service",
+          entityId: selectedService.id,
+          action: "staff_services_saved",
+          details: {
+            service_id: selectedService.id,
+            service_name: selectedService.name || null,
+            assigned_staff_ids: assignedStaffIds,
+            unassigned_staff_ids: toDelete,
+            upsert_count: upserts.length,
+            delete_count: toDelete.length,
+          },
+          actorId,
+          actorEmail,
+          supabaseClient: supabase,
+        });
+      } catch (auditErr) {
+        console.warn("[Audit] staff services save failed", auditErr);
+      }
+
 
       toast.success("Saved!");
       setShowModal(false);
