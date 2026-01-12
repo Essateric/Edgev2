@@ -85,9 +85,45 @@ export default function ScheduleTaskModal({
     editingTask?.booking_id || editingTask?.bookingId || null;
   const editingSeriesId = editingTask?.repeat_series_id || null;
 
-  // --- task types ---
-  const [taskTypes, setTaskTypes] = useState([]);
-  const [taskTypeId, setTaskTypeId] = useState("");
+// --- task types ---
+const [taskTypes, setTaskTypes] = useState([]);
+const [taskTypeId, setTaskTypeId] = useState("");
+
+useEffect(() => {
+  if (!isOpen || !supabase) return;
+
+  let cancelled = false;
+
+  (async () => {
+    const { data, error } = await supabase
+      .from("schedule_task_types")
+      .select("*")
+      .order("category", { ascending: true })
+      .order("name", { ascending: true });
+
+    if (cancelled) return;
+
+    if (error) {
+      console.warn("[ScheduleTaskModal] failed to load schedule_task_types", error);
+      toast.error("Couldn’t load task types (check table name / RLS).");
+      setTaskTypes([]);
+      return;
+    }
+
+    // If you have an active flag, this will keep active rows (and won’t crash if the field doesn’t exist)
+    const rows = (data || []).filter(
+      (t) => (t?.is_active ?? t?.active ?? true) !== false
+    );
+
+    setTaskTypes(rows);
+
+  })();
+
+  return () => {
+    cancelled = true;
+  };
+}, [isOpen, supabase]);
+
   const selectedTaskType = useMemo(
     () => taskTypes.find((t) => t.id === taskTypeId) || null,
     [taskTypes, taskTypeId]
@@ -162,6 +198,11 @@ export default function ScheduleTaskModal({
 
   // Init fields when opening
   useEffect(() => {
+    // reset / load selected task type
+setTaskTypeId(
+  String(editingTask?.task_type_id || editingTask?.taskTypeId || "")
+);
+
     if (!isOpen) return;
 
     setSaving(false);
@@ -242,9 +283,10 @@ export default function ScheduleTaskModal({
 
   const onPrimarySave = async () => {
     if (!supabase) return toast.error("No Supabase client available");
-    const { dayStart, dayEnd } = allDay
-      ? getAllDayBounds(start || end)
-      : { dayStart: start, dayEnd: end };
+    const bounds = allDay ? getAllDayBounds(start || end) : { start, end };
+const dayStart = bounds?.start;
+const dayEnd = bounds?.end;
+
 
     if (!dayStart || !dayEnd || !(dayEnd > dayStart)) {
       return toast.error("End must be after start");
@@ -428,9 +470,10 @@ export default function ScheduleTaskModal({
                 const checked = !!e.target.checked;
                 setAllDay(checked);
                 if (checked) {
-                  const { dayStart, dayEnd } = getAllDayBounds(start || end);
-                  setStart(dayStart);
-                  setEnd(dayEnd);
+                 const { start: dayStart, end: dayEnd } = getAllDayBounds(start || end);
+setStart(dayStart);
+setEnd(dayEnd);
+
                 }
               }}
               disabled={saving}
