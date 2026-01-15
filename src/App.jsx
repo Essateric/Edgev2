@@ -9,6 +9,7 @@ import ManageClients from "./pages/ManageClients.jsx";
 import ManageServices from "./pages/ManageServices.jsx";
 import ManageStaff from "./pages/ManageStaff.jsx";
 import Settings from "./pages/Settings.jsx";
+import Tags from "./pages/Tags.jsx";
 import StaffLayout from "./layouts/StaffLayout.jsx";
 import { Toaster } from "react-hot-toast";
 import ProtectedRoute from "./components/ProtectedRoute.jsx";
@@ -120,8 +121,16 @@ function App() {
               <Route
                 path="/settings"
                 element={
-                  <ProtectedRoute requiredRole="admin">
+                  <ProtectedRoute requiredRoles={["admin", "senior stylist"]}>
                     <Settings />
+                  </ProtectedRoute>
+                }
+              />
+                  <Route
+                path="/tags"
+                element={
+                  <ProtectedRoute requiredRoles={["admin", "senior stylist"]}>
+                    <Tags />
                   </ProtectedRoute>
                 }
               />

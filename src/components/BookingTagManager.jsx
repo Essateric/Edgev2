@@ -131,6 +131,14 @@ export default function BookingTagManager() {
     );
     toast.success(nextActive ? "Tag activated" : "Tag deactivated");
   };
+      <Route
+                path="/tags"
+                element={
+                  <ProtectedRoute requiredRoles={["admin", "senior stylist"]}>
+                    <Tags />
+                  </ProtectedRoute>
+                }
+              />
 
   return (
     <div className="bg-gray-100 p-4 rounded shadow-sm space-y-4">
@@ -272,6 +280,13 @@ export default function BookingTagManager() {
                     className="text-xs text-blue-700 underline"
                   >
                     {tag.is_active ? "Deactivate" : "Activate"}
+                  </button>
+                   <button
+                    type="button"
+                    onClick={() => deleteTag(tag)}
+                    className="text-xs text-red-600 underline"
+                  >
+                    Remove
                   </button>
                 </div>
               </li>

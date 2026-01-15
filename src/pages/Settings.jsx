@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { NavLink } from "react-router-dom";
 import toast from "react-hot-toast";
 import { seedStaff } from "../scripts/seedStaffData";
 import { seedClients } from "../scripts/seedClients";
@@ -7,14 +8,19 @@ import CsvStaffUploader from "../components/CsvStaffUploader";
 import CsvClientUploader from "../components/CsvClientUploader";
 import Button from "../components/Button";
 import ImportClientsButton from "../components/ImportClientsButton";
-import {supabase} from "../supabaseClient";
+import { supabase } from "../supabaseClient";
 import TaskTypeManager from "../components/TaskTypeManager.jsx";
-import BookingTagManager from "../components/BookingTagManager.jsx";
 
 export default function Settings() {
   const [seedingStaff, setSeedingStaff] = useState(false);
   const [seedingClients, setSeedingClients] = useState(false);
   const [staffList, setStaffList] = useState([]);
+
+  // Toggle these to true when you want the sections back
+  const SHOW_SEED_SECTION = false;
+  const SHOW_CSV_SECTION = false;
+  const SHOW_JSON_SECTION = false;
+  const SHOW_EXPORT_SECTION = false;
 
   useEffect(() => {
     const fetchStaff = async () => {
@@ -63,61 +69,95 @@ export default function Settings() {
 
   return (
     <div className="p-6 text-black space-y-8">
-      <h1 className="text-2xl font-bold text-bronze">Settings</h1>
+      <div className="space-y-4">
+        <h1 className="text-2xl font-bold text-bronze">Settings</h1>
 
-      {/* Seed Data
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <SettingCard
-          title="Seed Staff Data"
-          description="Adds demo staff members and services. Use for testing only."
-          buttonLabel={seedingStaff ? "Seeding..." : "Seed Staff"}
-          onClick={handleSeedStaff}
-          disabled={seedingStaff}
-        />
-        <SettingCard
-          title="Seed Client Data"
-          description="Adds demo clients with notes. Useful for dashboard visuals and testing."
-          buttonLabel={seedingClients ? "Seeding..." : "Seed Clients"}
-          onClick={handleSeedClients}
-          disabled={seedingClients}
-        />
+        <div className="flex flex-wrap gap-2 border-b border-gray-200 pb-2">
+          <NavLink
+            to="/settings"
+            end
+            className={({ isActive }) =>
+              `px-3 py-2 text-sm font-medium rounded-t ${
+                isActive
+                  ? "bg-white text-bronze border border-gray-200 border-b-white"
+                  : "text-gray-600 hover:text-bronze"
+              }`
+            }
+          >
+            Scheduled Tasks
+          </NavLink>
+
+          <NavLink
+            to="/tags"
+            className={({ isActive }) =>
+              `px-3 py-2 text-sm font-medium rounded-t ${
+                isActive
+                  ? "bg-white text-bronze border border-gray-200 border-b-white"
+                  : "text-gray-600 hover:text-bronze"
+              }`
+            }
+          >
+            Tags
+          </NavLink>
+        </div>
       </div>
 
-      // {/* CSV Upload */}
-       {/* <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-         <SettingCard */}
-      {/* //     title="Import Staff Data"
-      //     description="Upload a CSV to bulk import staff and services."
-      //     content={<CsvStaffUploader />}
-      //   />
-      //   <SettingCard */}
-      {/* //     title="Import Client Data"
-      //     description="Upload a CSV to bulk import client records and treatment history."
-      //     content={<CsvClientUploader />}
-      //   />
-      // </div> */}
-{/* 
-      // {/* JSON Upload */}
-      {/* // <div className="bg-gray-100 p-4 rounded shadow-sm space-y-3">
-      //   <h2 className="text-lg font-semibold text-bronze">Import Clients from JSON</h2>
-      //   <p className="text-sm text-gray-600">
-      //     Upload pre-formatted clients directly into Supabase (bypasses CSV).
-      //   </p>
-      //   <ImportClientsButton />
-      // </div> */} 
+      {SHOW_SEED_SECTION && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <SettingCard
+            title="Seed Staff Data"
+            description="Adds demo staff members and services. Use for testing only."
+            buttonLabel={seedingStaff ? "Seeding..." : "Seed Staff"}
+            onClick={handleSeedStaff}
+            disabled={seedingStaff}
+          />
+          <SettingCard
+            title="Seed Client Data"
+            description="Adds demo clients with notes. Useful for dashboard visuals and testing."
+            buttonLabel={seedingClients ? "Seeding..." : "Seed Clients"}
+            onClick={handleSeedClients}
+            disabled={seedingClients}
+          />
+        </div>
+      )}
 
-      {/* // Export Clients */}
-      {/* // <div className="bg-gray-100 p-4 rounded shadow-sm space-y-3">
-      //   <h2 className="text-lg font-semibold text-bronze">Export Clients</h2>
-      //   <p className="text-sm text-gray-600">
-      //     Download a CSV of all clients in your system.
-      //   </p>
-      //   <Button onClick={exportClientsToCSV}>Export Clients to CSV</Button>
-      // </div>  */}
+      {SHOW_CSV_SECTION && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <SettingCard
+            title="Import Staff Data"
+            description="Upload a CSV to bulk import staff and services."
+            content={<CsvStaffUploader />}
+          />
+          <SettingCard
+            title="Import Client Data"
+            description="Upload a CSV to bulk import client records and treatment history."
+            content={<CsvClientUploader />}
+          />
+        </div>
+      )}
 
-        {/* Task Types for Calendar Blocks */}
+      {SHOW_JSON_SECTION && (
+        <div className="bg-gray-100 p-4 rounded shadow-sm space-y-3">
+          <h2 className="text-lg font-semibold text-bronze">Import Clients from JSON</h2>
+          <p className="text-sm text-gray-600">
+            Upload pre-formatted clients directly into Supabase (bypasses CSV).
+          </p>
+          <ImportClientsButton />
+        </div>
+      )}
+
+      {SHOW_EXPORT_SECTION && (
+        <div className="bg-gray-100 p-4 rounded shadow-sm space-y-3">
+          <h2 className="text-lg font-semibold text-bronze">Export Clients</h2>
+          <p className="text-sm text-gray-600">
+            Download a CSV of all clients in your system.
+          </p>
+          <Button onClick={exportClientsToCSV}>Export Clients to CSV</Button>
+        </div>
+      )}
+
+      {/* Task Types for Calendar Blocks */}
       <TaskTypeManager />
-        <BookingTagManager />
 
       {/* Danger Zone */}
       {/* <div className="bg-gray-100 p-4 rounded shadow-sm space-y-3">
@@ -139,7 +179,9 @@ function SettingCard({ title, description, buttonLabel, onClick, disabled, conte
     <div className="bg-gray-100 p-4 rounded shadow-sm space-y-3">
       <h2 className="text-lg font-semibold text-bronze">{title}</h2>
       <p className="text-sm text-gray-600">{description}</p>
-      {content ? content : (
+      {content ? (
+        content
+      ) : (
         <Button onClick={onClick} disabled={disabled}>
           {buttonLabel}
         </Button>
