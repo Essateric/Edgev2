@@ -81,8 +81,7 @@ export default function ScheduleTaskModal({
   const supabase = supabaseClient;
 
   const isEditing = !!editingTask?.id;
-  const editingBookingGroupId =
-    editingTask?.booking_id || editingTask?.bookingId || null;
+  
   const editingSeriesId = editingTask?.repeat_series_id || null;
 
 // --- task types ---
@@ -237,49 +236,21 @@ setTaskTypeId(
     // Default staff:
     // - If editing, we try to show all staff in this booking group (multi-staff block)
     // - If creating, default to selected slot resourceId
-    if (isEditing && supabase && editingBookingGroupId) {
-      (async () => {
-        const { data, error } = await supabase
-          .from("bookings")
-          .select("id,resource_id,booking_id")
-          .eq("booking_id", editingBookingGroupId);
-
-        if (error) {
-          console.warn(
-            "[ScheduleTaskModal] failed to load booking group staff",
-            error
-          );
-          // fallback to single
-          const rid =
-            editingTask?.resourceId ||
-            editingTask?.resource_id ||
-            slot?.resourceId ||
-            null;
-          setStaffIds(rid ? [rid] : []);
-          return;
-        }
-
-        const ids = Array.from(
-          new Set((data || []).map((r) => r.resource_id).filter(Boolean))
-        );
-
-        // fallback
-        if (!ids.length) {
-          const rid =
-            editingTask?.resourceId ||
-            editingTask?.resource_id ||
-            slot?.resourceId ||
-            null;
-          setStaffIds(rid ? [rid] : []);
-        } else {
-          setStaffIds(ids);
-        }
-      })();
+    if (isEditing) {
+      const ids = Array.isArray(editingTask?.staffIds)
+        ? editingTask.staffIds.filter(Boolean)
+        : editingTask?.staff_id
+        ? [editingTask.staff_id]
+        : editingTask?.resourceId
+        ? [editingTask.resourceId]
+        : [];
+      const fallbackRid = slot?.resourceId || null;
+      setStaffIds(ids.length ? ids : fallbackRid ? [fallbackRid] : []);
     } else {
       const rid = slot?.resourceId || null;
       setStaffIds(rid ? [rid] : []);
     }
-  }, [isOpen, isEditing, editingBookingGroupId, editingTask, slot, supabase]);
+}, [isOpen, isEditing, editingTask, slot]);
 
   const onPrimarySave = async () => {
     if (!supabase) return toast.error("No Supabase client available");
@@ -319,10 +290,14 @@ const dayEnd = bounds?.end;
           editingMeta: isEditing
             ? {
                 id: editingTask?.id,
-                booking_id: editingBookingGroupId,
                 repeat_series_id: editingSeriesId,
                 oldStart: editingTask?.start ? new Date(editingTask.start) : null,
                 oldEnd: editingTask?.end ? new Date(editingTask.end) : null,
+                task_type_id: editingTask?.task_type_id || editingTask?.taskTypeId || null,
+                staff_id: editingTask?.staff_id || editingTask?.resourceId || null,
+                start: editingTask?.start || null,
+                end: editingTask?.end || null,
+                created_by: editingTask?.created_by || null,
               }
             : null,
         },
@@ -353,8 +328,12 @@ const dayEnd = bounds?.end;
               deleteScope,
           editingMeta: {
             id: editingTask?.id,
-            booking_id: editingBookingGroupId,
             repeat_series_id: editingSeriesId,
+            task_type_id: editingTask?.task_type_id || editingTask?.taskTypeId || null,
+            staff_id: editingTask?.staff_id || editingTask?.resourceId || null,
+            start: editingTask?.start || null,
+            end: editingTask?.end || null,
+            created_by: editingTask?.created_by || null,
           },
         },
       });

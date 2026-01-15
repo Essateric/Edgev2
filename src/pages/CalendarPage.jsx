@@ -125,6 +125,26 @@ const isScheduleBlockEvent = (ev) => {
 
   return status === "blocked" && hasNoClient;
 };
+const mapScheduleBlockRowToEvent = (row, staffList = []) => {
+  if (!row) return null;
+  const stylistRow = staffList.find((s) => s.id === row.staff_id);
+  const taskTypeName =
+    row?.schedule_task_types?.name || row?.task_type_name || "Scheduled task";
+
+  return {
+    ...row,
+    id: row.id,
+    start: new Date(row.start),
+    end: new Date(row.end),
+    resourceId: row.staff_id,
+    staff_id: row.staff_id,
+    stylistName: stylistRow?.name || stylistRow?.title || "Unknown Stylist",
+    title: taskTypeName,
+    isScheduleBlock: true,
+    isScheduledTask: true,
+    blockSource: "schedule_blocks",
+  };
+};
 
 
 const isConfirmedStatus = (status) => {
@@ -169,11 +189,9 @@ if (bootingOut) return <PageLoader />;
   const [clients, setClients] = useState([]);
   const [events, setEvents] = useState([]);
   const {
-    tasks,
     taskEvents,
     taskSaving,
     taskError,
-    upsertTask,
   } = useTaskScheduler({ supabase, stylistList });
 
   const [dbg, setDbg] = useState({});
@@ -263,6 +281,7 @@ const mapBookingRowToEvent = useCallback(
       title: b.title || (isScheduleBlock ? "Blocked" : "No Service Name"),
       confirmed_via_reminder,
       isScheduleBlock,
+      blockSource: "bookings",
       booking_tag_code: tagCode, // ✅ IMPORTANT
     };
   },
@@ -420,6 +439,19 @@ useEffect(() => {
         });
         if (bErr) throw bErr;
 
+        // ---------- SCHEDULE BLOCKS ----------
+dbgLog("schedule blocks query: BEFORE", { runId });
+const { data: scheduleBlocksData, error: sbErr } = await supabase
+  .from("schedule_blocks")
+  .select("*, schedule_task_types ( id, name, category )")
+  .eq("is_active", true);
+dbgLog("schedule blocks query: AFTER", {
+  runId,
+  error: sbErr ? sbErr.message : null,
+  count: scheduleBlocksData?.length ?? 0,
+});
+if (sbErr) throw sbErr;
+
         // ✅ If a newer fetch started, ignore this one
         if (runId !== runIdRef.current) {
           dbgLog("fetchData: stale run -> skipping setState", { runId });
@@ -461,6 +493,12 @@ useEffect(() => {
     };
   })
 );
+
+ setScheduledTasks(
+          (scheduleBlocksData || [])
+            .map((b) => mapScheduleBlockRowToEvent(b, staff))
+            .filter(Boolean)
+        );
 
         dbgLog("fetchData: end of try block", { runId });
       } catch (error) {
@@ -725,8 +763,10 @@ useEffect(() => {
 
       if (event?.is_locked) return;
       if (isCancelledStatus(event?.status)) return; // ✅ don't move cancelled
+       // ✅ Prevent "task events" (non-bookings) from being updated as bookings by mistake
+     if (event?.isTask) return;
 
-      if (event?.isScheduledTask) {
+ if (event?.isScheduleBlock && event?.blockSource === "schedule_blocks") {
         const { start: s, end: e } = clampRange(start, end);
         const rid = resourceId ?? event.resourceId;
 
@@ -738,11 +778,24 @@ useEffect(() => {
                   start: s,
                   end: e,
                   resourceId: rid,
+                  staff_id: rid,
                   stylistName: stylistList.find((s1) => s1.id === rid)?.title || ev.stylistName,
                 }
               : ev
           )
         );
+         try {
+          await supabase
+            .from("schedule_blocks")
+            .update({
+              start: s.toISOString(),
+              end: e.toISOString(),
+              staff_id: rid,
+            })
+            .eq("id", event.id);
+        } catch (error) {
+          console.error("❌ Failed to move schedule block:", error);
+        }
         return;
       }
 
@@ -775,6 +828,9 @@ useEffect(() => {
           .update({
             start: s,
             end: e,
+             start: s.toISOString(),
+           end: e.toISOString(),
+            resource_id: rid,
             resource_id: rid,
             duration: newDuration,
           })
@@ -783,7 +839,7 @@ useEffect(() => {
         console.error("❌ Failed to move booking:", error);
       }
     },
-   [stylistList, supabase, tasks, upsertTask]
+   [stylistList, supabase]
   );
 
   const handleCancelBookingFlow = useCallback(() => {
@@ -866,39 +922,41 @@ const handleSaveTask = async ({ action, payload }) => {
     // ---------- DELETE ----------
     if (action === "delete") {
       const meta = payload?.editingMeta || {};
-   const deleteScope = payload?.deleteScope || "occurrence"; // single | occurrence | series
-      const hasSeries = !!meta.repeat_series_id;
+  const deleteScope = payload?.deleteScope || "single"; // single | occurrence | series
 
-      // Determine match conditions
-      const where =
-        deleteScope === "series" && hasSeries
-          ? { repeat_series_id: meta.repeat_series_id }
-          : deleteScope === "single" && meta.id
-          ? { id: meta.id }
-          : { booking_id: meta.booking_id };
+      if (!meta.id) {
+        toast.error("Missing schedule block id for delete");
+        return;
+      }
 
-      // grab rows for audit + UI update
+      const match = {};
+      let beforeRows = [];
 
+      if (deleteScope === "single") {
+        match.id = meta.id;
+      } else {
+        if (meta.task_type_id) match.task_type_id = meta.task_type_id;
+        if (meta.start) match.start = new Date(meta.start).toISOString();
+        if (meta.end) match.end = new Date(meta.end).toISOString();
+        if (meta.created_by) match.created_by = meta.created_by;
+      }
 
-      const { data: beforeRows } = await supabase
-        .from("bookings")
-        .select("id,booking_id,repeat_series_id,resource_id,start,end,title,status,is_locked,client_id")
-       .match(where);
-       const del = supabase.from("bookings").delete().match(where);
-      const { error } = await del;
+      if (!Object.keys(match).length) {
+        match.id = meta.id;
+      }
+
+      const { data: fetchedRows } = await supabase
+        .from("schedule_blocks")
+        .select("id,staff_id,task_type_id,start,end,created_by")
+        .match(match);
+      beforeRows = fetchedRows || [];
+
+      const { error } = await supabase.from("schedule_blocks").delete().match(match);
       if (error) throw error;
 
       // local UI remove immediately
-      setEvents((prev) =>
-        prev.filter((ev) => {
-          if (deleteScope === "series" && hasSeries) {
-            return ev.repeat_series_id !== meta.repeat_series_id;
-          }
-          if (deleteScope === "single" && meta.id) {
-            return ev.id !== meta.id;
-          }
-          return ev.booking_id !== meta.booking_id;
-        })
+      setScheduledTasks((prev) =>
+        prev.filter((ev) => !beforeRows.some((row) => row.id === ev.id))
       );
 
       // audit
@@ -908,24 +966,16 @@ const handleSaveTask = async ({ action, payload }) => {
 
         await logEvent({
           entityType: "scheduled_task",
-          entityId:
-            deleteScope === "series" && hasSeries
-              ? meta.repeat_series_id
-              : deleteScope === "single" && meta.id
-              ? meta.id
-              : meta.booking_id,
+       entityId: meta.id,
           action: "scheduled_task_deleted",
           details: {
-           scope: deleteScope,
-            repeat_series_id: meta.repeat_series_id || null,
-            booking_id: meta.booking_id || null,
+            scope: deleteScope,
             deleted_rows: (beforeRows || []).map((r) => ({
               id: r.id,
-              booking_id: r.booking_id,
-              resource_id: r.resource_id,
+              staff_id: r.staff_id,
               start: r.start,
               end: r.end,
-              title: r.title,
+              task_type_id: r.task_type_id,
             })),
           },
           actorId,
@@ -944,7 +994,7 @@ const handleSaveTask = async ({ action, payload }) => {
     // ---------- CREATE ----------
     if (action === "create") {
       const {
-        title,
+        taskTypeId,
         start,
         end,
         staffIds,
@@ -961,65 +1011,47 @@ const handleSaveTask = async ({ action, payload }) => {
         occurrences,
       });
 
-     const wantsSeries = repeatRule && repeatRule !== "none";
-      const seriesId = wantsSeries ? uuidv4() : null;
-
       const rows = [];
       for (const o of occ) {
-        const groupId = uuidv4();
-        // const durMin = Math.round((o.end.getTime() - o.start.getTime()) / 60000);
-
+       
         for (const staffId of staffIds) {
           if (allDay) {
             const window = getStaffWorkingWindow(staffId, o.start, stylistList);
             if (!window) continue;
-            const durMin = Math.round(
-              (window.end.getTime() - window.start.getTime()) / 60000
-            );
+            
             rows.push({
-              booking_id: groupId,
-              repeat_series_id: seriesId,
-              client_id: null,
-              resource_id: staffId,
+             staff_id: staffId,
+              task_type_id: taskTypeId,
               start: window.start.toISOString(),
               end: window.end.toISOString(),
-              title: title || "Scheduled task",
-              status: "blocked",
-              source: "staff",
-              duration: durMin,
-              is_locked: !!is_locked,
+               is_active: true,
             });
             continue;
           }
 
-          const durMin = Math.round((o.end.getTime() - o.start.getTime()) / 60000);
+      
           rows.push({
-            booking_id: groupId,
-            repeat_series_id: seriesId,
-            client_id: null,
-            resource_id: staffId,
+            staff_id: staffId,
+            task_type_id: taskTypeId,
             start: o.start.toISOString(),
             end: o.end.toISOString(),
-            title: title || "Scheduled task",
-            status: "blocked",
-            source: "staff",
-            duration: durMin,
-            is_locked: !!is_locked,
+             is_active: true,
           });
         }
       }
 
       const { data: inserted, error } = await supabase
-        .from("bookings")
+       .from("schedule_blocks")
         .insert(rows)
-        .select("*");
-
+     .select("*, schedule_task_types ( id, name, category )");
       if (error) throw error;
 
       // immediate UI add
-      setEvents((prev) => [
+        setScheduledTasks((prev) => [
         ...prev,
-        ...(inserted || []).map((r) => mapBookingRowToEvent(r)),
+        ...(inserted || [])
+          .map((r) => mapScheduleBlockRowToEvent(r, stylistList))
+          .filter(Boolean),
       ]);
 
       // audit
@@ -1029,13 +1061,12 @@ const handleSaveTask = async ({ action, payload }) => {
 
         await logEvent({
           entityType: "scheduled_task",
-          entityId: seriesId || rows?.[0]?.booking_id || uuidv4(),
+           entityId: inserted?.[0]?.id || uuidv4(),
           action: "scheduled_task_created",
           details: {
-            repeat_series_id: seriesId,
             occurrences: occ.length,
             staff_ids: staffIds,
-            title,
+             task_type_id: taskTypeId,
             start: new Date(start).toISOString(),
             end: new Date(end).toISOString(),
             inserted_rows: (inserted || []).length,
@@ -1056,182 +1087,73 @@ const handleSaveTask = async ({ action, payload }) => {
     // ---------- UPDATE ----------
     if (action === "update") {
       const meta = payload?.editingMeta || {};
-      const scopeAll = !!payload?.applyToSeries && !!meta.repeat_series_id;
-
+    
       const newStart = new Date(payload.start);
       const newEnd = new Date(payload.end);
-      const newTitle = payload.title || "Scheduled task";
+     const newTaskTypeId = payload.taskTypeId || meta.task_type_id || null;
       const newStaffIds = payload.staffIds || [];
-      const newLocked = !!payload.is_locked;
-      const allDay = !!payload.allDay;
-
-      if (!meta.booking_id) {
-        toast.error("Missing booking group id for update");
+ if (!meta.id) {
+        toast.error("Missing schedule block id for update");
         return;
       }
+ const normalizedStaffIds = newStaffIds.filter(Boolean);
 
-      // Fetch before rows for scope
-      const { data: beforeRows, error: beforeErr } = await supabase
-        .from("bookings")
-        .select("id,booking_id,repeat_series_id,resource_id,start,end,title,status,is_locked,client_id")
-        .match(
-          scopeAll
-            ? { repeat_series_id: meta.repeat_series_id }
-            : { booking_id: meta.booking_id }
+    if (normalizedStaffIds.length <= 1) {
+        const staffId = normalizedStaffIds[0] || meta.staff_id || meta.resource_id;
+        const { data: updated, error } = await supabase
+          .from("schedule_blocks")
+          .update({
+            staff_id: staffId,
+            task_type_id: newTaskTypeId,
+            start: newStart.toISOString(),
+            end: newEnd.toISOString(),
+            is_active: true,
+          })
+          .eq("id", meta.id)
+          .select("*, schedule_task_types ( id, name, category )")
+          .single();
+
+        if (error) throw error;
+
+      setScheduledTasks((prev) =>
+          prev.map((ev) =>
+            ev.id === meta.id
+              ? mapScheduleBlockRowToEvent(updated, stylistList)
+              : ev
+          )
         );
-
-      if (beforeErr) throw beforeErr;
-
-      const groups = new Map();
-      for (const r of beforeRows || []) {
-        const key = r.booking_id;
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(r);
-      }
-
-      // We shift each group by the delta from the edited occurrence
-      const oldStart = meta.oldStart ? new Date(meta.oldStart) : new Date(meta.old_start || meta.oldStart);
-      const deltaMs = oldStart ? newStart.getTime() - new Date(oldStart).getTime() : 0;
-      const newDurMs = newEnd.getTime() - newStart.getTime();
-
-      const deleteIds = [];
-      const inserts = [];
-
-      // Update group-by-group so every staff row in that group is consistent
-      for (const [bookingId, rows] of groups.entries()) {
-        const groupStart = new Date(rows[0].start);
-        const nextStart = new Date(groupStart.getTime() + deltaMs);
-        const nextEnd = new Date(nextStart.getTime() + newDurMs);
-
-       if (allDay) {
-          for (const row of rows) {
-            const window = getStaffWorkingWindow(row.resource_id, nextStart, stylistList);
-            if (!window) {
-              deleteIds.push(row.id);
-              continue;
-            }
-
-            const { error: upErr } = await supabase
-              .from("bookings")
-              .update({
-                start: window.start.toISOString(),
-                end: window.end.toISOString(),
-                title: newTitle,
-                is_locked: newLocked,
-              })
-              .eq("id", row.id);
-
-            if (upErr) throw upErr;
-          }
-        } else {
-          // Update ALL rows in this group (title/time/lock)
-          const { error: upErr } = await supabase
-            .from("bookings")
-            .update({
-              start: nextStart.toISOString(),
-              end: nextEnd.toISOString(),
-              title: newTitle,
-              is_locked: newLocked,
-            })
-            .eq("booking_id", bookingId);
-
-         if (upErr) throw upErr;
-        }
-
-
-        const existingStaff = new Set(rows.map((x) => x.resource_id).filter(Boolean));
-        const wantedStaff = new Set(newStaffIds);
-
-        // delete removed staff rows
-        for (const r of rows) {
-          if (r.resource_id && !wantedStaff.has(r.resource_id)) {
-            deleteIds.push(r.id);
-          }
-        }
-
-        // insert added staff rows
-        for (const staffId of newStaffIds) {
-          if (!existingStaff.has(staffId)) {
-            if (allDay) {
-              const window = getStaffWorkingWindow(staffId, nextStart, stylistList);
-              if (!window) continue;
-              inserts.push({
-                booking_id: bookingId,
-                repeat_series_id: rows[0].repeat_series_id || null,
-                client_id: null,
-                resource_id: staffId,
-                start: window.start.toISOString(),
-                end: window.end.toISOString(),
-                title: newTitle,
-                status: "blocked",
-                source: "staff",
-                duration: Math.round(
-                  (window.end.getTime() - window.start.getTime()) / 60000
-                ),
-                is_locked: newLocked,
-              });
-              continue;
-            }
-            inserts.push({
-              booking_id: bookingId,
-              repeat_series_id: rows[0].repeat_series_id || null,
-              client_id: null,
-              resource_id: staffId,
-              start: nextStart.toISOString(),
-              end: nextEnd.toISOString(),
-              title: newTitle,
-              status: "blocked",
-              source: "staff",
-              duration: Math.round((nextEnd.getTime() - nextStart.getTime()) / 60000),
-              is_locked: newLocked,
-            });
-          }
-        }
-      }
-
-      if (deleteIds.length) {
-        const { error: delErr } = await supabase
-          .from("bookings")
+      } else {
+        const { error: deleteErr } = await supabase
+          .from("schedule_blocks")
           .delete()
-          .in("id", deleteIds);
+          .eq("id", meta.id);
+        if (deleteErr) throw deleteErr;
 
-        if (delErr) throw delErr;
+        const rows = normalizedStaffIds.map((staffId) => ({
+          staff_id: staffId,
+          task_type_id: newTaskTypeId,
+          start: newStart.toISOString(),
+          end: newEnd.toISOString(),
+          is_active: true,
+        }));
+
+        const { data: insertedRows, error: insertErr } = await supabase
+          .from("schedule_blocks")
+          .insert(rows)
+          .select("*, schedule_task_types ( id, name, category )");
+
+        if (insertErr) throw insertErr;
+
+        setScheduledTasks((prev) => {
+          const remaining = prev.filter((ev) => ev.id !== meta.id);
+          const mapped = (insertedRows || [])
+            .map((r) => mapScheduleBlockRowToEvent(r, stylistList))
+            .filter(Boolean);
+          return [...remaining, ...mapped];
+        });
       }
 
-      let inserted = [];
-      if (inserts.length) {
-        const { data, error: insErr } = await supabase
-          .from("bookings")
-          .insert(inserts)
-          .select("*");
-
-        if (insErr) throw insErr;
-        inserted = data || [];
-      }
-
-      // Refresh UI for affected scope (simple + reliable)
-      const { data: afterRows, error: afterErr } = await supabase
-        .from("bookings")
-        .select("*")
-        .match(
-          scopeAll
-            ? { repeat_series_id: meta.repeat_series_id }
-            : { booking_id: meta.booking_id }
-        );
-
-      if (afterErr) throw afterErr;
-
-      const afterIds = new Set((afterRows || []).map((r) => r.id));
-      const scopeBeforeIds = new Set((beforeRows || []).map((r) => r.id));
-
-      setEvents((prev) => {
-        // remove old scoped rows
-        const kept = prev.filter((ev) => !scopeBeforeIds.has(ev.id));
-        // add rebuilt scoped rows
-        const rebuilt = (afterRows || []).map((r) => mapBookingRowToEvent(r));
-        return [...kept, ...rebuilt];
-      });
-
+     
       // audit
       try {
         const actorEmail = currentUser?.email || currentUser?.user?.email || null;
@@ -1239,19 +1161,15 @@ const handleSaveTask = async ({ action, payload }) => {
 
         await logEvent({
           entityType: "scheduled_task",
-          entityId: scopeAll ? meta.repeat_series_id : meta.booking_id,
+         entityId: meta.id,
           action: "scheduled_task_updated",
           details: {
-            scope: scopeAll ? "series" : "one",
-            repeat_series_id: meta.repeat_series_id || null,
-            booking_id: meta.booking_id || null,
-            delta_minutes: Math.round(deltaMs / 60000),
-            title: newTitle,
+           block_id: meta.id,
+            start: newStart.toISOString(),
+            end: newEnd.toISOString(),
+            task_type_id: newTaskTypeId,
             staff_ids: newStaffIds,
-            before_row_count: (beforeRows || []).length,
-            after_row_count: (afterRows || []).length,
-            deleted_row_ids: deleteIds,
-            inserted_row_ids: inserted.map((r) => r.id),
+           
           },
           actorId,
           actorEmail,
@@ -1447,7 +1365,10 @@ const handleSaveTask = async ({ action, payload }) => {
         start: event.start,
         end: event.end,
         // ✅ series id hint for later (optional)
-        seriesId: event.repeat_series_id || event.booking_id || event.seriesId || null,
+       staffIds:
+          event.staffIds ||
+          (event.staff_id ? [event.staff_id] : rid ? [rid] : []),
+        taskTypeId: event.task_type_id || event.taskTypeId || null,
       }
     );
     return;
@@ -1552,12 +1473,14 @@ const handleSaveTask = async ({ action, payload }) => {
         draggableAccessor={(event) =>
           !event.isUnavailable &&
           !event.isSalonClosed &&
+          !event.isTask &&
           !event.is_locked &&
           !isCancelledStatus(event.status)
         }
         resizableAccessor={(event) =>
           !event.isUnavailable &&
           !event.isSalonClosed &&
+          !event.isTask &&
           !event.is_locked &&
           !isCancelledStatus(event.status)
         }
