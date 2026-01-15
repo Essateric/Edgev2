@@ -36,14 +36,6 @@ const DAY_LABELS = [
   "Saturday",
 ];
 
-const getAllDayBounds = (baseDate) => {
-  const safeDate = baseDate ? new Date(baseDate) : new Date();
-  const dayStart = new Date(safeDate);
-  dayStart.setHours(0, 0, 0, 0);
-  const dayEnd = new Date(safeDate);
-  dayEnd.setHours(23, 59, 59, 999);
-  return { start: dayStart, end: dayEnd };
-};
 
 const getStaffWorkingBounds = (baseDate, staffId, stylists) => {
   if (!baseDate || !staffId) return null;
@@ -63,11 +55,8 @@ const getStaffWorkingBounds = (baseDate, staffId, stylists) => {
   return { start, end };
 };
 
-const resolveAllDayBounds = (baseDate, staffId, stylists) => {
-  return (
-    getStaffWorkingBounds(baseDate, staffId, stylists) || getAllDayBounds(baseDate)
-  );
-};
+const resolveAllDayBounds = (baseDate, staffId, stylists) =>
+  getStaffWorkingBounds(baseDate, staffId, stylists);
 
 export default function ScheduleTaskModal({
   isOpen,
@@ -254,9 +243,17 @@ setTaskTypeId(
 
   const onPrimarySave = async () => {
     if (!supabase) return toast.error("No Supabase client available");
-    const bounds = allDay ? getAllDayBounds(start || end) : { start, end };
-const dayStart = bounds?.start;
-const dayEnd = bounds?.end;
+    const baseDate = start || end || slot?.start || new Date();
+    const primaryStaffId = staffIds[0] || slot?.resourceId || null;
+    const bounds = allDay
+      ? resolveAllDayBounds(baseDate, primaryStaffId, stylists)
+      : { start, end };
+    const dayStart = bounds?.start;
+    const dayEnd = bounds?.end;
+
+    if (allDay && !resolveAllDayBounds(baseDate, primaryStaffId, stylists)) {
+      return toast.error("All-day tasks must match staff working hours.");
+    }
 
 
     if (!dayStart || !dayEnd || !(dayEnd > dayStart)) {
@@ -447,13 +444,27 @@ const dayEnd = bounds?.end;
               checked={allDay}
              onChange={(e) => {
                 const checked = !!e.target.checked;
-                setAllDay(checked);
+
                 if (checked) {
-                 const { start: dayStart, end: dayEnd } = getAllDayBounds(start || end);
-setStart(dayStart);
-setEnd(dayEnd);
+                   const baseDate = start || end || slot?.start || new Date();
+                  const primaryStaffId = staffIds[0] || slot?.resourceId || null;
+                  const bounds = resolveAllDayBounds(
+                    baseDate,
+                    primaryStaffId,
+                    stylists
+                  );
+                  if (!bounds) {
+                    toast.error("No working hours found for this staff member.");
+                    setAllDay(false);
+                    return;
+                  }
+                  setAllDay(true);
+                  setStart(bounds.start);
+                  setEnd(bounds.end);
+                  return;          
 
                 }
+                 setAllDay(false);
               }}
               disabled={saving}
             />

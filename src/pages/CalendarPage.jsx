@@ -766,9 +766,29 @@ if (sbErr) throw sbErr;
        // ✅ Prevent "task events" (non-bookings) from being updated as bookings by mistake
      if (event?.isTask) return;
 
- if (event?.isScheduleBlock && event?.blockSource === "schedule_blocks") {
-        const { start: s, end: e } = clampRange(start, end);
+  if (event?.isScheduleBlock && event?.blockSource === "schedule_blocks") {
+        let { start: s, end: e } = clampRange(start, end);
         const rid = resourceId ?? event.resourceId;
+          const previousStaffId = event.staff_id || event.resourceId || null;
+        const previousWindow = getStaffWorkingWindow(
+          previousStaffId,
+          event.start,
+          stylistList
+        );
+        const isAllDayWindow =
+          !!previousWindow &&
+          event.start.getTime() === previousWindow.start.getTime() &&
+          event.end.getTime() === previousWindow.end.getTime();
+
+        if (isAllDayWindow) {
+          const targetWindow = getStaffWorkingWindow(rid, s, stylistList);
+          if (!targetWindow) {
+            toast.error("No working hours found for that staff member.");
+            return;
+          }
+          s = targetWindow.start;
+          e = targetWindow.end;
+        }
 
         setScheduledTasks((prev) =>
           prev.map((ev) =>
