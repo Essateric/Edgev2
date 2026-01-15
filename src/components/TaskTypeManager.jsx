@@ -206,107 +206,131 @@ export default function TaskTypeManager() {
       </div>
 
       {/* Add form */}
-      <form
-        onSubmit={handleAddTaskType}
-        className="bg-white border border-gray-200 rounded p-4"
+<form
+  onSubmit={handleAddTaskType}
+  className="bg-white border border-gray-200 rounded p-4"
+>
+  <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
+    {/* Name */}
+    <div className="md:col-span-5 space-y-2">
+      <label className="block text-sm font-medium text-gray-700">
+        Task type name
+      </label>
+      <input
+        type="text"
+        value={newName}
+        onChange={(e) => setNewName(e.target.value)}
+        className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-bronze focus:border-transparent"
+        placeholder="e.g. Holiday, Training, Blocked"
+        disabled={adding}
+      />
+
+      {hasIsActiveColumn && (
+        <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+          <input
+            type="checkbox"
+            checked={isActive}
+            onChange={(e) => setIsActive(e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300 text-bronze focus:ring-bronze"
+            disabled={adding}
+          />
+          Active immediately
+        </label>
+      )}
+    </div>
+
+    {/* Category */}
+    <div className="md:col-span-5 space-y-2">
+      <label className="block text-sm font-medium text-gray-700">Category</label>
+      <select
+        value={isNewCategory ? "__new__" : categorySelection}
+        onChange={(e) => {
+          const v = e.target.value;
+          setCategorySelection(v);
+          if (v !== "__new__") setCustomCategory("");
+        }}
+        className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-bronze focus:border-transparent"
+        disabled={adding}
       >
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-          {/* Name */}
-          <div className="md:col-span-4 space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Task type name</label>
-            <input
-              type="text"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-bronze focus:border-transparent"
-              placeholder="e.g. Holiday, Training, Blocked"
-              disabled={adding}
-            />
-            <label className="inline-flex items-center gap-2 text-sm text-gray-700">
-              <input
-                type="checkbox"
-                checked={isActive}
-                onChange={(e) => setIsActive(e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300 text-bronze focus:ring-bronze"
-                disabled={adding}
-              />
-              Active immediately
-            </label>
-          </div>
+        <option value="">Select a category</option>
+        {categoryOptions.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+        <option value="__new__">Add new category…</option>
+      </select>
 
-          {/* Category */}
-          <div className="md:col-span-4 space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Category</label>
-            <select
-              value={isNewCategory ? "__new__" : categorySelection}
-              onChange={(e) => {
-                const v = e.target.value;
-                setCategorySelection(v);
-                if (v !== "__new__") setCustomCategory("");
-              }}
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-bronze focus:border-transparent"
-              disabled={adding}
-            >
-              <option value="">Select a category</option>
-              {categoryOptions.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-              <option value="__new__">Add new category…</option>
-            </select>
+      {isNewCategory && (
+        <input
+          type="text"
+          value={customCategory}
+          onChange={(e) => setCustomCategory(e.target.value)}
+          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-bronze focus:border-transparent"
+          placeholder="Enter new category"
+          disabled={adding}
+        />
+      )}
+    </div>
 
-            {isNewCategory && (
-              <input
-                type="text"
-                value={customCategory}
-                onChange={(e) => setCustomCategory(e.target.value)}
-                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-bronze focus:border-transparent"
-                placeholder="Enter new category"
-                disabled={adding}
-              />
-            )}
-          </div>
+    {/* Color + Add */}
+ {/* Color + Add */}
+<div className="md:col-span-4 space-y-2">
+  <label className="block text-sm font-medium text-gray-700">Color</label>
 
-          {/* Color */}
-          <div className="md:col-span-3 space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Task color</label>
-            <div className="grid grid-cols-5 gap-2">
-              {COLOR_PALETTE.map((color) => (
-                <button
-                  key={color}
-                  type="button"
-                  onClick={() => setNewColor(color)}
-                  className={`h-7 w-7 rounded-full border ${
-                    newColor === color ? "ring-2 ring-bronze" : "border-gray-200"
-                  }`}
-                  style={{ backgroundColor: color }}
-                  aria-label={`Select color ${color}`}
-                  disabled={adding}
-                />
-              ))}
-            </div>
-            <input
-              type="color"
-              value={newColor}
-              onChange={(e) => setNewColor(e.target.value)}
-              className="h-10 w-full rounded border border-gray-300"
-              disabled={adding}
-            />
-          </div>
+  {/* Preview row (always visible) */}
+  <div className="flex items-center justify-between gap-2">
+    <div className="flex items-center gap-2 min-w-0">
+      <span
+        className="h-4 w-4 rounded-full border border-gray-300 shrink-0"
+        style={{ backgroundColor: newColor || "#e5e7eb" }}
+        title={newColor || "No color"}
+      />
+      <span className="text-xs text-gray-500 truncate">
+        {newColor ? newColor : "No color"}
+      </span>
+    </div>
 
-          {/* Button */}
-          <div className="md:col-span-1 md:flex md:justify-end">
-            <Button
-              type="submit"
-              disabled={adding}
-              className="w-full md:w-auto !text-sm !py-2 !px-4 whitespace-nowrap"
-            >
-              {adding ? "Adding..." : "Add"}
-            </Button>
-          </div>
-        </div>
-      </form>
+    <button
+      type="button"
+      onClick={() => setNewColor("")}
+      className="h-7 px-2 text-[11px] rounded border border-gray-200 text-gray-600 shrink-0"
+      disabled={adding}
+      title="No color"
+    >
+      None
+    </button>
+  </div>
+
+  {/* Palette (grid, not flex-wrap) */}
+  <div className="grid grid-cols-5 gap-2">
+    {COLOR_PALETTE.map((color) => (
+      <button
+        key={color}
+        type="button"
+        onClick={() => setNewColor(color)}
+        className={`h-6 w-6 rounded-full border border-gray-200 ${
+          newColor === color ? "ring-2 ring-bronze ring-offset-1" : ""
+        }`}
+        style={{ backgroundColor: color }}
+        aria-label={`Select color ${color}`}
+        disabled={adding}
+      />
+    ))}
+  </div>
+
+  <Button
+    type="submit"
+    disabled={adding}
+    className="w-full !text-sm !py-2 !px-3"
+  >
+    {adding ? "Adding..." : "Add"}
+  </Button>
+</div>
+
+  </div>
+</form>
+
 
       {/* Existing */}
       <div className="space-y-2">
@@ -393,53 +417,57 @@ export default function TaskTypeManager() {
                       </div>
                     </form>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
-                      <div className="md:col-span-4">
-                        <div className="font-medium text-gray-900">{type?.[nameField] || "Unnamed type"}</div>
-                        <div className="text-xs text-gray-500">{type.id}</div>
-                      </div>
+   <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center">
+  <div className="sm:col-span-5">
+    <div className="font-medium text-gray-900">
+      {type?.[nameField] || "Unnamed type"}
+    </div>
+    <div className="text-xs text-gray-500">{type.category || "—"}</div>
+  </div>
 
-                      <div className="md:col-span-3">
-                        <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-700">
-                          {type.category || "—"}
-                        </span>
-                      </div>
+  <div className="sm:col-span-2 flex items-center gap-2">
+    <span
+      className="h-3 w-3 rounded-full border border-gray-300"
+      style={{ backgroundColor: type?.color || "#e5e7eb" }}
+      title={type?.color || "No color"}
+    />
+    <span className="text-xs text-gray-500">
+      {type?.color ? type.color : "No color"}
+    </span>
+  </div>
 
-                      <div className="md:col-span-2 flex items-center gap-2">
-                        <span
-                          className="h-4 w-4 rounded-full border border-gray-200"
-                          style={{ backgroundColor: hex }}
-                        />
-                        <span className="text-xs text-gray-500">{type.color || "—"}</span>
-                      </div>
+  <div className="sm:col-span-2">
+    {hasIsActiveColumn && (
+      <span
+        className={`text-xs font-semibold px-2 py-1 rounded ${
+          type.is_active
+            ? "bg-green-100 text-green-700"
+            : "bg-gray-200 text-gray-700"
+        }`}
+      >
+        {type.is_active ? "Active" : "Inactive"}
+      </span>
+    )}
+  </div>
 
-                      <div className="md:col-span-1">
-                        <span
-                          className={`text-xs font-semibold px-2 py-1 rounded ${
-                            active ? "bg-green-100 text-green-700" : "bg-gray-200 text-gray-700"
-                          }`}
-                        >
-                          {active ? "Active" : "Inactive"}
-                        </span>
-                      </div>
+  <div className="sm:col-span-3 flex items-center gap-2 sm:justify-end">
+    <Button
+      type="button"
+      onClick={() => startEdit(type)}
+      className="!py-1.5 !px-3 !text-sm"
+    >
+      Edit
+    </Button>
+    <button
+      type="button"
+      onClick={() => deleteTaskType(type)}
+      className="text-xs text-red-600 underline"
+    >
+      Remove
+    </button>
+  </div>
+</div>
 
-                      <div className="md:col-span-2 flex items-center gap-2 md:justify-end">
-                        <Button
-                          type="button"
-                          onClick={() => startEdit(type)}
-                          className="!py-1.5 !px-3 !text-sm"
-                        >
-                          Edit
-                        </Button>
-                        <button
-                          type="button"
-                          onClick={() => deleteTaskType(type)}
-                          className="text-xs text-red-600 underline"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
                   )}
                 </div>
               );
