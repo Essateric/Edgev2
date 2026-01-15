@@ -868,7 +868,7 @@ function BookingPopUpBody({
                 </div>
 
                 {repeatSummary && (
-                  <div className="text-sm text-gray-600 whitespace-nowrap">
+                  <div className="text-sm text-gray-800 whitespace-nowrap">
                     Completed: {repeatSummary.attendedCount}/
                     {repeatSummary.pastCount}
                   </div>
@@ -925,12 +925,12 @@ function BookingPopUpBody({
                         </div>
 
                         {/* Col 2: stylist */}
-                        <div className="text-gray-700 truncate">
+                        <div className="text-gray-800 truncate">
                           {stylistName}
                         </div>
 
                         {/* Col 3: status */}
-                        <div className="text-gray-600 whitespace-nowrap">
+                        <div className="text-gray-800 whitespace-nowrap">
                           {rightLabel}
                         </div>
                       </div>
@@ -940,7 +940,7 @@ function BookingPopUpBody({
               )}
 
               {!repeatSummary && (
-                <div className="mt-2 text-sm text-gray-500">
+                <div className="mt-2 text-sm text-gray-800">
                   This booking isn’t part of a repeat series.
                 </div>
               )}

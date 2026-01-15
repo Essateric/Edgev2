@@ -166,6 +166,10 @@
   font-size: 0.95rem;
 }
 
+.booking-popup--larger-text select,
+.booking-popup--larger-text select option {
+  color: #111827;
+}
 
 /* === Modal visibility hard-override === */
 /* Make sure the modal overlay and panel sit above the calendar/grid */
