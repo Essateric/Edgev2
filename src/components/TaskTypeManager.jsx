@@ -1,8 +1,22 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import Button from "./Button.jsx";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { supabase as defaultSupabase } from "../supabaseClient.js";
+
+const DEFAULT_COLOR = "#b0702e";
+const COLOR_PALETTE = [
+  "#1f2937",
+  "#7c3aed",
+  "#2563eb",
+  "#0ea5e9",
+  "#14b8a6",
+  "#16a34a",
+  "#f59e0b",
+  "#f97316",
+  "#ef4444",
+  "#ec4899",
+];
 
 export default function TaskTypeManager() {
   const { supabaseClient } = useAuth();
@@ -10,23 +24,22 @@ export default function TaskTypeManager() {
 
   const [taskTypes, setTaskTypes] = useState([]);
   const [loading, setLoading] = useState(true);
+
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [isActive, setIsActive] = useState(true);
   const [categorySelection, setCategorySelection] = useState("");
   const [customCategory, setCustomCategory] = useState("");
+  const [newColor, setNewColor] = useState(DEFAULT_COLOR);
+
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState("");
   const [editingIsActive, setEditingIsActive] = useState(true);
   const [editingCategory, setEditingCategory] = useState("");
+  const [editingColor, setEditingColor] = useState(DEFAULT_COLOR);
 
-  const hasIsActiveColumn = useMemo(
-    () =>
-      taskTypes.some((t) =>
-        Object.prototype.hasOwnProperty.call(t, "is_active")
-      ),
-    [taskTypes]
-  );
+  // Your schema DOES have is_active, so we can safely show it
+  const hasIsActiveColumn = true;
 
   const nameField = useMemo(() => {
     const sample = taskTypes[0] || {};
@@ -37,9 +50,9 @@ export default function TaskTypeManager() {
     );
   }, [taskTypes]);
 
-   const categoryOptions = useMemo(() => {
+  const categoryOptions = useMemo(() => {
     const categories = (taskTypes || [])
-      .map((type) => String(type?.category || "").trim())
+      .map((t) => String(t?.category || "").trim())
       .filter(Boolean);
     return Array.from(new Set(categories)).sort((a, b) =>
       a.toLowerCase().localeCompare(b.toLowerCase())
@@ -47,10 +60,7 @@ export default function TaskTypeManager() {
   }, [taskTypes]);
 
   const isNewCategory = categorySelection === "__new__";
-  const resolvedCategory = isNewCategory
-    ? customCategory.trim()
-    : categorySelection.trim();
-
+  const resolvedCategory = (isNewCategory ? customCategory : categorySelection).trim();
 
   const sortedTypes = useMemo(() => {
     const list = [...taskTypes];
@@ -61,11 +71,9 @@ export default function TaskTypeManager() {
     });
   }, [taskTypes, nameField]);
 
-  const refreshTaskTypes = async () => {
+  const refreshTaskTypes = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("schedule_task_types")
-      .select("*");
+    const { data, error } = await supabase.from("schedule_task_types").select("*");
     if (error) {
       console.error("Failed to fetch task types", error);
       toast.error("Could not load task types");
@@ -73,56 +81,56 @@ export default function TaskTypeManager() {
       setTaskTypes(data || []);
     }
     setLoading(false);
-  };
+  }, [supabase]);
 
   useEffect(() => {
     refreshTaskTypes();
-  }, [supabase]);
+  }, [refreshTaskTypes]);
 
   const handleAddTaskType = async (event) => {
     event?.preventDefault();
-    const trimmedName = newName.trim();
-     const trimmedCategory = resolvedCategory;
 
-    if (!trimmedName) {
-      toast.error("Task type name is required");
-      return;
-    }
-     if (!trimmedCategory) {
-      toast.error("Category is required");
-      return;
-    }
+    const trimmedName = newName.trim();
+    const trimmedCategory = resolvedCategory;
+    const trimmedColor = String(newColor || "").trim();
+
+    if (!trimmedName) return toast.error("Task type name is required");
+    if (!trimmedCategory) return toast.error("Category is required");
 
     setAdding(true);
-    const payload = { [nameField]: trimmedName, category: trimmedCategory };
 
-    if (hasIsActiveColumn) {
-      payload.is_active = isActive;
-    }
+    const payload = {
+      [nameField]: trimmedName,
+      category: trimmedCategory,
+      color: trimmedColor || null,
+      ...(hasIsActiveColumn ? { is_active: isActive } : {}),
+    };
 
-    const { error } = await supabase
-      .from("schedule_task_types")
-      .insert([payload]);
+    const { error } = await supabase.from("schedule_task_types").insert([payload]);
 
     if (error) {
       console.error("Failed to add task type", error);
-      toast.error("Could not add task type");
+      toast.error(error?.message || "Could not add task type");
     } else {
       toast.success("Task type added");
       setNewName("");
       setIsActive(true);
       setCategorySelection("");
       setCustomCategory("");
+      setNewColor(DEFAULT_COLOR);
       await refreshTaskTypes();
     }
+
     setAdding(false);
   };
-const startEdit = (type) => {
+
+  const startEdit = (type) => {
     if (!type?.id) return;
     setEditingId(type.id);
     setEditingName(type?.[nameField] || "");
     setEditingIsActive(type.is_active !== false);
     setEditingCategory(type.category || "");
+    setEditingColor(type.color || DEFAULT_COLOR);
   };
 
   const cancelEdit = () => {
@@ -130,28 +138,26 @@ const startEdit = (type) => {
     setEditingName("");
     setEditingIsActive(true);
     setEditingCategory("");
+    setEditingColor(DEFAULT_COLOR);
   };
 
   const saveEdit = async (event) => {
     event?.preventDefault();
     if (!editingId) return;
+
     const trimmedName = editingName.trim();
     const trimmedCategory = editingCategory.trim();
+    const trimmedColor = String(editingColor || "").trim();
 
-    if (!trimmedName) {
-      toast.error("Task type name is required");
-      return;
-    }
+    if (!trimmedName) return toast.error("Task type name is required");
+    if (!trimmedCategory) return toast.error("Category is required");
 
-    if (!trimmedCategory) {
-      toast.error("Category is required");
-      return;
-    }
-
-    const payload = { [nameField]: trimmedName, category: trimmedCategory };
-    if (hasIsActiveColumn) {
-      payload.is_active = editingIsActive;
-    }
+    const payload = {
+      [nameField]: trimmedName,
+      category: trimmedCategory,
+      color: trimmedColor || null,
+      ...(hasIsActiveColumn ? { is_active: editingIsActive } : {}),
+    };
 
     const { error } = await supabase
       .from("schedule_task_types")
@@ -160,7 +166,7 @@ const startEdit = (type) => {
 
     if (error) {
       console.error("Failed to update task type", error);
-      toast.error("Could not update task type");
+      toast.error(error?.message || "Could not update task type");
       return;
     }
 
@@ -171,19 +177,17 @@ const startEdit = (type) => {
 
   const deleteTaskType = async (type) => {
     if (!type?.id) return;
+
     const confirmed = window.confirm(
       `Delete scheduled task type "${type?.[nameField] || "this"}"?`
     );
     if (!confirmed) return;
 
-    const { error } = await supabase
-      .from("schedule_task_types")
-      .delete()
-      .eq("id", type.id);
+    const { error } = await supabase.from("schedule_task_types").delete().eq("id", type.id);
 
     if (error) {
       console.error("Failed to delete task type", error);
-      toast.error("Could not delete task type");
+      toast.error(error?.message || "Could not delete task type");
       return;
     }
 
@@ -192,69 +196,32 @@ const startEdit = (type) => {
     await refreshTaskTypes();
   };
 
-
   return (
-    <div className="bg-gray-100 p-4 rounded shadow-sm space-y-4">
+    <div className="bg-gray-100 p-4 rounded shadow-sm space-y-4 max-w-5xl">
       <div className="space-y-1">
-          <h2 className="text-lg font-semibold text-bronze">Scheduled Tasks</h2>
+        <h2 className="text-lg font-semibold text-bronze">Scheduled Tasks</h2>
         <p className="text-sm text-gray-600">
-          Add, edit, or remove scheduled task types used to block out time on
-          the calendar.
+          Add, edit, or remove scheduled task types used to block out time on the calendar.
         </p>
       </div>
 
+      {/* Add form */}
       <form
         onSubmit={handleAddTaskType}
-        className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end"
+        className="bg-white border border-gray-200 rounded p-4"
       >
-        <div className="md:col-span-2 space-y-2">
-          <label className="block text-sm font-medium text-gray-700">
-            Task type name
-          </label>
-          <input
-            type="text"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            className="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-bronze focus:border-transparent"
-            placeholder="e.g. Holiday, Training, Blocked"
-            disabled={adding}
-          />
-          </div>
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-gray-700">
-            Category
-          </label>
-          <select
-            value={isNewCategory ? "__new__" : categorySelection}
-            onChange={(e) => {
-              const value = e.target.value;
-              setCategorySelection(value);
-              if (value !== "__new__") {
-                setCustomCategory("");
-              }
-            }}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-bronze focus:border-transparent"
-            disabled={adding}
-          >
-            <option value="">Select a category</option>
-            {categoryOptions.map((category) => (
-              <option key={category} value={category}>
-                {category}
-              </option>
-            ))}
-            <option value="__new__">Add new category…</option>
-          </select>
-          {isNewCategory && (
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+          {/* Name */}
+          <div className="md:col-span-4 space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Task type name</label>
             <input
               type="text"
-              value={customCategory}
-              onChange={(e) => setCustomCategory(e.target.value)}
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-bronze focus:border-transparent"
-              placeholder="Enter new category"
+              placeholder="e.g. Holiday, Training, Blocked"
               disabled={adding}
             />
-          )}
-          {hasIsActiveColumn && (
             <label className="inline-flex items-center gap-2 text-sm text-gray-700">
               <input
                 type="checkbox"
@@ -265,58 +232,155 @@ const startEdit = (type) => {
               />
               Active immediately
             </label>
-          )}
-        </div>
-        <div className="flex md:justify-end">
-          <Button
-            type="submit"
-            onClick={handleAddTaskType}
-            disabled={adding}
-            className="w-full md:w-auto"
-          >
-            {adding ? "Adding..." : "Add Task Type"}
-          </Button>
+          </div>
+
+          {/* Category */}
+          <div className="md:col-span-4 space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Category</label>
+            <select
+              value={isNewCategory ? "__new__" : categorySelection}
+              onChange={(e) => {
+                const v = e.target.value;
+                setCategorySelection(v);
+                if (v !== "__new__") setCustomCategory("");
+              }}
+              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-bronze focus:border-transparent"
+              disabled={adding}
+            >
+              <option value="">Select a category</option>
+              {categoryOptions.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+              <option value="__new__">Add new category…</option>
+            </select>
+
+            {isNewCategory && (
+              <input
+                type="text"
+                value={customCategory}
+                onChange={(e) => setCustomCategory(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-bronze focus:border-transparent"
+                placeholder="Enter new category"
+                disabled={adding}
+              />
+            )}
+          </div>
+
+          {/* Color */}
+          <div className="md:col-span-3 space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Task color</label>
+            <div className="grid grid-cols-5 gap-2">
+              {COLOR_PALETTE.map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  onClick={() => setNewColor(color)}
+                  className={`h-7 w-7 rounded-full border ${
+                    newColor === color ? "ring-2 ring-bronze" : "border-gray-200"
+                  }`}
+                  style={{ backgroundColor: color }}
+                  aria-label={`Select color ${color}`}
+                  disabled={adding}
+                />
+              ))}
+            </div>
+            <input
+              type="color"
+              value={newColor}
+              onChange={(e) => setNewColor(e.target.value)}
+              className="h-10 w-full rounded border border-gray-300"
+              disabled={adding}
+            />
+          </div>
+
+          {/* Button */}
+          <div className="md:col-span-1 md:flex md:justify-end">
+            <Button
+              type="submit"
+              disabled={adding}
+              className="w-full md:w-auto !text-sm !py-2 !px-4 whitespace-nowrap"
+            >
+              {adding ? "Adding..." : "Add"}
+            </Button>
+          </div>
         </div>
       </form>
 
+      {/* Existing */}
       <div className="space-y-2">
-        <h3 className="text-sm font-semibold text-gray-700">Existing tasks</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-700">Existing tasks</h3>
+          <span className="text-xs text-gray-500">{sortedTypes.length} total</span>
+        </div>
+
         {loading ? (
           <p className="text-sm text-gray-600">Loading task types...</p>
         ) : sortedTypes.length ? (
-          <ul className="divide-y divide-gray-200 bg-white rounded border border-gray-200">
-            {sortedTypes.map((type) => (
-              <li
-                key={type.id || type[nameField]}
-                className="flex flex-col gap-3 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div className="flex flex-col gap-1">
+          <div className="bg-white rounded border border-gray-200 overflow-hidden">
+            {sortedTypes.map((type) => {
+              const active = type.is_active !== false;
+              const hex = type.color || "#e5e7eb";
+
+              return (
+                <div
+                  key={type.id || type[nameField]}
+                  className="px-4 py-3 border-b border-gray-200 last:border-b-0"
+                >
                   {editingId === type.id ? (
                     <form
                       onSubmit={saveEdit}
-                      className="flex flex-col gap-2 sm:flex-row sm:items-center"
+                      className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center"
                     >
-                      <input
-                        type="text"
-                        value={editingName}
-                        onChange={(e) => setEditingName(e.target.value)}
-                        className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-bronze focus:border-transparent"
-                      />
-                      {hasIsActiveColumn && (
+                      <div className="md:col-span-4">
+                        <input
+                          type="text"
+                          value={editingName}
+                          onChange={(e) => setEditingName(e.target.value)}
+                          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-bronze focus:border-transparent"
+                        />
+                      </div>
+
+                      <div className="md:col-span-4">
+                        <input
+                          type="text"
+                          value={editingCategory}
+                          onChange={(e) => setEditingCategory(e.target.value)}
+                          className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-bronze focus:border-transparent"
+                          placeholder="Category"
+                        />
+                      </div>
+
+                      <div className="md:col-span-2 flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={editingColor}
+                          onChange={(e) => setEditingColor(e.target.value)}
+                          className="h-9 w-12 rounded border border-gray-300"
+                          aria-label="Edit task color"
+                        />
+                        <span
+                          className="h-4 w-4 rounded-full border border-gray-200"
+                          style={{ backgroundColor: editingColor }}
+                          aria-hidden="true"
+                        />
+                      </div>
+
+                      <div className="md:col-span-1">
                         <label className="inline-flex items-center gap-2 text-sm text-gray-700">
                           <input
                             type="checkbox"
                             checked={editingIsActive}
-                            onChange={(e) =>
-                              setEditingIsActive(e.target.checked)
-                            }
+                            onChange={(e) => setEditingIsActive(e.target.checked)}
                             className="h-4 w-4 rounded border-gray-300 text-bronze focus:ring-bronze"
                           />
                           Active
                         </label>
-                      )}
-                      <div className="flex gap-2">
-                        <Button type="submit" className="!py-1 !px-3 text-sm">
+                      </div>
+
+                      <div className="md:col-span-1 flex gap-2 md:justify-end">
+                        <Button type="submit" className="!py-1.5 !px-3 !text-sm">
                           Save
                         </Button>
                         <button
@@ -329,50 +393,58 @@ const startEdit = (type) => {
                       </div>
                     </form>
                   ) : (
-                    <>
-                      <span className="font-medium text-gray-900">
-                        {type?.[nameField] || "Unnamed type"}
-                      </span>
-                      <span className="text-xs text-gray-500">
-                        ID: {type?.id || "—"}
-                      </span>
-                    </>
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+                      <div className="md:col-span-4">
+                        <div className="font-medium text-gray-900">{type?.[nameField] || "Unnamed type"}</div>
+                        <div className="text-xs text-gray-500">{type.id}</div>
+                      </div>
+
+                      <div className="md:col-span-3">
+                        <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-700">
+                          {type.category || "—"}
+                        </span>
+                      </div>
+
+                      <div className="md:col-span-2 flex items-center gap-2">
+                        <span
+                          className="h-4 w-4 rounded-full border border-gray-200"
+                          style={{ backgroundColor: hex }}
+                        />
+                        <span className="text-xs text-gray-500">{type.color || "—"}</span>
+                      </div>
+
+                      <div className="md:col-span-1">
+                        <span
+                          className={`text-xs font-semibold px-2 py-1 rounded ${
+                            active ? "bg-green-100 text-green-700" : "bg-gray-200 text-gray-700"
+                          }`}
+                        >
+                          {active ? "Active" : "Inactive"}
+                        </span>
+                      </div>
+
+                      <div className="md:col-span-2 flex items-center gap-2 md:justify-end">
+                        <Button
+                          type="button"
+                          onClick={() => startEdit(type)}
+                          className="!py-1.5 !px-3 !text-sm"
+                        >
+                          Edit
+                        </Button>
+                        <button
+                          type="button"
+                          onClick={() => deleteTaskType(type)}
+                          className="text-xs text-red-600 underline"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {hasIsActiveColumn && (
-                    <span
-                      className={`text-xs font-semibold px-2 py-1 rounded ${
-                        type.is_active
-                          ? "bg-green-100 text-green-700"
-                          : "bg-gray-200 text-gray-700"
-                      }`}
-                    >
-                      {type.is_active ? "Active" : "Inactive"}
-                    </span>
-                  )}
-                  {type?.id ? (
-                    <>
-                      <Button
-                        type="button"
-                        onClick={() => startEdit(type)}
-                        className="!py-1 !px-3 text-sm"
-                      >
-                        Edit
-                      </Button>
-                      <button
-                        type="button"
-                        onClick={() => deleteTaskType(type)}
-                        className="text-xs text-red-600 underline"
-                      >
-                        Remove
-                      </button>
-                    </>
-                  ) : null}
-                </div>
-              </li>
-            ))}
-          </ul>
+              );
+            })}
+          </div>
         ) : (
           <p className="text-sm text-gray-600">No task types added yet.</p>
         )}
