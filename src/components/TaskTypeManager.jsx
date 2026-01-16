@@ -160,31 +160,29 @@ export default function TaskTypeManager() {
       ...(hasIsActiveColumn ? { is_active: editingIsActive } : {}),
     };
 
-     const { data: updated, error } = await supabase
-      .from("schedule_task_types")
-      .update(payload)
-      .eq("id", editingId)
-      .select("*");
+const { data, error } = await supabase
+  .from("schedule_task_types")
+  .update(payload)
+  .eq("id", editingId)
+  .select("*"); // returns an array
 
-    if (error) {
-      console.error("Failed to update task type", error);
-      toast.error(error?.message || "Could not update task type");
-      return;
-    }
+if (error) {
+  console.error("Failed to update task type", error);
+  toast.error(error?.message || "Could not update task type");
+  return;
+}
 
-    toast.success("Task type updated");
-     if (updated?.length) {
-      setTaskTypes((prev) =>
-        prev.map((type) => (type.id === editingId ? updated[0] : type))
-      );
-    } else {
-      await refreshTaskTypes();
-      cancelEdit();
-    }
-    
-    
+const updated = data?.[0] || null;
+if (!updated) {
+  toast.error("Update blocked (no permission) or task not found");
+  return;
+}
+
+toast.success("Task type updated");
+setTaskTypes((prev) => prev.map((t) => (t.id === editingId ? updated : t)));
+cancelEdit();
+
   };
-
   const deleteTaskType = async (type) => {
     if (!type?.id) return;
 
