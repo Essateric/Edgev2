@@ -130,6 +130,8 @@ const mapScheduleBlockRowToEvent = (row, staffList = []) => {
   const stylistRow = staffList.find((s) => s.id === row.staff_id);
   const taskTypeName =
     row?.schedule_task_types?.name || row?.task_type_name || "Scheduled task";
+    const taskTypeColor =
+    row?.schedule_task_types?.color || row?.task_type_color || row?.color || null;
 
   return {
     ...row,
@@ -140,6 +142,8 @@ const mapScheduleBlockRowToEvent = (row, staffList = []) => {
     staff_id: row.staff_id,
     stylistName: stylistRow?.name || stylistRow?.title || "Unknown Stylist",
     title: taskTypeName,
+     taskTypeColor,
+    color: taskTypeColor,
     isScheduleBlock: true,
     isScheduledTask: true,
     blockSource: "schedule_blocks",
@@ -443,7 +447,7 @@ useEffect(() => {
 dbgLog("schedule blocks query: BEFORE", { runId });
 const { data: scheduleBlocksData, error: sbErr } = await supabase
   .from("schedule_blocks")
-  .select("*, schedule_task_types ( id, name, category )")
+   .select("*, schedule_task_types ( id, name, category, color )")
   .eq("is_active", true);
 dbgLog("schedule blocks query: AFTER", {
   runId,
@@ -1062,7 +1066,7 @@ const handleSaveTask = async ({ action, payload }) => {
       const { data: inserted, error } = await supabase
        .from("schedule_blocks")
         .insert(rows)
-     .select("*, schedule_task_types ( id, name, category )");
+     .select("*, schedule_task_types ( id, name, category, color )");
       if (error) throw error;
 
       // immediate UI add
@@ -1129,7 +1133,7 @@ const handleSaveTask = async ({ action, payload }) => {
             is_active: true,
           })
           .eq("id", meta.id)
-          .select("*, schedule_task_types ( id, name, category )")
+          .select("*, schedule_task_types ( id, name, category, color )")
           .single();
 
         if (error) throw error;
@@ -1159,7 +1163,7 @@ const handleSaveTask = async ({ action, payload }) => {
         const { data: insertedRows, error: insertErr } = await supabase
           .from("schedule_blocks")
           .insert(rows)
-          .select("*, schedule_task_types ( id, name, category )");
+         .select("*, schedule_task_types ( id, name, category, color )");
 
         if (insertErr) throw insertErr;
 
@@ -1409,19 +1413,23 @@ const handleSaveTask = async ({ action, payload }) => {
         resizable
         onEventResize={moveEvent}
         eventPropGetter={(event) => {
-          if (event.isScheduledTask || event.isScheduleBlock) {
-            return {
-              style: {
-                zIndex: 2,
-                backgroundImage:
-                  "linear-gradient(135deg, #d0a36c, #b0702e, #391f04)",
-                color: "#fff",
-                border: "1px solid #d0a36c",
-                opacity: 0.95,
-              },
-              title: event.title,
-            };
-          }
+           if (isScheduleBlockEvent(event)) {
+          const scheduledTaskColor = event.taskTypeColor || event.color || null;
+
+          return {
+            style: {
+              zIndex: 2,
+              backgroundColor: scheduledTaskColor || undefined,
+              backgroundImage: scheduledTaskColor
+                ? undefined
+                : "linear-gradient(135deg, #d0a36c, #b0702e, #391f04)",
+              color: "#fff",
+              border: scheduledTaskColor ? "1px solid #ffffff40" : "1px solid #d0a36c",
+              opacity: 0.95,
+            },
+            title: event.title,
+          };
+        }
 
            if (event.isUnavailable) {
     return {
@@ -1475,13 +1483,17 @@ const handleSaveTask = async ({ action, payload }) => {
             };
           }
 
-          if (isScheduleBlockEvent(event) || event.isTask) {
+         if (event.isTask) {
+            const taskColor = event.color || null;
     return {
       style: {
         zIndex: 2,
-        backgroundImage: "linear-gradient(135deg, #d0a36c, #b0702e, #391f04)",
+       backgroundColor: taskColor || undefined,
+        backgroundImage: taskColor
+          ? undefined
+          : "linear-gradient(135deg, #d0a36c, #b0702e, #391f04)",
         color: "#fff",
-        border: "1px solid #d0a36c",
+       border: taskColor ? "1px solid #ffffff40" : "1px solid #d0a36c",
         opacity: 0.95,
       },
       title: event.title,

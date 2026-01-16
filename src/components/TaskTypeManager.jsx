@@ -148,6 +148,7 @@ export default function TaskTypeManager() {
     const trimmedName = editingName.trim();
     const trimmedCategory = editingCategory.trim();
     const trimmedColor = String(editingColor || "").trim();
+    const normalizedColor = trimmedColor ? trimmedColor.toLowerCase() : null;
 
     if (!trimmedName) return toast.error("Task type name is required");
     if (!trimmedCategory) return toast.error("Category is required");
@@ -155,14 +156,15 @@ export default function TaskTypeManager() {
     const payload = {
       [nameField]: trimmedName,
       category: trimmedCategory,
-      color: trimmedColor || null,
+      color: normalizedColor,
       ...(hasIsActiveColumn ? { is_active: editingIsActive } : {}),
     };
 
-    const { error } = await supabase
+     const { data: updated, error } = await supabase
       .from("schedule_task_types")
       .update(payload)
-      .eq("id", editingId);
+      .eq("id", editingId)
+      .select("*");
 
     if (error) {
       console.error("Failed to update task type", error);
@@ -171,8 +173,16 @@ export default function TaskTypeManager() {
     }
 
     toast.success("Task type updated");
-    cancelEdit();
-    await refreshTaskTypes();
+     if (updated?.length) {
+      setTaskTypes((prev) =>
+        prev.map((type) => (type.id === editingId ? updated[0] : type))
+      );
+    } else {
+      await refreshTaskTypes();
+      cancelEdit();
+    }
+    
+    
   };
 
   const deleteTaskType = async (type) => {
