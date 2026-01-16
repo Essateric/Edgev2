@@ -1272,60 +1272,68 @@ const handleSaveTask = async ({ action, payload }) => {
   return (
     <div className="p-4 metallic-bg">
 
-      <div className="flex justify-between items-center mb-4">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setVisibleDate(new Date())}
-            className="bg-bronze px-4 py-2 rounded-lg border border-black hover:bg-black hover:text-white"
-          >
-            Today
-          </button>
+   <div className="mb-4 w-full grid grid-cols-[auto_1fr_auto] items-center gap-2">
+  {/* Left */}
+  <button
+    onClick={() => setVisibleDate(new Date())}
+    className="bg-bronze px-4 py-2 rounded-lg border border-black hover:bg-black hover:text-white whitespace-nowrap"
+  >
+    Today
+  </button>
 
-          <button
-            onClick={() =>
-              setVisibleDate(
-                new Date(
-                  visibleDate.getFullYear(),
-                  visibleDate.getMonth(),
-                  visibleDate.getDate() - 1
-                )
-              )
-            }
-            className="bg-gray-200 px-3 py-1 rounded hover:bg-gray-300"
-          >
-            <ChevronLeft className="w-8 h-8 text-black" />
-          </button>
+  {/* Center (fixed-size date area so it doesn't shift) */}
+  <div className="flex items-center justify-center gap-2 min-w-0">
+    <button
+      onClick={() =>
+        setVisibleDate(
+          new Date(
+            visibleDate.getFullYear(),
+            visibleDate.getMonth(),
+            visibleDate.getDate() - 1
+          )
+        )
+      }
+      className="bg-gray-200 px-3 py-1 rounded hover:bg-gray-300 flex-none"
+    >
+      <ChevronLeft className="w-8 h-8 text-black" />
+    </button>
 
-          <div className="font-semibold">
-            <h1 className="text-2xl font-bold metallic-text p-5">
-              {format(visibleDate, "eeee dd MMMM yyyy")}
-            </h1>
-          </div>
+    <h1
+      className="
+        text-2xl font-bold metallic-text p-5
+        text-center whitespace-nowrap truncate tabular-nums
+        w-[min(40ch,100%)]
+      "
+      title={format(visibleDate, "eeee dd MMMM yyyy")}
+    >
+      {format(visibleDate, "eeee dd MMMM yyyy")}
+    </h1>
 
-          <button
-            onClick={() =>
-              setVisibleDate(
-                new Date(
-                  visibleDate.getFullYear(),
-                  visibleDate.getMonth(),
-                  visibleDate.getDate() + 1
-                )
-              )
-            }
-            className="bg-gray-200 px-3 py-1 rounded hover:bg-gray-300"
-          >
-            <ChevronRight className="w-8 h-8 text-black" />
-          </button>
+    <button
+      onClick={() =>
+        setVisibleDate(
+          new Date(
+            visibleDate.getFullYear(),
+            visibleDate.getMonth(),
+            visibleDate.getDate() + 1
+          )
+        )
+      }
+      className="bg-gray-200 px-3 py-1 rounded hover:bg-gray-300 flex-none"
+    >
+      <ChevronRight className="w-8 h-8 text-black" />
+    </button>
+  </div>
 
-          <button
-            onClick={() => setIsCalendarOpen(true)}
-            className="bg-bronze border border-black hover:bg-black text-white px-4 py-2 rounded flex items-center gap-2"
-          >
-            <CalendarIcon className="w-4 h-4" />
-            <span>Go to Date</span>
-          </button>
-        </div>
-      </div>
+  {/* Right */}
+  <button
+    onClick={() => setIsCalendarOpen(true)}
+    className="bg-bronze border border-black hover:bg-black text-white px-4 py-2 rounded flex items-center gap-2 whitespace-nowrap"
+  >
+    <CalendarIcon className="w-4 h-4" />
+    <span>Go to Date</span>
+  </button>
+</div>
 
        {taskError && (
         <div className="mb-3 p-3 bg-red-50 text-red-700 border border-red-200 rounded">
