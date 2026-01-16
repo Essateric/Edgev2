@@ -851,7 +851,6 @@ if (sbErr) throw sbErr;
              start: s.toISOString(),
            end: e.toISOString(),
             resource_id: rid,
-            resource_id: rid,
             duration: newDuration,
           })
           .eq("id", event.id);
@@ -1272,7 +1271,7 @@ const handleSaveTask = async ({ action, payload }) => {
   return (
     <div className="p-4 metallic-bg">
 
-   <div className="mb-4 w-full grid grid-cols-[auto_1fr_auto] items-center gap-2">
+<div className="mb-4 w-full grid grid-cols-[auto_1fr_auto] items-center gap-2">
   {/* Left */}
   <button
     onClick={() => setVisibleDate(new Date())}
@@ -1334,6 +1333,7 @@ const handleSaveTask = async ({ action, payload }) => {
     <span>Go to Date</span>
   </button>
 </div>
+
 
        {taskError && (
         <div className="mb-3 p-3 bg-red-50 text-red-700 border border-red-200 rounded">
