@@ -7,6 +7,8 @@ import Button from "../Button";
 import ClientHistoryFullScreen from "../../pages/ClientHistory";
 import { useAuth } from "../../contexts/AuthContext";
 
+import { formatGBP } from "../../lib/money";
+
 /**
  * Props:
  * - isOpen, onClose
@@ -440,7 +442,7 @@ export default function ClientNotesModal({
 
     const { data, error } = await db
       .from("bookings")
-      .select("id, booking_id, start, title, category, resource_id")
+ .select("id, booking_id, start, title, category, resource_id, price")
       .or(filters.join(","))
       .order("start", { ascending: false })
       .order("id", { ascending: true });
@@ -703,6 +705,7 @@ export default function ClientNotesModal({
                       Service provider
                     </th>
                     <th className="text-left py-2 pr-0 font-semibold">Service</th>
+                     <th className="text-right py-2 pl-2 font-semibold w-[90px]">Cost</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -714,11 +717,16 @@ export default function ClientNotesModal({
                     const provider = providerMap[h.resource_id] || "—";
                     const service =
                       (h.category ? `${h.category}: ` : "") + (h.title || "");
+                       const cost =
+                      h.price == null || Number.isNaN(Number(h.price))
+                        ? "—"
+                        : formatGBP(h.price);
                     return (
                       <tr key={h.id} className="border-b align-top">
                         <td className="py-2 pr-2 whitespace-nowrap">{dateTime}</td>
                         <td className="py-2 pr-2 whitespace-nowrap">{provider}</td>
                         <td className="py-2 pr-0">{service || "—"}</td>
+                         <td className="py-2 pl-2 text-right whitespace-nowrap">{cost}</td>
                       </tr>
                     );
                   })}
