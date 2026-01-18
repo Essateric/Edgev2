@@ -1398,7 +1398,7 @@ const handleSaveTask = async ({ action, payload }) => {
       {taskSaving && (
         <div className="mb-2 text-sm text-gray-600">Saving task…</div>
       )}
-
+<DndProvider backend={isTouch ? TouchBackend : HTML5Backend} options={isTouch ? { enableMouseEvents: true } : undefined}>
 <DnDCalendar
   localizer={localizer}
   events={calendarEvents}
@@ -1594,7 +1594,8 @@ const handleSaveTask = async ({ action, payload }) => {
     !event.is_locked &&
     !isCancelledStatus(event.status)
   }
-/>
+/></DndProvider>
+
 
 
       <BookingPopUp
