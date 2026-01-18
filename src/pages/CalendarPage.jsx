@@ -103,6 +103,36 @@ const clampRange = (start, end) => {
 
 const toDate = (v) => (v instanceof Date ? v : new Date(v));
 
+const CALENDAR_MIN_HOUR = 9;
+const CALENDAR_MAX_HOUR = 20;
+
+const clampToCalendarBounds = (start, end) => {
+  const durationMs = end.getTime() - start.getTime();
+  const min = new Date(start);
+  min.setHours(CALENDAR_MIN_HOUR, 0, 0, 0);
+  const max = new Date(start);
+  max.setHours(CALENDAR_MAX_HOUR, 0, 0, 0);
+
+  if (durationMs >= max.getTime() - min.getTime()) {
+    return { start: min, end: max };
+  }
+
+  let nextStart = start;
+  let nextEnd = end;
+
+  if (nextStart < min) {
+    nextStart = min;
+    nextEnd = new Date(min.getTime() + durationMs);
+  }
+
+  if (nextEnd > max) {
+    nextEnd = max;
+    nextStart = new Date(max.getTime() - durationMs);
+  }
+
+  return { start: nextStart, end: nextEnd };
+};
+
 // Defensive cancelled check (handles "cancelled", "canceled", whitespace, case)
 const isCancelledStatus = (status) => {
   const s = String(status || "").trim().toLowerCase();
@@ -763,7 +793,11 @@ if (sbErr) throw sbErr;
 
   const moveEvent = useCallback(
     async ({ event, start, end, resourceId }) => {
-      const { start: s, end: e } = clampRange(start, end);
+      const clamped = clampRange(start, end);
+      const { start: s, end: e } = clampToCalendarBounds(
+        clamped.start,
+        clamped.end
+      );
 
       if (event?.is_locked) return;
       if (isCancelledStatus(event?.status)) return; // ✅ don't move cancelled
@@ -771,7 +805,11 @@ if (sbErr) throw sbErr;
      if (event?.isTask) return;
 
   if (event?.isScheduleBlock && event?.blockSource === "schedule_blocks") {
-        let { start: s, end: e } = clampRange(start, end);
+       const clamped = clampRange(start, end);
+        let { start: s, end: e } = clampToCalendarBounds(
+          clamped.start,
+          clamped.end
+        );
         const rid = resourceId ?? event.resourceId;
           const previousStaffId = event.staff_id || event.resourceId || null;
         const previousWindow = getStaffWorkingWindow(
@@ -850,8 +888,6 @@ if (sbErr) throw sbErr;
         await supabase
           .from("bookings")
           .update({
-            start: s,
-            end: e,
              start: s.toISOString(),
            end: e.toISOString(),
             resource_id: rid,
@@ -1362,9 +1398,9 @@ const handleSaveTask = async ({ action, payload }) => {
         views={[Views.DAY]}
         step={15}
         timeslots={4}
-        min={new Date(2025, 0, 1, 9, 0)}
-        max={new Date(2025, 0, 1, 20, 0)}
-        scrollToTime={new Date(2025, 0, 1, 9, 0)}
+       min={new Date(2025, 0, 1, CALENDAR_MIN_HOUR, 0)}
+        max={new Date(2025, 0, 1, CALENDAR_MAX_HOUR, 0)}
+        scrollToTime={new Date(2025, 0, 1, CALENDAR_MIN_HOUR, 0)}
       selectable="ignoreEvents"
         showNowIndicator
         onRangeChange={(range) => {

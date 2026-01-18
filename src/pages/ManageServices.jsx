@@ -95,8 +95,6 @@ export default function ManageServices({ staffId }) {
         category: newCategory,
         base_price: Number(newBasePrice),
         base_duration: Number(newBaseDuration),
-        // pricing JSON is no longer used; leaving it harmlessly empty
-        pricing: {},
       },
     ]);
 
