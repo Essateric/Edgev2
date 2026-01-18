@@ -8,8 +8,6 @@ import { ChevronLeft, ChevronRight, Calendar as CalendarIcon } from "lucide-reac
 import toast from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
 
-
-
 import CalendarModal from "../components/CalendarModal";
 import BookingPopUp from "../components/bookings/BookingPopUp";
 import RightDrawer from "../components/RightDrawer";
@@ -33,12 +31,19 @@ import { addWeeks, addMonths } from "date-fns";
 import { logEvent } from "../lib/logEvent";
 
 
-
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "react-big-calendar/lib/addons/dragAndDrop/styles.css";
 import "../styles/CalendarStyles.css";
 import PageLoader from "../components/PageLoader.jsx";
 import RemindersDialog from "../components/reminders/RemindersDialog.jsx";
+
+import { HTML5Backend } from "react-dnd-html5-backend";
+import { TouchBackend } from "react-dnd-touch-backend";
+
+const isTouchDevice = () =>
+  typeof window !== "undefined" &&
+  ("ontouchstart" in window || navigator.maxTouchPoints > 0);
+
 
 const DnDCalendar = withDragAndDrop(Calendar);
 
@@ -1394,187 +1399,203 @@ const handleSaveTask = async ({ action, payload }) => {
         <div className="mb-2 text-sm text-gray-600">Saving task…</div>
       )}
 
-      <DnDCalendar
-        localizer={localizer}
-        events={calendarEvents}
-        startAccessor="start"
-        endAccessor="end"
-        resources={stylistList}
-        resourceIdAccessor="id"
-        resourceTitleAccessor="title"
-        date={visibleDate}
-        onNavigate={(newDate) => setVisibleDate(newDate)}
-        defaultView={Views.DAY}
-        views={[Views.DAY]}
-        step={15}
-        timeslots={4}
-       min={new Date(2025, 0, 1, CALENDAR_MIN_HOUR, 0)}
-        max={new Date(2025, 0, 1, CALENDAR_MAX_HOUR, 0)}
-        scrollToTime={new Date(2025, 0, 1, CALENDAR_MIN_HOUR, 0)}
-       longPressThreshold={150}
-        elementProps={{
-          onTouchStartCapture: handleTouchStartCapture,
-        }}
-        selectable="ignoreEvents"
-        showNowIndicator
-        onRangeChange={(range) => {
-          if (Array.isArray(range)) setVisibleDate(range[0]);
-          else setVisibleDate(range.start);
-        }}
-        onSelectSlot={(slot) => {
-          setSelectedSlot(slot);
-          setIsModalOpen(true);
-          setStep(1);
-        }}
-   onSelectEvent={(event) => {
-  if (event.isUnavailable || event.isSalonClosed || event.isTask) return;
+<DnDCalendar
+  localizer={localizer}
+  events={calendarEvents}
+  startAccessor="start"
+  endAccessor="end"
+  resources={stylistList}
+  resourceIdAccessor="id"
+  resourceTitleAccessor="title"
+  date={visibleDate}
+  onNavigate={(newDate) => setVisibleDate(newDate)}
+  defaultView={Views.DAY}
+  views={[Views.DAY]}
+  step={15}
+  timeslots={4}
+  min={new Date(2025, 0, 1, CALENDAR_MIN_HOUR, 0)}
+  max={new Date(2025, 0, 1, CALENDAR_MAX_HOUR, 0)}
+  scrollToTime={new Date(2025, 0, 1, CALENDAR_MIN_HOUR, 0)}
 
-  // ✅ ALWAYS open task editor for blocked slots (even if flags are missing)
-  if (isScheduleBlockEvent(event)) {
-    const rid = event.resourceId ?? event.resource_id ?? null;
-
-    handleOpenScheduleTask(
-      {
-        start: event.start,
-        end: event.end,
-        resourceId: rid,
-      },
-      {
-        ...event,
-        // ✅ force flags so edit save logic always treats it as a DB block
-        isScheduleBlock: true,
-        resourceId: rid,
-        start: event.start,
-        end: event.end,
-        // ✅ series id hint for later (optional)
-       staffIds:
-          event.staffIds ||
-          (event.staff_id ? [event.staff_id] : rid ? [rid] : []),
-        taskTypeId: event.task_type_id || event.taskTypeId || null,
-      }
-    );
-    return;
-  }
-
-  setSelectedBooking(coerceEventForPopup(event));
-}}
-
-        onEventDrop={moveEvent}
-        resizable
-        onEventResize={moveEvent}
-        eventPropGetter={(event) => {
-           if (isScheduleBlockEvent(event)) {
-          const scheduledTaskColor = event.taskTypeColor || event.color || null;
-
-          return {
-            style: {
-              zIndex: 2,
-              backgroundColor: scheduledTaskColor || undefined,
-              backgroundImage: scheduledTaskColor
-                ? undefined
-                : "linear-gradient(135deg, #d0a36c, #b0702e, #391f04)",
-              color: "#fff",
-              border: scheduledTaskColor ? "1px solid #ffffff40" : "1px solid #d0a36c",
-              opacity: 0.95,
-            },
-            title: event.title,
-          };
+  /* ✅ FIX: Enable drag/drop on touch devices */
+  dragDropBackend={isTouchDevice() ? TouchBackend : HTML5Backend}
+  dragDropBackendOptions={
+    isTouchDevice()
+      ? {
+          enableMouseEvents: true,
+          delayTouchStart: 250, // press & hold before dragging
+          ignoreContextMenu: true,
         }
-
-           if (event.isUnavailable) {
-    return {
-      className: "rbc-unavailable-block",
-      style: {
-        backgroundColor: "#36454F",
-        opacity: 0.7,
-        border: "none",
-        pointerEvents: "none", // ✅ lets click/drag pass through
-      },
-    };
+      : undefined
   }
- // ✅ Non-working / salon closed blocks (click-through)
-  if (event.isSalonClosed) {
-    return {
-      className: "rbc-salonclosed-block",
-      style: {
-        backgroundColor: "#333333",
-        opacity: 0.7,
-        border: "none",
-        pointerEvents: "none",
-      },
-    };
-  }
+  longPressThreshold={250}
 
-                   const status = String(event.status || "").trim().toLowerCase();
+  elementProps={{
+    onTouchStartCapture: handleTouchStartCapture,
+  }}
+  selectable="ignoreEvents"
+  showNowIndicator
+  onRangeChange={(range) => {
+    if (Array.isArray(range)) setVisibleDate(range[0]);
+    else setVisibleDate(range.start);
+  }}
+  onSelectSlot={(slot) => {
+    setSelectedSlot(slot);
+    setIsModalOpen(true);
+    setStep(1);
+  }}
+  onSelectEvent={(event) => {
+    if (event.isUnavailable || event.isSalonClosed || event.isTask) return;
 
-          // ✅ Cancelled = red
-          if (isCancelledStatus(status)) {
-            return {
-              style: {
-                zIndex: 2,
-                backgroundColor: "#b91c1c",
-                color: "#fff",
-                border: "none",
-                opacity: 0.95,
-              },
-            };
-          }
+    // ✅ ALWAYS open task editor for blocked slots (even if flags are missing)
+    if (isScheduleBlockEvent(event)) {
+      const rid = event.resourceId ?? event.resource_id ?? null;
 
-          // ✅ Confirmed = green (this is your “blue -> green” change)
-          if (isConfirmedStatus(status)) {
-            return {
-              style: {
-                zIndex: 2,
-                backgroundColor: "#16a34a",
-                color: "#fff",
-                border: "none",
-                opacity: 0.95,
-              },
-            };
-          }
-
-         if (event.isTask) {
-            const taskColor = event.color || null;
-    return {
-      style: {
-        zIndex: 2,
-       backgroundColor: taskColor || undefined,
-        backgroundImage: taskColor
-          ? undefined
-          : "linear-gradient(135deg, #d0a36c, #b0702e, #391f04)",
-        color: "#fff",
-       border: taskColor ? "1px solid #ffffff40" : "1px solid #d0a36c",
-        opacity: 0.95,
-      },
-      title: event.title,
-    };
-  }
-
-          // default (pending etc)
-          return { style: { zIndex: 2 } };
-        }}
-        style={{ height: "90vh" }}
-        components={{
-          event: CustomCalendarEvent,
-          toolbar: () => null,
-        }}
-        showAllDay={false}
-        allDayAccessor={() => false}
-        draggableAccessor={(event) =>
-          !event.isUnavailable &&
-          !event.isSalonClosed &&
-          !event.isTask &&
-          !event.is_locked &&
-          !isCancelledStatus(event.status)
+      handleOpenScheduleTask(
+        {
+          start: event.start,
+          end: event.end,
+          resourceId: rid,
+        },
+        {
+          ...event,
+          // ✅ force flags so edit save logic always treats it as a DB block
+          isScheduleBlock: true,
+          resourceId: rid,
+          start: event.start,
+          end: event.end,
+          // ✅ series id hint for later (optional)
+          staffIds:
+            event.staffIds ||
+            (event.staff_id ? [event.staff_id] : rid ? [rid] : []),
+          taskTypeId: event.task_type_id || event.taskTypeId || null,
         }
-        resizableAccessor={(event) =>
-          !event.isUnavailable &&
-          !event.isSalonClosed &&
-          !event.isTask &&
-          !event.is_locked &&
-          !isCancelledStatus(event.status)
-        }
-      />
+      );
+      return;
+    }
+
+    setSelectedBooking(coerceEventForPopup(event));
+  }}
+  onEventDrop={moveEvent}
+  resizable
+  onEventResize={moveEvent}
+  eventPropGetter={(event) => {
+    if (isScheduleBlockEvent(event)) {
+      const scheduledTaskColor = event.taskTypeColor || event.color || null;
+
+      return {
+        style: {
+          zIndex: 2,
+          backgroundColor: scheduledTaskColor || undefined,
+          backgroundImage: scheduledTaskColor
+            ? undefined
+            : "linear-gradient(135deg, #d0a36c, #b0702e, #391f04)",
+          color: "#fff",
+          border: scheduledTaskColor
+            ? "1px solid #ffffff40"
+            : "1px solid #d0a36c",
+          opacity: 0.95,
+        },
+        title: event.title,
+      };
+    }
+
+    if (event.isUnavailable) {
+      return {
+        className: "rbc-unavailable-block",
+        style: {
+          backgroundColor: "#36454F",
+          opacity: 0.7,
+          border: "none",
+          pointerEvents: "none", // ✅ lets click/drag pass through
+        },
+      };
+    }
+
+    // ✅ Non-working / salon closed blocks (click-through)
+    if (event.isSalonClosed) {
+      return {
+        className: "rbc-salonclosed-block",
+        style: {
+          backgroundColor: "#333333",
+          opacity: 0.7,
+          border: "none",
+          pointerEvents: "none",
+        },
+      };
+    }
+
+    const status = String(event.status || "").trim().toLowerCase();
+
+    // ✅ Cancelled = red
+    if (isCancelledStatus(status)) {
+      return {
+        style: {
+          zIndex: 2,
+          backgroundColor: "#b91c1c",
+          color: "#fff",
+          border: "none",
+          opacity: 0.95,
+        },
+      };
+    }
+
+    // ✅ Confirmed = green
+    if (isConfirmedStatus(status)) {
+      return {
+        style: {
+          zIndex: 2,
+          backgroundColor: "#16a34a",
+          color: "#fff",
+          border: "none",
+          opacity: 0.95,
+        },
+      };
+    }
+
+    if (event.isTask) {
+      const taskColor = event.color || null;
+      return {
+        style: {
+          zIndex: 2,
+          backgroundColor: taskColor || undefined,
+          backgroundImage: taskColor
+            ? undefined
+            : "linear-gradient(135deg, #d0a36c, #b0702e, #391f04)",
+          color: "#fff",
+          border: taskColor ? "1px solid #ffffff40" : "1px solid #d0a36c",
+          opacity: 0.95,
+        },
+        title: event.title,
+      };
+    }
+
+    // default (pending etc)
+    return { style: { zIndex: 2 } };
+  }}
+  style={{ height: "90vh" }}
+  components={{
+    event: CustomCalendarEvent,
+    toolbar: () => null,
+  }}
+  showAllDay={false}
+  allDayAccessor={() => false}
+  draggableAccessor={(event) =>
+    !event.isUnavailable &&
+    !event.isSalonClosed &&
+    !event.isTask &&
+    !event.is_locked &&
+    !isCancelledStatus(event.status)
+  }
+  resizableAccessor={(event) =>
+    !event.isUnavailable &&
+    !event.isSalonClosed &&
+    !event.isTask &&
+    !event.is_locked &&
+    !isCancelledStatus(event.status)
+  }
+/>
+
 
       <BookingPopUp
       supabaseClient={supabase}
