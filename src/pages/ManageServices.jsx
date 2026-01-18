@@ -5,9 +5,11 @@ import toast from "react-hot-toast";
 import { supabase as defaultSupabase } from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
 import { logEvent } from "../lib/logEvent";
+import { confirmAndDeleteServiceWithAudit } from "../lib/deleteServiceWithAudit";
+
 
 export default function ManageServices({ staffId }) {
-   const { currentUser, supabaseClient } = useAuth();
+  const { currentUser, supabaseClient } = useAuth();
   const supabase = supabaseClient || defaultSupabase;
 
   const withTimeout = async (promise, ms, label) => {
@@ -26,23 +28,37 @@ export default function ManageServices({ staffId }) {
       clearTimeout(timer);
     }
   };
+
   const [services, setServices] = useState([]);
   const [customData, setCustomData] = useState({}); // kept (unused) to preserve existing logic surface
   const [saving, setSaving] = useState(false);
+
   const [newServiceName, setNewServiceName] = useState("");
   const [newCategory, setNewCategory] = useState("Uncategorized");
   const [newBasePrice, setNewBasePrice] = useState(0);
   const [newBaseDuration, setNewBaseDuration] = useState(30);
+
   const [openCategories, setOpenCategories] = useState({});
   const [selectedService, setSelectedService] = useState(null);
   const [showModal, setShowModal] = useState(false);
+
   const [staffList, setStaffList] = useState([]);
 
   // NEW: service ⇄ stylist assignments for the modal
   // shape: { [staff_id]: { checked: boolean, price: number|string, mins: number } }
   const [assignments, setAssignments] = useState({});
 
+  // NEW: who am I? (permission gate for delete button)
+  const [me, setMe] = useState(null);
+
+  // NEW: delete confirm state
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const isAdmin = (me?.permission || "").toLowerCase().trim() === "admin";
+
   const categories = [
+    "Uncategorized",
     "Cut and Finish",
     "Highlights",
     "Tints",
@@ -50,9 +66,39 @@ export default function ManageServices({ staffId }) {
     "Gents",
   ];
 
+  const getActor = () => {
+    const actorEmail = currentUser?.email || currentUser?.user?.email || null;
+    const actorId = currentUser?.id || currentUser?.user?.id || null;
+    return { actorEmail, actorId };
+  };
+
+  const fetchMe = async () => {
+    const uid =
+      staffId ||
+      currentUser?.id ||
+      currentUser?.user?.id ||
+      null;
+
+    if (!uid) return;
+
+    const { data, error } = await withTimeout(
+      supabase.from("staff").select("id,name,permission,email").eq("id", uid).maybeSingle(),
+      5000,
+      "fetch me"
+    );
+
+    if (error) {
+      console.warn("Failed to fetch current staff record:", error);
+      setMe(null);
+      return;
+    }
+
+    setMe(data || null);
+  };
+
   const fetchServices = async () => {
     const { data, error } = await withTimeout(
-      supabase.from("services").select("*"),
+      supabase.from("services").select("*").order("category").order("name"),
       5000,
       "fetch services"
     );
@@ -65,7 +111,7 @@ export default function ManageServices({ staffId }) {
   };
 
   const fetchStaff = async () => {
-  const { data, error } = await withTimeout(
+    const { data, error } = await withTimeout(
       supabase.from("staff").select("id,name,permission,email").order("name"),
       5000,
       "fetch staff"
@@ -81,6 +127,8 @@ export default function ManageServices({ staffId }) {
   useEffect(() => {
     fetchServices();
     fetchStaff();
+    fetchMe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleAddService = async () => {
@@ -89,29 +137,47 @@ export default function ManageServices({ staffId }) {
       return;
     }
 
-    const { error } = await supabase.from("services").insert([
-      {
-        name: newServiceName,
-        category: newCategory,
-        base_price: Number(newBasePrice),
-        base_duration: Number(newBaseDuration),
-      },
-    ]);
+    const payload = {
+      name: newServiceName.trim(),
+      category: newCategory,
+      base_price: Number(newBasePrice) || 0,
+      base_duration: Number(newBaseDuration) || 0,
+    };
+
+    const { error, data } = await supabase.from("services").insert([payload]).select("*").maybeSingle();
 
     if (error) {
       toast.error("Failed to add service");
       console.error(error);
-    } else {
-      toast.success("Service added successfully");
-      setNewServiceName("");
-      setNewCategory("Uncategorized");
-      setNewBasePrice(0);
-      setNewBaseDuration(30);
-      fetchServices();
+      return;
     }
+
+    try {
+      const { actorEmail, actorId } = getActor();
+      await logEvent({
+        entityType: "service",
+        entityId: data?.id || null,
+        action: "service_created",
+        details: {
+          service: data || payload,
+        },
+        actorId,
+        actorEmail,
+        supabaseClient: supabase,
+      });
+    } catch (auditErr) {
+      console.warn("[Audit] service create failed", auditErr);
+    }
+
+    toast.success("Service added successfully");
+    setNewServiceName("");
+    setNewCategory("Uncategorized");
+    setNewBasePrice(0);
+    setNewBaseDuration(30);
+    fetchServices();
   };
 
-  // ===== NEW: Join-table helpers (for the modal) =====
+  // ===== Join-table helpers (modal) =====
   const setAssigned = (staff_id, checked) =>
     setAssignments((prev) => ({
       ...prev,
@@ -170,6 +236,29 @@ export default function ManageServices({ staffId }) {
   const handleSaveStylist = async () => {
     if (!selectedService?.id) return;
 
+    // ✅ Add this right after handleSaveStylist
+const handleDeleteService = async () => {
+  try {
+    await confirmAndDeleteServiceWithAudit({
+      supabase,
+      service: selectedService,
+      currentUser,
+      staffId,
+      reason: "Admin deleted service from ManageServices",
+    });
+
+    toast.success("Service deleted");
+    setShowModal(false);
+    setSelectedService(null);
+    setAssignments({});
+    fetchServices();
+  } catch (e) {
+    if (e?.code === "CANCELLED" || e?.message === "CANCELLED") return;
+    console.error(e);
+    toast.error(e?.message || "Failed to delete service");
+  }
+};
+
     setSaving(true);
     try {
       // What exists now (for delete-diff)
@@ -196,7 +285,7 @@ export default function ManageServices({ staffId }) {
       if (upserts.length) {
         const { error: upErr } = await supabase
           .from("staff_services")
-          .upsert(upserts, { onConflict: ["staff_id", "service_id"] });
+          .upsert(upserts, { onConflict: "staff_id,service_id" });
         if (upErr) throw upErr;
       }
 
@@ -219,8 +308,7 @@ export default function ManageServices({ staffId }) {
       }
 
       try {
-        const actorEmail = currentUser?.email || currentUser?.user?.email || null;
-        const actorId = currentUser?.id || currentUser?.user?.id || null;
+        const { actorEmail, actorId } = getActor();
         const assignedStaffIds = upserts.map((row) => row.staff_id);
 
         await logEvent({
@@ -243,10 +331,9 @@ export default function ManageServices({ staffId }) {
         console.warn("[Audit] staff services save failed", auditErr);
       }
 
-
       toast.success("Saved!");
       setShowModal(false);
-      fetchServices(); // optional refresh of list
+      fetchServices();
     } catch (e) {
       console.error("Save failed:", e);
       toast.error("Failed to save");
@@ -255,17 +342,98 @@ export default function ManageServices({ staffId }) {
     }
   };
 
-  // Group services by category (unchanged)
-  const groupedServices = useMemo(
-    () =>
-      services.reduce((acc, service) => {
-        const cat = service.category || "Uncategorized";
-        if (!acc[cat]) acc[cat] = [];
-        acc[cat].push(service);
-        return acc;
-      }, {}),
-    [services]
-  );
+  // NEW: open delete confirmation
+  const requestDeleteService = (service) => {
+    if (!isAdmin) {
+      toast.error("Only admins can delete services.");
+      return;
+    }
+    setDeleteTarget(service);
+  };
+
+  // NEW: actually delete + audit log
+  const confirmDeleteService = async () => {
+    if (!deleteTarget?.id) return;
+    if (!isAdmin) {
+      toast.error("Only admins can delete services.");
+      setDeleteTarget(null);
+      return;
+    }
+
+    setDeleting(true);
+    const svc = deleteTarget;
+
+    try {
+      // Optional: count assignments that will be cascade-deleted
+      const { count: assignedCount, error: countErr } = await supabase
+        .from("staff_services")
+        .select("id", { count: "exact", head: true })
+        .eq("service_id", svc.id);
+
+      if (countErr) {
+        console.warn("Could not count staff_services for service:", countErr);
+      }
+
+      const { error: delErr } = await supabase
+        .from("services")
+        .delete()
+        .eq("id", svc.id);
+
+      if (delErr) throw delErr;
+
+      try {
+        const { actorEmail, actorId } = getActor();
+        await logEvent({
+          entityType: "service",
+          entityId: svc.id,
+          action: "service_deleted",
+          details: {
+            service: {
+              id: svc.id,
+              name: svc.name,
+              category: svc.category,
+              base_price: svc.base_price,
+              base_duration: svc.base_duration,
+            },
+            cascade_deleted_staff_services_count: assignedCount ?? null,
+            note: "Deleted from ManageServices UI",
+          },
+          actorId,
+          actorEmail,
+          supabaseClient: supabase,
+        });
+      } catch (auditErr) {
+        console.warn("[Audit] service delete failed", auditErr);
+      }
+
+      toast.success("Service deleted");
+      setDeleteTarget(null);
+
+      // If the modal was open for this service, close it
+      if (selectedService?.id === svc.id) {
+        setShowModal(false);
+        setSelectedService(null);
+        setAssignments({});
+      }
+
+      fetchServices();
+    } catch (e) {
+      console.error("Delete service failed:", e);
+      toast.error(e?.message || "Failed to delete service");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  // Group services by category
+  const groupedServices = useMemo(() => {
+    return (services || []).reduce((acc, service) => {
+      const cat = service.category || "Uncategorized";
+      if (!acc[cat]) acc[cat] = [];
+      acc[cat].push(service);
+      return acc;
+    }, {});
+  }, [services]);
 
   return (
     <div className="p-4">
@@ -285,6 +453,7 @@ export default function ManageServices({ staffId }) {
               className="w-full border-2 border-gray-500 rounded p-2 text-gray-800 focus:outline-none focus:ring-1 focus:ring-[#cd7f32]"
             />
           </div>
+
           <div className="flex flex-col">
             <label className="text-sm text-gray-700 mb-1">Select Category</label>
             <select
@@ -299,6 +468,7 @@ export default function ManageServices({ staffId }) {
               ))}
             </select>
           </div>
+
           <div className="flex flex-col">
             <label className="text-sm text-gray-700 mb-1">Base Price (£)</label>
             <input
@@ -307,8 +477,11 @@ export default function ManageServices({ staffId }) {
               value={newBasePrice}
               onChange={(e) => setNewBasePrice(e.target.value)}
               className="w-full border-2 border-gray-500 rounded p-2 text-gray-800 focus:outline-none focus:ring-1 focus:ring-[#cd7f32]"
+              min="0"
+              step="0.01"
             />
           </div>
+
           <div className="flex flex-col">
             <label className="text-sm text-gray-700 mb-1">Base Duration (mins)</label>
             <input
@@ -317,9 +490,12 @@ export default function ManageServices({ staffId }) {
               value={newBaseDuration}
               onChange={(e) => setNewBaseDuration(e.target.value)}
               className="w-full border-2 border-gray-500 rounded p-2 text-gray-800 focus:outline-none focus:ring-1 focus:ring-[#cd7f32]"
+              min="0"
+              step="1"
             />
           </div>
         </div>
+
         <Button
           onClick={handleAddService}
           className="bg-[#cd7f32] text-white hover:bg-[#b36c2c]"
@@ -328,59 +504,75 @@ export default function ManageServices({ staffId }) {
         </Button>
       </Card>
 
-{/* Grouped Services */}
-<Card className="mb-4">
-  <h2 className="text-lg font-semibold mb-4 text-bronze">Current Services</h2>
+      {/* Grouped Services */}
+      <Card className="mb-4">
+        <h2 className="text-lg font-semibold mb-4 text-bronze">Current Services</h2>
 
-  {/* ⬇️ 3-column grid for categories (1 col on mobile, 2 on md, 3 on xl) */}
-  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-    {Object.entries(groupedServices).map(([category, services]) => (
-      <div
-        key={category}
-        className="border border-gray-200 rounded-lg bg-white overflow-hidden"
-      >
-        {/* Category header (click to expand/collapse) */}
-        <button
-          onClick={() =>
-            setOpenCategories((prev) => ({
-              ...prev,
-              [category]: !prev[category],
-            }))
-          }
-          className="w-full text-left px-4 py-3 font-semibold text-chrome bg-bronze hover:text-white hover:bg-amber-600 flex items-center justify-between"
-        >
-          <span>{category}</span>
-          <span className="text-gray-100/80">{openCategories[category] ? "−" : "+"}</span>
-        </button>
-
-        {/* Category body */}
-        <div className={openCategories[category] ? "p-4 block" : "hidden"}>
-          {/* Services inside each category still shown as a small grid */}
-          <div className="grid grid-cols-1 gap-3">
-            {services.map((service) => (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {Object.entries(groupedServices).map(([category, servicesInCategory]) => (
+            <div
+              key={category}
+              className="border border-gray-200 rounded-lg bg-white overflow-hidden"
+            >
               <button
-                key={service.id}
-                onClick={() => handleServiceClick(service)}
-                className="bg-white text-left border border-gray-200 rounded-lg p-3 shadow-sm hover:shadow-md transition"
+                onClick={() =>
+                  setOpenCategories((prev) => ({
+                    ...prev,
+                    [category]: !prev[category],
+                  }))
+                }
+                className="w-full text-left px-4 py-3 font-semibold text-chrome bg-bronze hover:text-white hover:bg-amber-600 flex items-center justify-between"
               >
-                <p className="text-sm text-bronze font-medium">{service.name}</p>
+                <span>{category}</span>
+                <span className="text-gray-100/80">
+                  {openCategories[category] ? "−" : "+"}
+                </span>
               </button>
-            ))}
-          </div>
-        </div>
-      </div>
-    ))}
-  </div>
-</Card>
 
+              <div className={openCategories[category] ? "p-4 block" : "hidden"}>
+                <div className="grid grid-cols-1 gap-3">
+                  {servicesInCategory.map((service) => (
+                    <button
+                      key={service.id}
+                      onClick={() => handleServiceClick(service)}
+                      className="bg-white text-left border border-gray-200 rounded-lg p-3 shadow-sm hover:shadow-md transition"
+                    >
+                      <p className="text-sm text-bronze font-medium">{service.name}</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        £{Number(service.base_price || 0).toFixed(2)} • {Number(service.base_duration || 0)} mins
+                      </p>
+                      {isAdmin && (
+                        <p className="text-[11px] text-gray-400 mt-2">
+                          Tip: open this to delete from the modal
+                        </p>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
 
       {/* Modal */}
       {showModal && selectedService && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-2xl shadow-xl overflow-y-auto max-h-[90vh]">
-            <h3 className="text-lg font-semibold text-chrome mb-4">
-              {selectedService.name} — Assign stylists
-            </h3>
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <h3 className="text-lg font-semibold text-chrome">
+                {selectedService.name} — Assign stylists
+              </h3>
+
+              {isAdmin && (
+                <button
+                  onClick={() => requestDeleteService(selectedService)}
+                  className="text-sm px-3 py-2 rounded-md bg-red-600 text-white hover:bg-red-700"
+                >
+                  Delete service
+                </button>
+              )}
+            </div>
 
             <div className="space-y-3">
               {staffList.map((stylist) => {
@@ -400,7 +592,9 @@ export default function ManageServices({ staffId }) {
                         checked={!!rec.checked}
                         onChange={(e) => setAssigned(stylist.id, e.target.checked)}
                       />
-                      <span className="text-sm font-semibold text-bronze">{stylist.name}</span>
+                      <span className="text-sm font-semibold text-bronze">
+                        {stylist.name}
+                      </span>
                     </label>
 
                     <div className="col-span-2 flex flex-col">
@@ -449,16 +643,51 @@ export default function ManageServices({ staffId }) {
               <button
                 onClick={() => setShowModal(false)}
                 className="bg-gray-400 text-white px-4 py-2 rounded-lg shadow hover:bg-gray-500"
+                disabled={saving || deleting}
               >
                 Cancel
               </button>
+
               <Button
                 onClick={handleSaveStylist}
                 className="bg-[#cd7f32] text-white"
-                disabled={saving}
+                disabled={saving || deleting}
               >
                 {saving ? "Saving..." : "Save Changes"}
               </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-xl">
+            <h3 className="text-lg font-semibold text-chrome mb-2">
+              Delete service?
+            </h3>
+            <p className="text-sm text-gray-700 mb-4">
+              You are about to delete <span className="font-semibold">{deleteTarget.name}</span>.
+              <br />
+              This will remove it from the list and also delete any stylist assignments linked to it.
+            </p>
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                className="px-4 py-2 rounded-md bg-gray-200 hover:bg-gray-300"
+                disabled={deleting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteService}
+                className="px-4 py-2 rounded-md bg-red-600 text-white hover:bg-red-700"
+                disabled={deleting}
+              >
+                {deleting ? "Deleting..." : "Yes, delete"}
+              </button>
             </div>
           </div>
         </div>

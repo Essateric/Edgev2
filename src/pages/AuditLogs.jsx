@@ -7,6 +7,8 @@ const ALLOWED_ROLES = ["admin", "business owner", "manager"];
 
 const PAGE_SIZES = [25, 50, 100, 200];
 
+
+
 const ACTIVITY_GROUPS = [
   {
     title: "Bookings",
@@ -30,7 +32,9 @@ const ACTIVITY_GROUPS = [
   },
     {
     title: "Services",
-    items: [{ key: "staff_services_saved", label: "Staff services updated" }],
+    items: [{   key: "service_created", label: "Service created" },
+      { key: "service_deleted", label: "Service deleted" },
+      { key: "staff_services_saved", label: "Staff services updated" },],
   },
 ];
 
@@ -59,6 +63,27 @@ function buildSummary(row) {
   const entityType = row?.entity_type || "—";
   const details = row?.details;
 
+  // --- Service events (friendly) ---
+  if (action === "service_deleted") {
+    const name = details?.service?.name || "a service";
+    const cat = details?.service?.category ? ` (${details.service.category})` : "";
+    return `Deleted service: ${name}${cat}`;
+  }
+
+  if (action === "service_created") {
+    const name = details?.service?.name || "a service";
+    const cat = details?.service?.category ? ` (${details.service.category})` : "";
+    return `Added service: ${name}${cat}`;
+  }
+
+  if (action === "staff_services_saved") {
+    const serviceName = details?.service_name || "service";
+    const up = Number(details?.upsert_count || 0);
+    const del = Number(details?.delete_count || 0);
+    return `Updated staff assignments for ${serviceName} (${up} saved, ${del} removed)`;
+  }
+
+  // --- Booking events (your existing logic) ---
   if (details && typeof details === "object") {
     const fromStart = details?.from_start || details?.previous_start;
     const toStart = details?.to_start || details?.new_start;
@@ -79,6 +104,76 @@ function buildSummary(row) {
   return `${entityType} • ${action}`;
 }
 
+function formatMoneyGBP(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(n);
+}
+
+function formatDurationMins(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return `${n} mins`;
+}
+
+function buildHumanStatement(row) {
+  const when = formatDateTime(row?.created_at);
+
+  const actorName =
+    row?.actor_label || row?.staff_name || row?.actor_email || "Someone";
+  const actorRole = row?.actor_role ? String(row.actor_role).toLowerCase() : "";
+
+  const who = actorRole ? `${actorName} (${actorRole})` : actorName;
+
+  if (row?.action === "service_deleted") {
+    const s = row?.details?.service || {};
+    const name = s?.name || "a service";
+    const cat = s?.category || null;
+    const price = formatMoneyGBP(s?.base_price);
+    const duration = formatDurationMins(s?.base_duration);
+    const removedCount = row?.details?.cascade_deleted_staff_services_count ?? null;
+
+    const bits = [];
+    if (cat) bits.push(`category ${cat}`);
+    if (price) bits.push(`base price ${price}`);
+    if (duration) bits.push(`duration ${duration}`);
+    if (removedCount !== null && removedCount !== undefined)
+      bits.push(`${removedCount} staff assignment(s) removed`);
+
+    const extra = bits.length ? ` (${bits.join(", ")})` : "";
+
+    return {
+      title: `${who} deleted the “${name}” service from Services.${extra}`,
+      when,
+    };
+  }
+
+  if (row?.action === "service_created") {
+    const s = row?.details?.service || {};
+    const name = s?.name || "a service";
+    const cat = s?.category || null;
+    const price = formatMoneyGBP(s?.base_price);
+    const duration = formatDurationMins(s?.base_duration);
+
+    const bits = [];
+    if (cat) bits.push(`category ${cat}`);
+    if (price) bits.push(`base price ${price}`);
+    if (duration) bits.push(`duration ${duration}`);
+    const extra = bits.length ? ` (${bits.join(", ")})` : "";
+
+    return {
+      title: `${who} added the “${name}” service to Services.${extra}`,
+      when,
+    };
+  }
+
+  return {
+    title: buildSummary(row),
+    when,
+  };
+}
+
+
 function useDebouncedValue(value, delayMs = 350) {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -96,6 +191,8 @@ function isUuid(str) {
 
 export default function AuditLog() {
   const { currentUser, supabaseClient } = useAuth();
+  const [staffById, setStaffById] = useState({});
+
 
   const supabase = supabaseClient || defaultSupabase;
   const role = (currentUser?.permission || "").toLowerCase();
@@ -240,7 +337,7 @@ export default function AuditLog() {
 
       const sources = [];
       if (srcPublic) sources.push("public");
-      if (srcAuth) sources.push("authenticated");
+   if (srcAuth) sources.push("app", "authenticated");
 
       // If user unchecks everything, show nothing (clean UX)
       if (!actions?.length || sources.length === 0) {
@@ -258,7 +355,8 @@ export default function AuditLog() {
         .order("created_at", { ascending: sDir === "asc" })
         .range(fromIndex, toIndex);
 
-      if (sources.length === 1) q = q.eq("source", sources[0]);
+   q = q.in("source", sources);
+
 
       if (aQ?.trim()) {
         const needle = aQ.trim();
@@ -298,11 +396,33 @@ export default function AuditLog() {
       const { data, error, count } = await q;
       if (error) throw error;
 
-      // Only apply if this is the latest request
-      if (myReqId === reqIdRef.current) {
-        setRows(data || []);
-        setTotalCount(count || 0);
-      }
+   try {
+  const ids = Array.from(
+    new Set((data || []).map((r) => r.staff_id || r.actor_id).filter(Boolean))
+  );
+
+  if (ids.length) {
+    const { data: staffRows, error: staffErr } = await supabase
+      .from("staff")
+      .select("id,name,permission,email")
+      .in("id", ids);
+
+    if (!staffErr) {
+      const map = {};
+      for (const s of staffRows || []) map[s.id] = s;
+
+      if (myReqId === reqIdRef.current) setStaffById(map);
+    }
+  }
+} catch (e) {
+  console.warn("[Audit] staff lookup failed", e);
+}
+
+// Only apply if this is the latest request
+if (myReqId === reqIdRef.current) {
+  setRows(data || []);
+  setTotalCount(count || 0);
+}
     } catch (err) {
       console.error("[Audit] fetch failed", err);
       if (myReqId === reqIdRef.current) {
@@ -327,18 +447,24 @@ export default function AuditLog() {
         typeof detailsObj === "object" && detailsObj !== null
           ? safeJsonStringify(detailsObj)
           : row?.details || "—";
+const staffRec = staffById[row.staff_id] || staffById[row.actor_id];
+const roleLabel = staffRec?.permission ? String(staffRec.permission) : "";
 
-      const actorLabel =
-        row?.actor_email || (row?.source === "public" ? "Public client" : "Unknown");
+const actorLabel =
+  staffRec?.name ||
+  row?.staff_name ||
+  roleLabel ||
+  (row?.source === "public" ? "Public client" : row?.actor_email || "Unknown");
+
 
       return {
-        ...row,
-        created_at_label: formatDateTime(row?.created_at),
-        actor_label: actorLabel,
-        summary: buildSummary(row),
-        details_text: detailsText,
-      };
-    });
+  ...row,
+  created_at_label: formatDateTime(row?.created_at),
+  actor_label: actorLabel,
+  actor_role: roleLabel || "—",
+  summary: buildSummary(row),
+  details_text: detailsText,
+};    });
   }, [rows]);
 
   const totalPages = useMemo(() => {
@@ -637,8 +763,6 @@ export default function AuditLog() {
               <th className="px-3 py-2 font-semibold text-gray-700">When</th>
               <th className="px-3 py-2 font-semibold text-gray-700">Activity</th>
               <th className="px-3 py-2 font-semibold text-gray-700">Actor</th>
-              <th className="px-3 py-2 font-semibold text-gray-700">Entity</th>
-              <th className="px-3 py-2 font-semibold text-gray-700">Source</th>
               <th className="px-3 py-2 font-semibold text-gray-700">Summary</th>
               <th className="px-3 py-2 font-semibold text-gray-700"></th>
             </tr>
@@ -655,24 +779,11 @@ export default function AuditLog() {
                 </td>
 
                 <td className="px-3 py-2">
-                  <div className="font-semibold">{row.actor_label}</div>
-                  <div className="text-xs text-gray-500">{row.actor_id || "—"}</div>
+                 <div className="font-semibold">{row.actor_label}</div>
+<div className="text-xs text-gray-500">{row.actor_role}</div>
                 </td>
 
-                <td className="px-3 py-2">
-                  <div className="font-semibold">{row.entity_type || "—"}</div>
-                  <div className="text-xs text-gray-500">
-                    {row.entity_id || row.booking_id || "—"}
-                  </div>
-                </td>
-
-                <td className="px-3 py-2">
-                  <span className="inline-flex items-center px-2 py-1 rounded bg-gray-100 text-gray-800 text-xs">
-                    {row.source || "—"}
-                  </span>
-                </td>
-
-                <td className="px-3 py-2 text-gray-700">{row.summary}</td>
+                      <td className="px-3 py-2 text-gray-700">{row.summary}</td>
 
                 <td className="px-3 py-2">
                   <button
@@ -720,14 +831,32 @@ export default function AuditLog() {
               </button>
             </div>
 
-            <div className="p-4 overflow-auto space-y-3">
-              <div className="p-3 border border-gray-100 rounded bg-white">
-                <div className="text-xs font-semibold text-gray-600 mb-2">Details</div>
-                <pre className="whitespace-pre-wrap text-xs bg-gray-50 p-3 rounded border border-gray-100 overflow-auto">
-                  {selectedRow.details_text || "—"}
-                </pre>
-              </div>
-            </div>
+        <div className="p-3 border border-gray-100 rounded bg-white">
+  <div className="text-xs font-semibold text-gray-600 mb-2">Details</div>
+
+  
+{(() => {
+  const msg = buildHumanStatement(selectedRow);
+  return (
+    <div className="mb-3">
+      <div className="text-sm text-gray-900 font-medium">{msg.title}</div>
+      <div className="text-xs text-gray-500 mt-1">{msg.when}</div>
+    </div>
+  );
+})()}
+
+
+  {/* Raw JSON (still available) */}
+  <details className="border border-gray-100 rounded bg-gray-50">
+    <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-gray-700">
+      View raw data
+    </summary>
+    <pre className="whitespace-pre-wrap text-xs p-3 overflow-auto">
+      {selectedRow.details_text || "—"}
+    </pre>
+  </details>
+</div>
+
           </div>
         </div>
       )}
