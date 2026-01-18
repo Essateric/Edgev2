@@ -37,8 +37,8 @@ import "../styles/CalendarStyles.css";
 import PageLoader from "../components/PageLoader.jsx";
 import RemindersDialog from "../components/reminders/RemindersDialog.jsx";
 
-import { HTML5Backend } from "react-dnd-html5-backend";
-import { TouchBackend } from "react-dnd-touch-backend";
+// import { HTML5Backend } from "react-dnd-html5-backend";
+// import { TouchBackend } from "react-dnd-touch-backend";
 
 const isTouchDevice = () =>
   typeof window !== "undefined" &&
@@ -194,6 +194,8 @@ const isConfirmedStatus = (status) => {
 export default function CalendarPage() {
    const navigate = useNavigate();              // ✅ ADD THIS
   const [bootingOut, setBootingOut] = useState(false); // ✅ ADD THIS
+  const isTouch = useMemo(() => isTouchDevice(), []);
+
 
     const auth = useAuth();
   const { currentUser, pageLoading, authLoading, supabaseClient } = auth;
@@ -231,8 +233,6 @@ useEffect(() => {
   }
 }, [authLoading, supabaseClient, currentUser, navigate]);
 
-// While we are logging out + redirecting
-if (bootingOut) return <PageLoader />;
 
 
   const [clients, setClients] = useState([]);
@@ -1275,7 +1275,10 @@ const handleSaveTask = async ({ action, payload }) => {
     [handleCancelBookingFlow, mapBookingRowToEvent]
   );
 
-  /* ---------- simple auth gate ---------- */
+ /* ---------- simple auth gate ---------- */
+  if (bootingOut) {
+    return <PageLoader />;
+  }
 
   if (authLoading && !hasUser) {
     return (
@@ -1398,7 +1401,7 @@ const handleSaveTask = async ({ action, payload }) => {
       {taskSaving && (
         <div className="mb-2 text-sm text-gray-600">Saving task…</div>
       )}
-<DndProvider backend={isTouch ? TouchBackend : HTML5Backend} options={isTouch ? { enableMouseEvents: true } : undefined}>
+
 <DnDCalendar
   localizer={localizer}
   events={calendarEvents}
@@ -1594,7 +1597,7 @@ const handleSaveTask = async ({ action, payload }) => {
     !event.is_locked &&
     !isCancelledStatus(event.status)
   }
-/></DndProvider>
+/>
 
 
 
