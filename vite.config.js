@@ -13,6 +13,9 @@ const DEV_CSP =
   "frame-src https://vmtcofezozrblfxudauk.supabase.co;";
 
 export default defineConfig(({ mode }) => ({
+  resolve: {
+    dedupe: ["react", "react-dom"],
+  },
   plugins: [
     react(),
     VitePWA({
