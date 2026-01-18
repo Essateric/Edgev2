@@ -196,6 +196,16 @@ export default function CalendarPage() {
   const supabase = supabaseClient;
   const hasUser = !!currentUser;
 
+   const handleTouchStartCapture = useCallback((event) => {
+    if (!event?.touches?.length) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target || !target.closest(".rbc-event")) return;
+
+    if (event.button !== 0) {
+      event.button = 0;
+    }
+  }, []);
+
   const isAdmin =
     String(currentUser?.permission || "").trim().toLowerCase() === "admin";
   const [stylistList, setStylistList] = useState([]);
@@ -1401,7 +1411,11 @@ const handleSaveTask = async ({ action, payload }) => {
        min={new Date(2025, 0, 1, CALENDAR_MIN_HOUR, 0)}
         max={new Date(2025, 0, 1, CALENDAR_MAX_HOUR, 0)}
         scrollToTime={new Date(2025, 0, 1, CALENDAR_MIN_HOUR, 0)}
-      selectable="ignoreEvents"
+       longPressThreshold={150}
+        elementProps={{
+          onTouchStartCapture: handleTouchStartCapture,
+        }}
+        selectable="ignoreEvents"
         showNowIndicator
         onRangeChange={(range) => {
           if (Array.isArray(range)) setVisibleDate(range[0]);
