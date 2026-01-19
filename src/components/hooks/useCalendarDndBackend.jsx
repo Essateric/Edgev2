@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { TouchBackend } from "react-dnd-touch-backend";
-import { isMobileOrTablet } from "../utils/isMobileOrTablet";
+import { isMobileOrTablet } from "../../utils/isMobileOrTablet";
 
 export const useCalendarDndBackend = () => {
   const useTouchDnD = useMemo(() => isMobileOrTablet(), []);

@@ -40,7 +40,7 @@ import RemindersDialog from "../components/reminders/RemindersDialog.jsx";
 
 import { useCalendarDndBackend } from "../components/hooks/useCalendarDndBackend";
 
-const { backend, options, longPressThreshold, useTouchDnD } = useCalendarDndBackend();
+
 
 
 const DnDCalendar = withDragAndDrop(Calendar);
@@ -192,7 +192,7 @@ const isConfirmedStatus = (status) => {
 export default function CalendarPage() {
    const navigate = useNavigate();              // ✅ ADD THIS
   const [bootingOut, setBootingOut] = useState(false); // ✅ ADD THIS
-  const isTouch = useMemo(() => isTouchDevice(), []);
+      const { backend, options, longPressThreshold, useTouchDnD } = useCalendarDndBackend();
 
 
     const auth = useAuth();
@@ -1399,6 +1399,7 @@ const handleSaveTask = async ({ action, payload }) => {
       {taskSaving && (
         <div className="mb-2 text-sm text-gray-600">Saving task…</div>
       )}
+
 
 <DnDCalendar
   localizer={localizer}
