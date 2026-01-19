@@ -40,9 +40,12 @@ import RemindersDialog from "../components/reminders/RemindersDialog.jsx";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { TouchBackend } from "react-dnd-touch-backend";
 
-const isTouchDevice = () =>
-  typeof window !== "undefined" &&
-  ("ontouchstart" in window || navigator.maxTouchPoints > 0);
+import { isMobileOrTablet } from "../utils/isMobileOrTablet";
+
+
+import { useCalendarDndBackend } from "../hooks/useCalendarDndBackend";
+
+const { backend, options, longPressThreshold, useTouchDnD } = useCalendarDndBackend();
 
 
 const DnDCalendar = withDragAndDrop(Calendar);
@@ -1420,22 +1423,10 @@ const handleSaveTask = async ({ action, payload }) => {
   max={new Date(2025, 0, 1, CALENDAR_MAX_HOUR, 0)}
   scrollToTime={new Date(2025, 0, 1, CALENDAR_MIN_HOUR, 0)}
 
-  /* ✅ FIX: Enable drag/drop on touch devices */
-  dragDropBackend={isTouchDevice() ? TouchBackend : HTML5Backend}
-  dragDropBackendOptions={
-    isTouchDevice()
-      ? {
-          enableMouseEvents: true,
-          delayTouchStart: 250, // press & hold before dragging
-          ignoreContextMenu: true,
-        }
-      : undefined
-  }
-  longPressThreshold={250}
-
-  elementProps={{
-    onTouchStartCapture: handleTouchStartCapture,
-  }}
+dragDropBackend={backend}
+dragDropBackendOptions={options}
+longPressThreshold={longPressThreshold}
+elementProps={useTouchDnD ? { onTouchStartCapture: handleTouchStartCapture } : undefined}
   selectable="ignoreEvents"
   showNowIndicator
   onRangeChange={(range) => {
