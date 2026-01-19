@@ -37,13 +37,8 @@ import "../styles/CalendarStyles.css";
 import PageLoader from "../components/PageLoader.jsx";
 import RemindersDialog from "../components/reminders/RemindersDialog.jsx";
 
-import { HTML5Backend } from "react-dnd-html5-backend";
-import { TouchBackend } from "react-dnd-touch-backend";
 
-import { isMobileOrTablet } from "../utils/isMobileOrTablet";
-
-
-import { useCalendarDndBackend } from "../hooks/useCalendarDndBackend";
+import { useCalendarDndBackend } from "../components/hooks/useCalendarDndBackend";
 
 const { backend, options, longPressThreshold, useTouchDnD } = useCalendarDndBackend();
 
