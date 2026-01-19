@@ -13,11 +13,12 @@ export const useCalendarDndBackend = () => {
       options: useTouchDnD
         ? {
             enableMouseEvents: true,
-            delayTouchStart: 250,
+            delayTouchStart: 0,   // ✅ no long press
+      touchSlop: 8, 
             ignoreContextMenu: true,
           }
         : undefined,
-      longPressThreshold: useTouchDnD ? 250 : 0,
+      longPressThreshold: useTouchDnD ? 0 : 0,
     };
   }, [useTouchDnD]);
 };

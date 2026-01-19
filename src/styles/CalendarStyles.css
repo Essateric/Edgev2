@@ -20,3 +20,15 @@
     font-weight: bold;
   }
   
+  /* Stop Android/Samsung long-press menu + text selection on events */
+.rbc-event,
+.rbc-event * {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Helps touch dragging feel “native” */
+.rbc-event {
+  touch-action: none;
+}

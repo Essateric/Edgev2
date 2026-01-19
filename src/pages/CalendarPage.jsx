@@ -193,6 +193,11 @@ export default function CalendarPage() {
    const navigate = useNavigate();              // ✅ ADD THIS
   const [bootingOut, setBootingOut] = useState(false); // ✅ ADD THIS
       const { backend, options, longPressThreshold, useTouchDnD } = useCalendarDndBackend();
+      const handleEventContextMenu = useCallback((e) => {
+  const target = e.target instanceof Element ? e.target.closest(".rbc-event") : null;
+  if (target) e.preventDefault();
+}, []);
+
 
 
     const auth = useAuth();
