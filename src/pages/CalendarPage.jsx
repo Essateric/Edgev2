@@ -189,10 +189,33 @@ const isConfirmedStatus = (status) => {
   return s === "confirmed" || s.startsWith("confirm") || s.includes("confirmed");
 };
 
+const isMobileMoveableBooking = (event) => {
+  const source = String(event?.source || "").trim().toLowerCase();
+  const hasClient = !!event?.client_id;
+  return (
+    hasClient &&
+    (source === "public" || source === "staff" || source === "calendar")
+  );
+};
+
+
 export default function CalendarPage() {
    const navigate = useNavigate();              // ✅ ADD THIS
   const [bootingOut, setBootingOut] = useState(false); // ✅ ADD THIS
       const { backend, options, longPressThreshold, useTouchDnD } = useCalendarDndBackend();
+      const [lastPointerType, setLastPointerType] = useState("unknown");
+  const [lastPointerLabel, setLastPointerLabel] = useState("none");
+  const dndDebugEnabled = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).has("dndDebug");
+  }, []);
+  const coarsePointer = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    if (!window.matchMedia) return false;
+    return window.matchMedia("(pointer: coarse)").matches;
+  }, []);
+  const maxTouchPoints =
+    typeof navigator !== "undefined" ? navigator.maxTouchPoints : 0;
       const handleEventContextMenu = useCallback((e) => {
   const target = e.target instanceof Element ? e.target.closest(".rbc-event") : null;
   if (target) e.preventDefault();
@@ -220,6 +243,30 @@ export default function CalendarPage() {
     String(currentUser?.permission || "").trim().toLowerCase() === "admin";
   const [stylistList, setStylistList] = useState([]);
 
+   useEffect(() => {
+    if (!dndDebugEnabled) return;
+
+    const updatePointer = (type, label) => {
+      setLastPointerType(type || "unknown");
+      setLastPointerLabel(label || "event");
+    };
+
+    const handlePointerDown = (event) => {
+      updatePointer(event.pointerType || "pointer", "pointerdown");
+    };
+    const handleTouchStart = () => updatePointer("touch", "touchstart");
+    const handleMouseDown = () => updatePointer("mouse", "mousedown");
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("touchstart", handleTouchStart);
+    window.addEventListener("mousedown", handleMouseDown);
+
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("touchstart", handleTouchStart);
+      window.removeEventListener("mousedown", handleMouseDown);
+    };
+  }, [dndDebugEnabled]);
 
 
 // ✅ Option 2: force logout + redirect if session/client missing
@@ -821,6 +868,7 @@ if (sbErr) throw sbErr;
       if (isCancelledStatus(event?.status)) return; // ✅ don't move cancelled
        // ✅ Prevent "task events" (non-bookings) from being updated as bookings by mistake
      if (event?.isTask) return;
+     if (useTouchDnD && !isMobileMoveableBooking(event)) return;
 
   if (event?.isScheduleBlock && event?.blockSource === "schedule_blocks") {
        const clamped = clampRange(start, end);
@@ -916,7 +964,7 @@ if (sbErr) throw sbErr;
         console.error("❌ Failed to move booking:", error);
       }
     },
-   [stylistList, supabase]
+    [stylistList, supabase, useTouchDnD]
   );
 
   const handleCancelBookingFlow = useCallback(() => {
@@ -1331,6 +1379,15 @@ const handleSaveTask = async ({ action, payload }) => {
 
   return (
     <div className="p-4 metallic-bg">
+       {dndDebugEnabled && (
+        <div className="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <div className="font-semibold">DnD Debug</div>
+          <div>Backend: {useTouchDnD ? "touch" : "html5"}</div>
+          <div>Last input: {lastPointerType} ({lastPointerLabel})</div>
+          <div>maxTouchPoints: {maxTouchPoints}</div>
+          <div>pointer: coarse = {coarsePointer ? "true" : "false"}</div>
+        </div>
+      )}
 
 <div className="mb-4 w-full grid grid-cols-[auto_1fr_auto] items-center gap-2">
   {/* Left */}
@@ -1578,17 +1635,16 @@ elementProps={useTouchDnD ? { onTouchStartCapture: handleTouchStartCapture } : u
   draggableAccessor={(event) =>
     !event.isUnavailable &&
     !event.isSalonClosed &&
-    !event.isTask &&
     !event.is_locked &&
-    !isCancelledStatus(event.status)
+     !isCancelledStatus(event.status) &&
+    (!useTouchDnD || isMobileMoveableBooking(event))
   }
   // draggableAccessor={() => true}   for testing
   resizableAccessor={(event) =>
     !event.isUnavailable &&
     !event.isSalonClosed &&
-    !event.isTask &&
-    !event.is_locked &&
-    !isCancelledStatus(event.status)
+   !isCancelledStatus(event.status) &&
+    (!useTouchDnD || isMobileMoveableBooking(event))
   }
 />
 

@@ -28,7 +28,9 @@ const isProcessingRow = (row) => {
  * @param {Object} opts
  * @param {Object} opts.supabase   - Supabase client instance
  * @param {string|null} opts.bookingGroupId - UUID in bookings.booking_id (group id)
+ * @param {string|null} opts.bookingRowId - UUID in bookings.id (row id) as a fallback to resolve bookingGroupId
  * @param {string|null} opts.repeatSeriesId - UUID linking a repeat series (bookings.repeat_series_id)
+ * 
  *
  * @returns {{
  *   relatedBookings: Array,
@@ -46,7 +48,12 @@ const isProcessingRow = (row) => {
  *   refresh: () => Promise<void>
  * }}
  */
-export function useRelatedBookings({ supabase, bookingGroupId, repeatSeriesId }) {
+export function useRelatedBookings({
+  supabase,
+  bookingGroupId,
+  bookingRowId,
+  repeatSeriesId,
+}) {
   const [relatedBookings, setRelatedBookings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -55,17 +62,56 @@ export function useRelatedBookings({ supabase, bookingGroupId, repeatSeriesId })
     repeatSeriesId || null
   );
 
+  const [effectiveBookingGroupId, setEffectiveBookingGroupId] = useState(
+    bookingGroupId || null
+  );
   // keep local effective id in sync with caller
   useEffect(() => {
     setEffectiveRepeatSeriesId(repeatSeriesId || null);
   }, [repeatSeriesId]);
+
+  useEffect(() => {
+    setEffectiveBookingGroupId(bookingGroupId || null);
+  }, [bookingGroupId]);
+
+  useEffect(() => {
+    if (bookingGroupId || !supabase || !bookingRowId) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("bookings")
+          .select("booking_id")
+          .eq("id", bookingRowId)
+          .maybeSingle();
+
+        if (error) throw error;
+        if (!cancelled && data?.booking_id) {
+          setEffectiveBookingGroupId(data.booking_id);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.warn(
+            "[useRelatedBookings] failed to resolve booking group id:",
+            e?.message || e
+          );
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, bookingRowId, bookingGroupId]);
 
   /**
    * Internal fetcher (also exposed via refresh)
    */
   const fetchGroup = async () => {
     setError(null);
-    if (!supabase || !bookingGroupId) {
+    if (!supabase || !effectiveBookingGroupId) {
       setRelatedBookings([]);
       return;
     }
@@ -75,7 +121,7 @@ export function useRelatedBookings({ supabase, bookingGroupId, repeatSeriesId })
       const { data, error } = await supabase
         .from("bookings")
         .select("*")
-        .eq("booking_id", bookingGroupId);
+       .eq("booking_id", effectiveBookingGroupId);
 
       if (error) throw error;
 
@@ -102,7 +148,7 @@ export function useRelatedBookings({ supabase, bookingGroupId, repeatSeriesId })
   useEffect(() => {
     fetchGroup();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supabase, bookingGroupId]);
+ }, [supabase, effectiveBookingGroupId]);
 
   /**
    * Derived: fetch all occurrences in the repeat series (one row per booking_id)

@@ -13,8 +13,9 @@ export const useCalendarDndBackend = () => {
       options: useTouchDnD
         ? {
             enableMouseEvents: true,
-            delayTouchStart: 0,   // ✅ no long press
-      touchSlop: 8, 
+             enableTouchEvents: true,
+           delayTouchStart: 0, // ✅ no long press
+            touchSlop: 8,
             ignoreContextMenu: true,
           }
         : undefined,
