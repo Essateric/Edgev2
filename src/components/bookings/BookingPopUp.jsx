@@ -854,7 +854,9 @@ function BookingPopUpBody({
         <div className="modal-panel__body">
           <ServicesList
             displayServices={displayServices}
+             getStylistName={getStylistName}
             serviceTotal={serviceTotal}
+
           />
 
           {/* ✅ Repeat bookings summary + dates list (3 columns: date/time | stylist | status) */}

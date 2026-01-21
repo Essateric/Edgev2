@@ -1582,6 +1582,7 @@ elementProps={useTouchDnD ? { onTouchStartCapture: handleTouchStartCapture } : u
     !event.is_locked &&
     !isCancelledStatus(event.status)
   }
+  // draggableAccessor={() => true}   for testing
   resizableAccessor={(event) =>
     !event.isUnavailable &&
     !event.isSalonClosed &&
