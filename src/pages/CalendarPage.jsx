@@ -1542,6 +1542,20 @@ elementProps={useTouchDnD ? { onTouchStartCapture: handleTouchStartCapture } : u
     setStep(1);
   }}
   onSelectEvent={(event) => {
+    console.log("[Calendar] event selected:", {
+      id: event?.id,
+      bookingId: event?.booking_id,
+      clientId: event?.client_id,
+      resourceId: event?.resourceId ?? event?.resource_id,
+      start: event?.start,
+      end: event?.end,
+      source: event?.source,
+      bookingSource: event?.booking_source,
+      isUnavailable: event?.isUnavailable,
+      isSalonClosed: event?.isSalonClosed,
+      isTask: event?.isTask,
+      isScheduleBlock: isScheduleBlockEvent(event),
+    });
     if (event.isUnavailable || event.isSalonClosed || event.isTask) return;
 
     // ✅ ALWAYS open task editor for blocked slots (even if flags are missing)
