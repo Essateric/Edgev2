@@ -190,12 +190,21 @@ const isConfirmedStatus = (status) => {
 };
 
 const isMobileMoveableBooking = (event) => {
-  const source = String(event?.source || "").trim().toLowerCase();
+  const source = String(
+    event?.source || event?.booking_source || ""
+  )
+    .trim()
+    .toLowerCase();
   const hasClient = !!event?.client_id;
+   if (!hasClient) return false;
+  if (!source) return true;
   return (
-    hasClient &&
-    (source === "public" || source === "staff" || source === "calendar")
+   source === "public" ||
+    source === "staff" ||
+    source === "calendar" ||
+    source === "app"
   );
+  return hasClient;
 };
 
 
