@@ -203,8 +203,10 @@ export default function CalendarPage() {
    const navigate = useNavigate();              // ✅ ADD THIS
   const [bootingOut, setBootingOut] = useState(false); // ✅ ADD THIS
       const { backend, options, longPressThreshold, useTouchDnD } = useCalendarDndBackend();
-      const [lastPointerType, setLastPointerType] = useState("unknown");
+  const [lastPointerType, setLastPointerType] = useState("unknown");
   const [lastPointerLabel, setLastPointerLabel] = useState("none");
+  const [lastDragAction, setLastDragAction] = useState("none");
+  const [lastDragEventId, setLastDragEventId] = useState("n/a");
   const dndDebugEnabled = useMemo(() => {
     if (typeof window === "undefined") return false;
     return new URLSearchParams(window.location.search).has("dndDebug");
@@ -243,12 +245,13 @@ export default function CalendarPage() {
     String(currentUser?.permission || "").trim().toLowerCase() === "admin";
   const [stylistList, setStylistList] = useState([]);
 
-   useEffect(() => {
+  useEffect(() => {
     if (!dndDebugEnabled) return;
 
     const updatePointer = (type, label) => {
       setLastPointerType(type || "unknown");
       setLastPointerLabel(label || "event");
+      console.log("[DnD Debug] input:", type || "unknown", label || "event");
     };
 
     const handlePointerDown = (event) => {
@@ -967,6 +970,38 @@ if (sbErr) throw sbErr;
     [stylistList, supabase, useTouchDnD]
   );
 
+   const handleDragStart = useCallback(
+    ({ event, action, direction }) => {
+      if (!dndDebugEnabled) return;
+      const id = event?.id ?? "unknown";
+      setLastDragAction(action || "unknown");
+      setLastDragEventId(String(id));
+      console.log("[DnD Debug] drag start:", {
+        id,
+        action,
+        direction,
+        resourceId: event?.resourceId,
+      });
+    },
+    [dndDebugEnabled]
+  );
+
+  const handleMoveEvent = useCallback(
+    (info) => {
+      if (dndDebugEnabled) {
+        console.log("[DnD Debug] drag end:", {
+          id: info?.event?.id ?? "unknown",
+          start: info?.start,
+          end: info?.end,
+          resourceId: info?.resourceId,
+        });
+      }
+      return moveEvent(info);
+    },
+    [dndDebugEnabled, moveEvent]
+  );
+
+
   const handleCancelBookingFlow = useCallback(() => {
     setIsModalOpen(false);
     setSelectedSlot(null);
@@ -1384,6 +1419,7 @@ const handleSaveTask = async ({ action, payload }) => {
           <div className="font-semibold">DnD Debug</div>
           <div>Backend: {useTouchDnD ? "touch" : "html5"}</div>
           <div>Last input: {lastPointerType} ({lastPointerLabel})</div>
+          <div>Last drag: {lastDragAction} (event {lastDragEventId})</div>
           <div>maxTouchPoints: {maxTouchPoints}</div>
           <div>pointer: coarse = {coarsePointer ? "true" : "false"}</div>
         </div>
@@ -1528,9 +1564,10 @@ elementProps={useTouchDnD ? { onTouchStartCapture: handleTouchStartCapture } : u
 
     setSelectedBooking(coerceEventForPopup(event));
   }}
-  onEventDrop={moveEvent}
+ onDragStart={handleDragStart}
+  onEventDrop={handleMoveEvent}
   resizable
-  onEventResize={moveEvent}
+  onEventResize={handleMoveEvent}
   eventPropGetter={(event) => {
     if (isScheduleBlockEvent(event)) {
       const scheduledTaskColor = event.taskTypeColor || event.color || null;
