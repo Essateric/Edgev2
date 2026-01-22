@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Select from "react-select";
 import toast from "react-hot-toast";
 import { format } from "date-fns";
@@ -26,6 +26,7 @@ const parseLocalDateTime = (s) => {
   if (!y || !m || !d) return null;
   return new Date(y, (m || 1) - 1, d, hh || 0, mm || 0, 0, 0);
 };
+
 const DAY_LABELS = [
   "Sunday",
   "Monday",
@@ -36,6 +37,19 @@ const DAY_LABELS = [
   "Saturday",
 ];
 
+const isSameDay = (a, b) => {
+  if (!a || !b) return false;
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+};
+
+const addHours = (date, hours) =>
+  new Date(date.getTime() + hours * 60 * 60 * 1000);
+
+const DEFAULT_END_HOURS = 1;
 
 const getStaffWorkingBounds = (baseDate, staffId, stylists) => {
   if (!baseDate || !staffId) return null;
@@ -44,19 +58,33 @@ const getStaffWorkingBounds = (baseDate, staffId, stylists) => {
   const dayName = DAY_LABELS[new Date(baseDate).getDay()];
   const hours = staff?.weeklyHours?.[dayName];
   if (!hours || hours.off) return null;
+
   const [startHour, startMinute] = String(hours.start || "").split(":").map(Number);
   const [endHour, endMinute] = String(hours.end || "").split(":").map(Number);
   if (!Number.isFinite(startHour) || !Number.isFinite(endHour)) return null;
+
   const start = new Date(baseDate);
   start.setHours(startHour || 0, startMinute || 0, 0, 0);
+
   const end = new Date(baseDate);
   end.setHours(endHour || 0, endMinute || 0, 0, 0);
+
   if (!(end > start)) return null;
   return { start, end };
 };
 
 const resolveAllDayBounds = (baseDate, staffId, stylists) =>
   getStaffWorkingBounds(baseDate, staffId, stylists);
+
+const matchesAllDayBounds = (startDate, endDate, staffId, stylists) => {
+  if (!startDate || !endDate || !staffId) return false;
+  const bounds = resolveAllDayBounds(startDate, staffId, stylists);
+  if (!bounds) return false;
+  return (
+    bounds.start.getTime() === startDate.getTime() &&
+    bounds.end.getTime() === endDate.getTime()
+  );
+};
 
 export default function ScheduleTaskModal({
   isOpen,
@@ -70,47 +98,44 @@ export default function ScheduleTaskModal({
   const supabase = supabaseClient;
 
   const isEditing = !!editingTask?.id;
-  
   const editingSeriesId = editingTask?.repeat_series_id || null;
 
-// --- task types ---
-const [taskTypes, setTaskTypes] = useState([]);
-const [taskTypeId, setTaskTypeId] = useState("");
+  // --- task types ---
+  const [taskTypes, setTaskTypes] = useState([]);
+  const [taskTypeId, setTaskTypeId] = useState("");
 
-useEffect(() => {
-  if (!isOpen || !supabase) return;
+  useEffect(() => {
+    if (!isOpen || !supabase) return;
 
-  let cancelled = false;
+    let cancelled = false;
 
-  (async () => {
-    const { data, error } = await supabase
-      .from("schedule_task_types")
-      .select("*")
-      .order("category", { ascending: true })
-      .order("name", { ascending: true });
+    (async () => {
+      const { data, error } = await supabase
+        .from("schedule_task_types")
+        .select("*")
+        .order("category", { ascending: true })
+        .order("name", { ascending: true });
 
-    if (cancelled) return;
+      if (cancelled) return;
 
-    if (error) {
-      console.warn("[ScheduleTaskModal] failed to load schedule_task_types", error);
-      toast.error("Couldn’t load task types (check table name / RLS).");
-      setTaskTypes([]);
-      return;
-    }
+      if (error) {
+        console.warn("[ScheduleTaskModal] failed to load schedule_task_types", error);
+        toast.error("Couldn’t load task types (check table name / RLS).");
+        setTaskTypes([]);
+        return;
+      }
 
-    // If you have an active flag, this will keep active rows (and won’t crash if the field doesn’t exist)
-    const rows = (data || []).filter(
-      (t) => (t?.is_active ?? t?.active ?? true) !== false
-    );
+      const rows = (data || []).filter(
+        (t) => (t?.is_active ?? t?.active ?? true) !== false
+      );
 
-    setTaskTypes(rows);
+      setTaskTypes(rows);
+    })();
 
-  })();
-
-  return () => {
-    cancelled = true;
-  };
-}, [isOpen, supabase]);
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, supabase]);
 
   const selectedTaskType = useMemo(
     () => taskTypes.find((t) => t.id === taskTypeId) || null,
@@ -125,7 +150,6 @@ useEffect(() => {
   }, [taskTypes]);
 
   const taskTitle = useMemo(() => {
-    // Title is derived from the selected task type
     if (!selectedTaskType) return "Scheduled task";
     return selectedTaskType.name || "Scheduled task";
   }, [selectedTaskType]);
@@ -135,6 +159,26 @@ useEffect(() => {
   const [end, setEnd] = useState(null);
   const [allDay, setAllDay] = useState(false);
   const [lockTask, setLockTask] = useState(false);
+
+  // ✅ tracks if user manually edited End (so we stop auto-changing it)
+  const endTouchedRef = useRef(false);
+
+  const getDefaultEnd = (s) => (s ? addHours(s, DEFAULT_END_HOURS) : null);
+
+  const ensureEndValidForStart = (nextStart) => {
+    if (!nextStart) return;
+    const minEnd = getDefaultEnd(nextStart);
+
+    setEnd((cur) => {
+      // if user never touched End, always keep default
+      if (!endTouchedRef.current) return minEnd;
+
+      // if user DID touch End, only bump if it became invalid
+      if (!cur || !(cur > nextStart)) return minEnd;
+
+      return cur;
+    });
+  };
 
   // --- staff multi select ---
   const staffOptions = useMemo(() => {
@@ -155,27 +199,27 @@ useEffect(() => {
   const [repeatRule, setRepeatRule] = useState("none"); // none | weekly | fortnightly | monthly
   const repeatEnabled = repeatRule !== "none";
 
-  // ✅ Keep existing numeric state
   const [occurrences, setOccurrences] = useState(1);
-
-  // ✅ FIX: add text state so users can type directly without spinner clicking
   const [occurrencesText, setOccurrencesText] = useState("1");
   useEffect(() => {
     setOccurrencesText(String(occurrences || 1));
   }, [occurrences]);
 
-  // Only show series checkbox if editing a real series
   const [applyToSeries, setApplyToSeries] = useState(false);
-   const [deleteScope, setDeleteScope] = useState("occurrence"); // single | occurrence | series
+  const [deleteScope, setDeleteScope] = useState("occurrence"); // single | occurrence | series
 
   const [saving, setSaving] = useState(false);
 
- useEffect(() => {
+  useEffect(() => {
     if (!allDay) return;
     const baseDate = start || end || slot?.start || new Date();
     const primaryStaffId = staffIds[0] || slot?.resourceId || null;
     const bounds = resolveAllDayBounds(baseDate, primaryStaffId, stylists);
     if (!bounds) return;
+
+    // when all-day, the system controls end/start
+    endTouchedRef.current = true;
+
     if (!start || bounds.start.getTime() !== start.getTime()) {
       setStart(bounds.start);
     }
@@ -186,14 +230,18 @@ useEffect(() => {
 
   // Init fields when opening
   useEffect(() => {
-    // reset / load selected task type
-setTaskTypeId(
-  String(editingTask?.task_type_id || editingTask?.taskTypeId || "")
-);
+    setTaskTypeId(
+      String(editingTask?.task_type_id || editingTask?.taskTypeId || "")
+    );
 
     if (!isOpen) return;
 
     setSaving(false);
+
+    // reset end-touch tracking on open:
+    // - creating: not touched (auto default)
+    // - editing: treat as touched (keep existing)
+    endTouchedRef.current = isEditing ? true : false;
 
     const s = editingTask?.start
       ? new Date(editingTask.start)
@@ -201,30 +249,55 @@ setTaskTypeId(
       ? new Date(slot.start)
       : null;
 
-    const e = editingTask?.end
+    const eRaw = editingTask?.end
       ? new Date(editingTask.end)
       : slot?.end
       ? new Date(slot.end)
       : null;
 
+    // ✅ fix end on open so it never starts in the past / invalid
+    let e = eRaw;
+    if (s) {
+      const minEnd = getDefaultEnd(s);
+
+      if (isEditing) {
+        // editing: only repair if invalid
+        if (!e || !(e > s)) e = minEnd;
+      } else {
+        // creating: default is start + 1 hour (but allow longer if slot.end is later)
+        if (!e || !(e > s)) e = minEnd;
+        else if (e.getTime() < minEnd.getTime()) e = minEnd;
+      }
+    }
+
     setStart(s);
     setEnd(e);
 
-    setAllDay(!!editingTask?.allDay);
+    const hasAllDayFlag = typeof editingTask?.allDay === "boolean";
+    const primaryStaffId =
+      editingTask?.staff_id ||
+      editingTask?.resourceId ||
+      (Array.isArray(editingTask?.staffIds) ? editingTask.staffIds[0] : null) ||
+      slot?.resourceId ||
+      null;
+
+    const initialAllDay =
+      hasAllDayFlag
+        ? !!editingTask?.allDay
+        : matchesAllDayBounds(s, e, primaryStaffId, stylists);
+
+    setAllDay(initialAllDay);
     setLockTask(!!editingTask?.is_locked);
 
     // Repeat defaults
     setRepeatRule("none");
     setOccurrences(1);
-    setOccurrencesText("1"); // ✅ keep text in sync on open
+    setOccurrencesText("1");
 
-    // Only meaningful if this is a series
     setApplyToSeries(false);
-     setDeleteScope(editingSeriesId ? "occurrence" : "single");
+    setDeleteScope(editingSeriesId ? "occurrence" : "single");
 
     // Default staff:
-    // - If editing, we try to show all staff in this booking group (multi-staff block)
-    // - If creating, default to selected slot resourceId
     if (isEditing) {
       const ids = Array.isArray(editingTask?.staffIds)
         ? editingTask.staffIds.filter(Boolean)
@@ -239,22 +312,24 @@ setTaskTypeId(
       const rid = slot?.resourceId || null;
       setStaffIds(rid ? [rid] : []);
     }
-}, [isOpen, isEditing, editingTask, slot]);
+  }, [isOpen, isEditing, editingTask, slot]);
 
   const onPrimarySave = async () => {
     if (!supabase) return toast.error("No Supabase client available");
+
     const baseDate = start || end || slot?.start || new Date();
     const primaryStaffId = staffIds[0] || slot?.resourceId || null;
+
     const bounds = allDay
       ? resolveAllDayBounds(baseDate, primaryStaffId, stylists)
       : { start, end };
+
     const dayStart = bounds?.start;
     const dayEnd = bounds?.end;
 
     if (allDay && !resolveAllDayBounds(baseDate, primaryStaffId, stylists)) {
       return toast.error("All-day tasks must match staff working hours.");
     }
-
 
     if (!dayStart || !dayEnd || !(dayEnd > dayStart)) {
       return toast.error("End must be after start");
@@ -273,8 +348,8 @@ setTaskTypeId(
         action: isEditing ? "update" : "create",
         payload: {
           taskTypeId,
-          title: taskTitle, // derived
-         start: dayStart,
+          title: taskTitle,
+          start: dayStart,
           end: dayEnd,
           allDay,
           is_locked: lockTask,
@@ -306,10 +381,11 @@ setTaskTypeId(
 
   const onDelete = async () => {
     if (!isEditing) return;
-   const scopeLabel =
+
+    const scopeLabel =
       deleteScope === "series"
         ? "Delete ALL occurrences in this series?"
-       : deleteScope === "single"
+        : deleteScope === "single"
         ? "Delete ONLY this staff slot?"
         : "Delete this entire occurrence (all staff)?";
 
@@ -322,7 +398,7 @@ setTaskTypeId(
         action: "delete",
         payload: {
           applyToSeries: !!applyToSeries,
-              deleteScope,
+          deleteScope,
           editingMeta: {
             id: editingTask?.id,
             repeat_series_id: editingSeriesId,
@@ -343,7 +419,6 @@ setTaskTypeId(
 
   return (
     <Modal isOpen={isOpen} onClose={onClose}>
-      {/* Hide number spinners (so user can just type) */}
       <style>{`
         input[type="number"]::-webkit-outer-spin-button,
         input[type="number"]::-webkit-inner-spin-button {
@@ -414,7 +489,15 @@ setTaskTypeId(
               value={toLocalDateTimeValue(start)}
               onChange={(e) => {
                 const d = parseLocalDateTime(e.target.value);
-                if (d) setStart(d);
+                if (!d) return;
+
+                if (allDay) {
+                  setStart(d);
+                  return;
+                }
+
+                setStart(d);
+                ensureEndValidForStart(d);
               }}
               disabled={saving}
             />
@@ -430,7 +513,9 @@ setTaskTypeId(
               value={toLocalDateTimeValue(end)}
               onChange={(e) => {
                 const d = parseLocalDateTime(e.target.value);
-                if (d) setEnd(d);
+                if (!d) return;
+                endTouchedRef.current = true; // ✅ user has manually set an end time
+                setEnd(d);
               }}
               disabled={saving}
             />
@@ -442,11 +527,11 @@ setTaskTypeId(
             <input
               type="checkbox"
               checked={allDay}
-             onChange={(e) => {
+              onChange={(e) => {
                 const checked = !!e.target.checked;
 
                 if (checked) {
-                   const baseDate = start || end || slot?.start || new Date();
+                  const baseDate = start || end || slot?.start || new Date();
                   const primaryStaffId = staffIds[0] || slot?.resourceId || null;
                   const bounds = resolveAllDayBounds(
                     baseDate,
@@ -458,13 +543,18 @@ setTaskTypeId(
                     setAllDay(false);
                     return;
                   }
+
+                  endTouchedRef.current = true; // all-day is controlled
                   setAllDay(true);
                   setStart(bounds.start);
                   setEnd(bounds.end);
-                  return;          
-
+                  return;
                 }
-                 setAllDay(false);
+
+                // turning all-day OFF: revert to default end = start + 1 hour (unless user later edits)
+                setAllDay(false);
+                endTouchedRef.current = false;
+                if (start) setEnd(getDefaultEnd(start));
               }}
               disabled={saving}
             />
@@ -527,7 +617,7 @@ setTaskTypeId(
                 setRepeatRule(v);
                 if (v === "none") {
                   setOccurrences(1);
-                  setOccurrencesText("1"); // ✅ keep text in sync when disabling repeat
+                  setOccurrencesText("1");
                 }
               }}
               disabled={saving}
@@ -544,7 +634,6 @@ setTaskTypeId(
               Occurrences
             </label>
 
-            {/* ✅ FIXED: typing-friendly occurrences input (no other logic changed) */}
             <input
               type="number"
               min={1}
@@ -582,7 +671,7 @@ setTaskTypeId(
           </label>
         )}
 
-         {isEditing && (
+        {isEditing && (
           <div className="mb-3">
             <p className="text-sm font-semibold text-gray-700 mb-1">
               Delete scope
