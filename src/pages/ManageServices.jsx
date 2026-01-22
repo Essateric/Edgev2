@@ -6,6 +6,7 @@ import { supabase as defaultSupabase } from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
 import { logEvent } from "../lib/logEvent";
 import { confirmAndDeleteServiceWithAudit } from "../lib/deleteServiceWithAudit";
+import { isAdminLike } from "../utils/roleUtils";
 
 
 export default function ManageServices({ staffId }) {
@@ -55,7 +56,7 @@ export default function ManageServices({ staffId }) {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
-  const isAdmin = (me?.permission || "").toLowerCase().trim() === "admin";
+const isAdmin = isAdminLike(me);
 
   const categories = [
     "Uncategorized",
@@ -345,7 +346,7 @@ const handleDeleteService = async () => {
   // NEW: open delete confirmation
   const requestDeleteService = (service) => {
     if (!isAdmin) {
-      toast.error("Only admins can delete services.");
+      toast.error("Only admins and senior stylists can delete services.");
       return;
     }
     setDeleteTarget(service);
@@ -355,7 +356,7 @@ const handleDeleteService = async () => {
   const confirmDeleteService = async () => {
     if (!deleteTarget?.id) return;
     if (!isAdmin) {
-      toast.error("Only admins can delete services.");
+     toast.error("Only admins and senior stylists can delete services.");
       setDeleteTarget(null);
       return;
     }

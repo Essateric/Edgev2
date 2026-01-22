@@ -94,7 +94,7 @@ serve(async (req) => {
       });
     }
 
-    // Role check (admin/regional)
+  // Role check (admin/senior stylist)
     const uid = String(payload.sub);
     const me = await admin.from("staff").select("id, permission").eq("id", uid).maybeSingle();
     logs.push(`🧑‍💼 caller staff row: id=${me.data?.id ?? "null"} perm=${me.data?.permission ?? "null"} err=${me.error?.message ?? "none"}`);
@@ -104,9 +104,9 @@ serve(async (req) => {
       });
     }
     const role = String(me.data.permission || "").toLowerCase();
-    if (!["admin", "regional"].includes(role)) {
+   if (!["admin", "senior stylist"].includes(role)) {
       logs.push(`⛔ Forbidden for role=${role}`);
-      return new Response(JSON.stringify({ error: "Forbidden - Only admins can add staff", logs }), {
+      return new Response(JSON.stringify({ error: "Forbidden - Only admins or senior stylists can add staff", logs }), {
         status: 403, headers: corsHeaders,
       });
     }

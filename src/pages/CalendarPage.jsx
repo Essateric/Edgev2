@@ -25,6 +25,7 @@ import useAddGridTimeLabels from "../utils/AddGridTimeLabels";
 import baseSupabase from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
 import useTaskScheduler from "../components/hooks/useTaskScheduler";
+import { isAdminLike } from "../utils/roleUtils";
 
 import { v4 as uuidv4 } from "uuid";
 import { addWeeks, addMonths } from "date-fns";
@@ -250,8 +251,7 @@ export default function CalendarPage() {
     }
   }, []);
 
-  const isAdmin =
-    String(currentUser?.permission || "").trim().toLowerCase() === "admin";
+ const isAdmin = isAdminLike(currentUser);
   const [stylistList, setStylistList] = useState([]);
 
   useEffect(() => {

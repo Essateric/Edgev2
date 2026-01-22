@@ -3,6 +3,7 @@ import { supabase } from "../supabaseClient";
 import Button from "../components/Button";
 import Card from "../components/Card";
 import { useAuth } from "../contexts/AuthContext";
+import { hasAnyRole } from "../utils/roleUtils";
 
 const COLS = "id,first_name,last_name,mobile,email,notes,created_at";
 
@@ -69,7 +70,13 @@ export default function ManageClients() {
         const ok =
           !error &&
           staffRow &&
-          ["admin", "owner", "manager"].includes(staffRow.permission);
+           hasAnyRole({ permission: staffRow.permission }, [
+            "admin",
+            "senior stylist",
+            "owner",
+            "manager",
+            "business owner",
+          ]);
 
         if (mounted) setIsAdmin(!!ok);
       } catch {

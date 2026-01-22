@@ -97,9 +97,10 @@ serve(async (req) => {
     }
 
     const callerRole = String(callerStaff.permission || "").trim().toLowerCase();
-    const isAdmin = callerRole === "admin";
+   const adminLikeRoles = new Set(["admin", "senior stylist"]);
+    const isAdmin = adminLikeRoles.has(callerRole);
 
-    // Only admin can change other people's PIN
+   // Only admin-like roles can change other people's PIN
     if (!isAdmin && String(callerStaff.id) !== staff_id) {
       return new Response(JSON.stringify({ error: "Not allowed" }), {
         status: 403,

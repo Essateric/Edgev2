@@ -3,7 +3,7 @@ import { supabase as defaultSupabase } from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
 import PageLoader from "../components/PageLoader.jsx";
 
-const ALLOWED_ROLES = ["admin", "business owner", "manager"];
+const ALLOWED_ROLES = ["admin", "business owner", "manager", "senior stylist"];
 
 const PAGE_SIZES = [25, 50, 100, 200];
 

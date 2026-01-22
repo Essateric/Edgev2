@@ -1,4 +1,5 @@
 // src/lib/deleteServiceWithAudit.js
+import { isAdminLike } from "../utils/roleUtils";
 
 /**
  * Deletes a service and writes an audit_events row.
@@ -11,7 +12,7 @@ export async function confirmAndDeleteServiceWithAudit({
   service, // expects at least { id, name, category, base_price, base_duration }
   currentUser,
   staffId, // optional override (if you already pass it around)
-  reason = "Deleted by admin in ManageServices",
+  reason = "Deleted by admin or senior stylist in ManageServices",
 }) {
   if (!supabase) throw new Error("Supabase client is required");
   if (!service?.id) throw new Error("Service is required");
@@ -49,9 +50,9 @@ export async function confirmAndDeleteServiceWithAudit({
   }
 
   // Front-end permission guard (RLS must still enforce)
-  const perm = (me?.permission || "").toLowerCase().trim();
-  if (perm && perm !== "admin") {
-    throw new Error("Only admins can delete services.");
+ const isAdmin = isAdminLike(me);
+  if (me?.permission && !isAdmin) {
+    throw new Error("Only admins and senior stylists can delete services.");
   }
 
   // Count assignments that will be cascade-deleted (optional, but useful in audit)
