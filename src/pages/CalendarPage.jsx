@@ -190,6 +190,14 @@ const isConfirmedStatus = (status) => {
   return s === "confirmed" || s.startsWith("confirm") || s.includes("confirmed");
 };
 
+const isOnlineBookingSource = (event) => {
+  const source = String(event?.source || event?.booking_source || "")
+    .trim()
+    .toLowerCase();
+  if (!source) return false;
+  return source === "public" || source === "online" || source.includes("online_booking");
+};
+
 const isMobileMoveableBooking = (event) => {
   const source = String(
     event?.source || event?.booking_source || ""
@@ -515,6 +523,7 @@ useEffect(() => {
         const { data: staffData, error: sErr } = await supabase
           .from("staff")
           .select("*")
+           .or("is_active.is.null,is_active.eq.true")
           .order("created_at", { ascending: true });
         dbgLog("staff query: AFTER", {
           runId,
@@ -1648,6 +1657,17 @@ elementProps={useTouchDnD ? { onTouchStartCapture: handleTouchStartCapture } : u
           color: "#fff",
           border: "none",
           opacity: 0.95,
+        },
+      };
+    }
+
+    if (isOnlineBookingSource(event)) {
+      return {
+        style: {
+          zIndex: 2,
+          backgroundColor: "#5943b3",
+          color: "#3a5578",
+          border: "1px solid #a78bfa",
         },
       };
     }

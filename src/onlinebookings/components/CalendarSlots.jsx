@@ -165,10 +165,10 @@ export default function CalendarSlots({
                       setSelectedTime(new Date(tDate));
                       onPickTime?.();
                     }}
-                    className={`px-3 py-2 rounded-lg border text-sm ${
+                     className={`px-3 py-2 rounded-xl border text-sm shadow-sm ${
                       active
-                        ? "border-amber-400 bg-neutral-800"
-                        : "border-neutral-700 hover:shadow"
+                        ? "border-amber-400 bg-neutral-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]"
+                        : "border-purple-300/60 bg-gradient-to-b from-purple-200/30 to-purple-400/20 text-purple-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.4)] hover:from-purple-200/40 hover:to-purple-400/30 hover:shadow-md"
                     }`}
                   >
                     {fmtTime(tDate)}{" "}
