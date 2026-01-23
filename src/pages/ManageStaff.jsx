@@ -6,6 +6,8 @@ import EditServicesModal from "../components/EditServicesModal";
 import AddNewStaffModal from "../components/AddNewStaffModal";
 import { useAuth } from "../contexts/AuthContext";
 import PageLoader from "../components/PageLoader.jsx";
+import { hasAtLeastRole } from "../utils/Roles";
+
 
 const daysOrder = [
   "Monday",
@@ -54,6 +56,7 @@ export default function ManageStaff() {
 
   const { currentUser, pageLoading, authLoading, supabaseClient } = useAuth();
   const [loading, setLoading] = useState(true);
+    const canManageStaff = hasAtLeastRole(currentUser?.permission, "senior stylist");
 
   const supabase = supabaseClient || defaultSupabase;
 
@@ -206,6 +209,11 @@ export default function ManageStaff() {
       return;
     }
 
+     if (!canManageStaff) {
+      alert("❌ You do not have permission to delete staff.");
+      return;
+    }
+
     const confirm = window.confirm(
       "Are you sure you want to delete this staff member? This cannot be undone."
     );
@@ -236,6 +244,40 @@ export default function ManageStaff() {
       console.error("❌ Error deleting staff:", err);
       alert("❌ Error deleting staff.");
     }
+  };
+
+  const toggleActiveStatus = async (member) => {
+    if (!currentUser?.token) {
+      alert("❌ You must be logged in to update staff status.");
+      return;
+    }
+
+    if (!canManageStaff) {
+      alert("❌ You do not have permission to update staff status.");
+      return;
+    }
+
+    const nextStatus = member?.is_active === false;
+    const confirm = window.confirm(
+      nextStatus
+        ? `Make ${member?.name || "this staff member"} active?`
+        : `Make ${member?.name || "this staff member"} inactive?`
+    );
+    if (!confirm) return;
+
+    const { error } = await withTimeout(
+      supabase.from("staff").update({ is_active: nextStatus }).eq("id", member.id),
+      5000,
+      "update staff status"
+    );
+
+    if (error) {
+      alert("❌ Error updating staff status: " + error.message);
+      return;
+    }
+
+    alert(`✅ ${member?.name || "Staff"} is now ${nextStatus ? "active" : "inactive"}.`);
+    await fetchData();
   };
 
   const openEditServicesModal = (staffMember) => {
@@ -354,7 +396,9 @@ export default function ManageStaff() {
           {staff.map((member) => (
             <div
               key={member.id}
-              className="bg-white rounded-2xl shadow-md p-4 border border-bronze"
+              className={`bg-white rounded-2xl shadow-md p-4 border border-bronze ${
+                member.is_active === false ? "opacity-70" : ""
+              }`}
             >
               <div className="flex justify-between items-start">
                 <div>
@@ -367,6 +411,9 @@ export default function ManageStaff() {
                   </h4>
                   <p className="text-sm text-gray-500">Email: {member.email || "N/A"}</p>
                   <p className="text-sm text-gray-500">Role: {member.permission || "—"}</p>
+                  <p className="text-sm text-gray-500">
+                    Status: {member.is_active === false ? "Inactive" : "Active"}
+                  </p>
 
                   <div className="mt-2">
                     <h5 className="text-md font-semibold mb-1">Hours:</h5>
@@ -422,12 +469,24 @@ export default function ManageStaff() {
                     Change PIN
                   </button>
 
-                  <button
-                    onClick={() => handleDelete(member.id)}
-                    className="bg-red-600 text-white px-3 py-1 rounded"
-                  >
-                    Delete
-                  </button>
+                  {canManageStaff ? (
+                    <>
+                      <button
+                        onClick={() => toggleActiveStatus(member)}
+                        className={`px-3 py-1 rounded text-white ${
+                          member.is_active === false ? "bg-emerald-600" : "bg-slate-600"
+                        }`}
+                      >
+                        {member.is_active === false ? "Activate" : "Deactivate"}
+                      </button>
+                      <button
+                        onClick={() => handleDelete(member.id)}
+                        className="bg-red-600 text-white px-3 py-1 rounded"
+                      >
+                        Delete
+                      </button>
+                    </>
+                  ) : null}
                 </div>
               </div>
             </div>
