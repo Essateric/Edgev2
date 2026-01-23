@@ -8,7 +8,7 @@ const CACHE_KEY = "cachedStaffPins";
 
 /**
  * Get cached staff (for offline PIN checks).
- * Shape: [{ id, name, email, permission, pin_hash }]
+ * Shape: [{ id, name, email, permission, pin_hash, is_active }]
  */
 export async function getStaffPins() {
   const raw = localStorage.getItem(CACHE_KEY);
@@ -17,12 +17,15 @@ export async function getStaffPins() {
     const parsed = JSON.parse(raw);
     // defensive sanitize
     if (!Array.isArray(parsed)) return [];
-    return parsed.map((s) => ({
-      id: s.id ?? null,
-      name: s.name ?? "",
-      email: s.email ?? null,
-      permission: String(s.permission ?? "staff").toLowerCase(),
-      pin_hash: s.pin_hash ?? null,
+     return parsed
+      .filter((s) => s?.is_active !== false)
+      .map((s) => ({
+        id: s.id ?? null,
+        name: s.name ?? "",
+        email: s.email ?? null,
+        permission: String(s.permission ?? "staff").toLowerCase(),
+        pin_hash: s.pin_hash ?? null,
+        is_active: s
     }));
   } catch {
     return [];
@@ -34,13 +37,16 @@ export async function getStaffPins() {
  * Accepts rows from DB; stores only safe fields + pin_hash (no plaintext pins).
  */
 export async function cacheStaffPins(staffList) {
-  const safe = (Array.isArray(staffList) ? staffList : []).map((s) => ({
-    id: s.id ?? null,
-    name: s.name ?? "",
-    email: s.email ?? null,
-    permission: String(s.permission ?? "staff").toLowerCase(),
-    pin_hash: s.pin_hash ?? null,
-  }));
+  const safe = (Array.isArray(staffList) ? staffList : [])
+    .filter((s) => s?.is_active !== false)
+    .map((s) => ({
+      id: s.id ?? null,
+      name: s.name ?? "",
+      email: s.email ?? null,
+      permission: String(s.permission ?? "staff").toLowerCase(),
+      pin_hash: s.pin_hash ?? null,
+      is_active: s.is_active ?? null,
+    }));
   localStorage.setItem(CACHE_KEY, JSON.stringify(safe));
 }
 
@@ -52,7 +58,8 @@ export const verifyPinLogin = async (pin) => {
   // Pull the minimal fields we need; matches your schema
   const { data: staffList, error } = await supabase
     .from("staff")
-    .select("id, name, email, permission, pin_hash");
+   .select("id, name, email, permission, pin_hash, is_active")
+    .or("is_active.is.null,is_active.eq.true");
 
   if (error || !staffList) {
     console.error("❌ Error fetching staff list:", error);
@@ -61,6 +68,7 @@ export const verifyPinLogin = async (pin) => {
 
   // Prefer sync compare in a small loop for browser simplicity
   for (const staff of staffList) {
+       if (staff?.is_active === false) continue;
     if (!staff?.pin_hash) continue;
     const isMatch = bcrypt.compareSync(pin, staff.pin_hash);
     if (isMatch) {
@@ -70,6 +78,7 @@ export const verifyPinLogin = async (pin) => {
         email: staff.email,
         permission: String(staff.permission ?? "staff").toLowerCase(),
         pin_hash: staff.pin_hash,
+         is_active: staff.is_active ?? null,
       };
     }
   }

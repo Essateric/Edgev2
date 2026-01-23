@@ -424,7 +424,8 @@ export const AuthProvider = ({ children }) => {
   const cacheStaffPinsFromSupabase = async () => {
     const { data: staffList, error } = await supabase
       .from("staff")
-      .select("id, name, email, permission, pin_hash");
+      .select("id, name, email, permission, pin_hash, is_active")
+      .or("is_active.is.null,is_active.eq.true");
     if (!error && staffList) cacheStaffPins(staffList);
   };
 
