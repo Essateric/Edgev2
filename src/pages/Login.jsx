@@ -1,14 +1,15 @@
 // src/pages/Login.jsx
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import Button from "../components/Button.jsx";
 import PinPad from "../components/PinPad.jsx";
 import { toast } from "react-hot-toast";
 import logo from "../assets/EdgeLogo.png";
-import supabase from "../supabaseClient";
 
 export default function Login() {
+  const MAX_PIN_ATTEMPTS = 3;
+
   const navigate = useNavigate();
   const location = useLocation();
   const from = location.state?.from || "/";
@@ -22,56 +23,166 @@ export default function Login() {
   const [mode, setMode] = useState("pin"); // "pin" | "email" | "forgotPin"
   const [magicEmail, setMagicEmail] = useState("");
 
-  const [sending, setSending] = useState(false);       // magic link
+  // PIN lockout / attempts UI (server-driven if provided)
+  const [pinAttemptsRemaining, setPinAttemptsRemaining] = useState(null);
+  const [pinLockoutSecondsState, setPinLockoutSeconds] = useState(0);
+
+  // Local “belt & braces” lock state (fixes your pinLocked undefined crash)
+  const [pinAttempts, setPinAttempts] = useState(0);
+  const [pinLocked, setPinLocked] = useState(false);
+
+  const [sending, setSending] = useState(false); // magic link
   const [submitting, setSubmitting] = useState(false); // doing a login attempt
+
   const showPinSubmitting = mode === "pin" && submitting;
 
-  // Keep your existing gating
-  const keypadDisabled = sending || submitting;
-  const enterDisabled = sending || submitting || pin.length !== 4;
+  const pinLockoutSeconds = Number(pinLockoutSecondsState) || 0;
 
+  // Lockout applies to PIN entry only (email login should still work)
+  const lockoutActive = useMemo(() => {
+    if (mode !== "pin") return false;
+    return pinLocked || pinLockoutSeconds > 0;
+  }, [mode, pinLocked, pinLockoutSeconds]);
 
-  // Belt & braces: if the auth state flips to an authenticated user,
-  // route to the intended page.
+  const keypadDisabled = mode === "pin" ? (sending || submitting || lockoutActive) : false;
+
+  const pinEnterDisabled =
+    mode === "pin"
+      ? sending || submitting || lockoutActive || pin.length !== 4
+      : true;
+
+  const formDisabled = sending || submitting;
+
+  // Countdown for lockout seconds
+  useEffect(() => {
+    if (mode !== "pin") return;
+    if (pinLockoutSeconds <= 0) return;
+
+    const timer = setInterval(() => {
+      setPinLockoutSeconds((prev) => {
+        const next = prev > 0 ? prev - 1 : 0;
+        if (next === 0) {
+          // unlock when timer finishes
+          setPinLocked(false);
+        }
+        return next;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [mode, pinLockoutSeconds]);
+
+  // If auth state flips to authenticated user, route to intended page.
   useEffect(() => {
     if (!authLoading && currentUser) {
       navigate(from, { replace: true });
     }
   }, [authLoading, currentUser, navigate, from]);
 
-  // PIN login: keep your logic, but *await* loginWithPin and navigate immediately.
+  // PIN login
   const handlePinLogin = useCallback(async () => {
-    if (enterDisabled || submitting) return;
+    if (mode !== "pin") return;
+    if (submitting) return;
+    if (pinEnterDisabled) return;
 
     try {
       if (pin.length !== 4) {
         toast.error("Enter 4-digit PIN");
         return;
       }
+
       setSubmitting(true);
+      setError("");
 
-      await loginWithPin(pin);            // <- await the async auth
+      await loginWithPin(pin);
+
+      // success reset
+      setPinAttempts(0);
+      setPinLocked(false);
+      setPinAttemptsRemaining(null);
+      setPinLockoutSeconds(0);
+
       toast.success("Welcome back!");
-      navigate(from, { replace: true });  // <- deterministic navigation now
-
+      navigate(from, { replace: true });
     } catch (err) {
-      const msg = err?.message || "PIN login failed";
-      setError(msg);
-      toast.error(msg);
+      // Expecting AuthContext to throw an object with these fields sometimes
+      const attemptsRemaining =
+        typeof err?.attemptsRemaining === "number" ? err.attemptsRemaining : null;
+
+      const lockoutSeconds =
+        typeof err?.lockoutSeconds === "number" ? err.lockoutSeconds : 0;
+
+      if (lockoutSeconds > 0) {
+        setPinLockoutSeconds(lockoutSeconds);
+        setPinLocked(true);
+      }
+
+      setPinAttemptsRemaining(attemptsRemaining);
+
+      const msg =
+        lockoutSeconds > 0
+          ? `Too many wrong PIN attempts. Try again in ${lockoutSeconds}s.`
+          : attemptsRemaining !== null
+          ? `Wrong PIN. ${attemptsRemaining} attempt${
+              attemptsRemaining === 1 ? "" : "s"
+            } remaining.`
+          : err?.message || "PIN login failed";
+
+      const isInvalidPin =
+        err?.code === "PIN_INVALID" || String(msg).toLowerCase().includes("invalid pin");
+
+      if (isInvalidPin) {
+        // Keep your local attempt tracking too (but don’t permanently brick the screen)
+        if (attemptsRemaining !== null) {
+          const used = Math.max(0, MAX_PIN_ATTEMPTS - attemptsRemaining);
+          setPinAttempts(used);
+          if (attemptsRemaining <= 0) setPinLocked(true);
+        } else {
+          setPinAttempts((prev) => {
+            const next = prev + 1;
+            if (next >= MAX_PIN_ATTEMPTS) {
+              setPinLocked(true);
+              setError("Too many incorrect PIN attempts. Please wait and try again.");
+              toast.error("Too many incorrect attempts.");
+            } else {
+              setError("PIN is invalid");
+              toast.error("PIN is invalid");
+            }
+            return next;
+          });
+          return; // we already toasted/errored
+        }
+
+        setError(msg);
+        toast.error(msg);
+      } else {
+        setError(msg);
+        toast.error(msg);
+      }
     } finally {
       setSubmitting(false);
     }
-  }, [enterDisabled, submitting, pin, loginWithPin, navigate, from]);
+  }, [
+    mode,
+    submitting,
+    pinEnterDisabled,
+    pin,
+    loginWithPin,
+    navigate,
+    from,
+    MAX_PIN_ATTEMPTS,
+  ]);
 
   const handleEmailLogin = async (e) => {
     e.preventDefault();
-    if (enterDisabled || submitting) return;
+    if (submitting) return;
 
     try {
       setSubmitting(true);
+      setError("");
       await login(email, password);
       toast.success("Welcome back!");
-      // navigation handled by the effect above when currentUser becomes truthy
+      // navigation handled by auth effect when currentUser becomes truthy
     } catch (err) {
       const msg = err?.message || "Email login failed";
       setError(msg);
@@ -87,6 +198,7 @@ export default function Login() {
 
     setSending(true);
     setError("");
+
     try {
       const res = await fetch(
         "https://vmtcofezozrblfxudauk.functions.supabase.co/send-magic-link",
@@ -96,7 +208,9 @@ export default function Login() {
           body: JSON.stringify({ email: magicEmail }),
         }
       );
+
       const result = await res.json();
+
       if (res.ok) {
         toast.success("Magic link sent! Check your email.");
         setMode("pin");
@@ -105,7 +219,7 @@ export default function Login() {
         setError(msg);
         toast.error(msg);
       }
-    } catch (err) {
+    } catch {
       setError("Network error. Please try again.");
       toast.error("Network error. Please try again.");
     } finally {
@@ -132,6 +246,7 @@ export default function Login() {
             </p>
           </div>
         )}
+
         <img
           src={logo}
           alt="Edge HD Logo"
@@ -161,6 +276,18 @@ export default function Login() {
 
         {error && <div className="text-red-500 mb-3 text-center">{error}</div>}
 
+        {mode === "pin" && lockoutActive && pinLockoutSeconds > 0 && (
+          <div className="text-amber-300 mb-3 text-center text-sm">
+            Too many wrong attempts. Please wait {pinLockoutSeconds}s before trying again.
+          </div>
+        )}
+
+        {mode === "pin" && !lockoutActive && pinAttemptsRemaining !== null && (
+          <div className="text-amber-200/90 mb-3 text-center text-sm">
+            {pinAttemptsRemaining} attempt{pinAttemptsRemaining === 1 ? "" : "s"} remaining.
+          </div>
+        )}
+
         {mode === "pin" && (
           <div className="flex flex-col space-y-4 w-full">
             <PinPad
@@ -168,9 +295,10 @@ export default function Login() {
               onChange={setPin}
               onEnter={handlePinLogin}
               disabled={keypadDisabled}
-              enterDisabled={enterDisabled}
+              enterDisabled={pinEnterDisabled}
             />
             <input type="hidden" name="pin" value={pin} />
+
             <button
               onClick={() => {
                 setMode("forgotPin");
@@ -178,7 +306,7 @@ export default function Login() {
                 setMagicEmail("");
               }}
               className="mt-2 text-xs text-blue-400 hover:underline"
-              disabled={enterDisabled}
+              disabled={submitting || sending}
               type="button"
             >
               Forgot PIN?
@@ -197,7 +325,7 @@ export default function Login() {
               onChange={(e) => setEmail(e.target.value)}
               className="border p-2 rounded text-black"
               required
-              disabled={enterDisabled}
+              disabled={formDisabled}
             />
             <input
               type="password"
@@ -208,11 +336,12 @@ export default function Login() {
               onChange={(e) => setPassword(e.target.value)}
               className="border p-2 rounded text-black"
               required
-              disabled={enterDisabled}
+              disabled={formDisabled}
             />
-            <Button type="submit" disabled={enterDisabled}>
+            <Button type="submit" disabled={formDisabled}>
               {submitting ? "Logging in..." : "Login"}
             </Button>
+
             <button
               type="button"
               onClick={() => {
@@ -221,7 +350,7 @@ export default function Login() {
                 setMagicEmail("");
               }}
               className="mt-2 text-xs text-blue-400 hover:underline"
-              disabled={enterDisabled}
+              disabled={formDisabled}
             >
               Forgot PIN?
             </button>
@@ -244,7 +373,10 @@ export default function Login() {
             </Button>
             <button
               type="button"
-              onClick={() => setMode("pin")}
+              onClick={() => {
+                setMode("pin");
+                setError("");
+              }}
               className="text-xs text-gray-400 hover:underline"
               disabled={sending}
             >
@@ -271,10 +403,14 @@ export default function Login() {
             }
           }}
           className="mt-4 text-xs text-gray-400 hover:underline"
-          disabled={enterDisabled}
+          disabled={sending || submitting}
           type="button"
         >
-          {mode === "pin" ? "Switch to Email Login" : mode === "email" ? "Switch to PIN Login" : ""}
+          {mode === "pin"
+            ? "Switch to Email Login"
+            : mode === "email"
+            ? "Switch to PIN Login"
+            : ""}
         </button>
 
         <div className="mt-8 text-xs text-gray-500 text-center w-full">

@@ -1,6 +1,23 @@
 // src/lib/pinSession.js
 import supabase from "../supabaseClient";
 
+const PIN_CLIENT_ID_KEY = "edge_pin_client_id_v1";
+
+function getOrCreatePinClientId() {
+  try {
+    let id = localStorage.getItem(PIN_CLIENT_ID_KEY);
+    if (!id) {
+      id =
+        globalThis.crypto?.randomUUID?.() ||
+        `pin_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      localStorage.setItem(PIN_CLIENT_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    return `pin_${Date.now()}`;
+  }
+}
+
 function withTimeout(promise, ms, label) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
@@ -11,16 +28,26 @@ function withTimeout(promise, ms, label) {
 
 export async function fetchEdgePinSession(edgeUrl, pin) {
   console.log("[AUTH] calling Edge Function /login-with-pin");
+    const clientId = getOrCreatePinClientId();
   const res = await fetch(edgeUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pin: String(pin) }),
+    body: JSON.stringify({ pin: String(pin), client_id: clientId }),
   });
 
   const result = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(result?.error || "PIN login failed");
     if (result?.code) err.code = result.code;
+     if (result?.attempts_remaining !== undefined) {
+      err.attemptsRemaining = result.attempts_remaining;
+    }
+    if (result?.lockout_seconds !== undefined) {
+      err.lockoutSeconds = result.lockout_seconds;
+    }
+    if (result?.locked_until) {
+      err.lockedUntil = result.locked_until;
+    }
     console.error("[AUTH] edge error:", result);
     throw err;
   }

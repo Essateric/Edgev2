@@ -851,6 +851,17 @@ export const AuthProvider = ({ children }) => {
       });
       if (error) throw new Error(error.message);
 
+      const { data: staffRecord, error: staffError } = await supabase
+        .from("staff")
+        .select("id, is_active")
+        .eq("email", data.user.email)
+        .maybeSingle();
+      if (staffError) throw new Error(staffError.message);
+      if (staffRecord?.is_active === false) {
+        await supabase.auth.signOut({ scope: "local" });
+        throw new Error("Account inactive");
+      }
+
       const staffId = await findStaffIdForUser(data.user);
       const user = {
         id: data.user.id,
