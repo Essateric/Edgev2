@@ -349,29 +349,43 @@ setDeleteScope(editingSeriesId || multiStaff ? "occurrence" : "single");
       if (durMin > 12 * 60) return toast.error("Tasks can’t be longer than 12 hours.");
     }
 
+    const safeOccurrences = repeatEnabled
+      ? clampInt(Number(occurrencesText) || Number(occurrences) || 1, 1, 52)
+      : 1;
+
+    if (repeatEnabled && safeOccurrences !== occurrences) {
+      setOccurrences(safeOccurrences);
+      setOccurrencesText(String(safeOccurrences));
+    }
+
     setSaving(true);
     try {
       // Track lock change for edits (so we can call set_lock separately)
       const prevLocked = !!editingTask?.is_locked;
       const lockChanged = isEditing && lockTask !== prevLocked;
+      const convertToSeries = isEditing && repeatEnabled && !editingSeriesId;
+
+// if editing a single task and user picks repeat -> treat it like “convert to series”
+const action =
+  convertToSeries ? "convert_to_series" : isEditing ? "update" : "create";
+
 
       await onSave?.({
-        action: isEditing ? "update" : "create",
+        action,
         payload: {
           taskTypeId,
           title: taskTitle,
           start: dayStart,
           end: dayEnd,
           allDay,
+          
 
           // ❌ IMPORTANT: do NOT send is_locked here
           // is_locked: lockTask,
 
           staffIds,
           repeatRule,
-          occurrences: repeatEnabled
-            ? clampInt(Number(occurrences) || 1, 1, 52)
-            : 1,
+            occurrences: safeOccurrences,
           applyToSeries: !!applyToSeries,
           editingMeta: isEditing
             ? {

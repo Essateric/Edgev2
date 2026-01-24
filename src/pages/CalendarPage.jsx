@@ -463,24 +463,15 @@ useEffect(() => {
 }, [tagCodeById]);
 
 
+ const newBookingExtendedProps = useMemo(() => {
+  return {
+    client_email: clientObj?.email ?? null,
+    client_mobile: clientObj?.mobile ?? null,
+    client_first_name: clientObj?.first_name ?? null,
+    client_last_name: clientObj?.last_name ?? null,
+  };
+}, [clientObj]);
 
-  const selectedClientRow = useMemo(() => {
-     return [
-      ...(events || []),
-      ...scheduledTasks,
-      ...unavailableBlocks,
-      ...salonClosedBlocks,
-    ];
-  }, [events, scheduledTasks, unavailableBlocks, salonClosedBlocks]);
-
-  const newBookingExtendedProps = useMemo(() => {
-    return {
-      client_email: selectedClientRow?.email ?? null,
-      client_mobile: selectedClientRow?.mobile ?? null,
-      client_first_name: selectedClientRow?.first_name ?? null,
-      client_last_name: selectedClientRow?.last_name ?? null,
-    };
-  }, [selectedClientRow]);
 
 
 
@@ -1130,10 +1121,109 @@ const getStaffWorkingWindow = (staffId, date, stylistList) => {
   if (!(end > start)) return null;
   return { start, end };
 };
+const uniqKey = (r) =>
+  `${r.staff_id}|${r.task_type_id}|${new Date(r.start).getTime()}|${new Date(r.end).getTime()}`;
+
+
+const insertFutureRepeats = async ({
+  baseStart,
+  baseEnd,
+  repeatRule,
+  occurrences,
+  staffIds,
+  taskTypeId,
+  allDay,
+}) => {
+  const rule = String(repeatRule || "none");
+  const count = Math.max(1, Math.min(52, Number(occurrences) || 1));
+
+  if (rule === "none" || count <= 1) return { insertedCount: 0 };
+
+  const occ = buildOccurrences({
+    start: new Date(baseStart),
+    end: new Date(baseEnd),
+    repeatRule: rule,
+    occurrences: count,
+  });
+
+  const future = occ.slice(1); // <-- only future ones
+  if (!future.length) return { insertedCount: 0 };
+
+  let rows = [];
+
+  for (const o of future) {
+    for (const staffId of staffIds) {
+      if (allDay) {
+        const window = getStaffWorkingWindow(staffId, o.start, stylistList);
+        if (!window) continue;
+
+        rows.push({
+          staff_id: staffId,
+          task_type_id: taskTypeId,
+          start: window.start.toISOString(),
+          end: window.end.toISOString(),
+          is_active: true,
+        });
+      } else {
+        rows.push({
+          staff_id: staffId,
+          task_type_id: taskTypeId,
+          start: o.start.toISOString(),
+          end: o.end.toISOString(),
+          is_active: true,
+        });
+      }
+    }
+  }
+
+  if (!rows.length) return { insertedCount: 0 };
+
+  // ---- de-dupe (avoid inserting the same block twice if repeats already exist)
+  const starts = rows.map((r) => new Date(r.start).getTime());
+  const minStart = new Date(Math.min(...starts)).toISOString();
+  const maxStart = new Date(Math.max(...starts)).toISOString();
+
+  const { data: existing, error: existErr } = await supabase
+    .from("schedule_blocks")
+    .select("staff_id, task_type_id, start, end")
+    .eq("task_type_id", taskTypeId)
+    .in("staff_id", staffIds)
+    .gte("start", minStart)
+    .lte("start", maxStart);
+
+  if (existErr) throw existErr;
+
+  const existingSet = new Set((existing || []).map(uniqKey));
+  const filtered = rows.filter((r) => !existingSet.has(uniqKey(r)));
+
+  if (!filtered.length) return { insertedCount: 0 };
+
+  const { data: inserted, error: insErr } = await supabase
+    .from("schedule_blocks")
+    .insert(filtered)
+    .select("*, schedule_task_types ( id, name, category, color )");
+
+  if (insErr) throw insErr;
+
+  setScheduledTasks((prev) => [
+    ...prev,
+    ...(inserted || [])
+      .map((r) => mapScheduleBlockRowToEvent(r, stylistList))
+      .filter(Boolean),
+  ]);
+
+  return { insertedCount: inserted?.length || 0 };
+};
+
+
 
 
 const handleSaveTask = async ({ action, payload }) => {
+  
   if (!supabase) return;
+
+  if (action === "convert_to_series") action = "update";
+
 
   try {
     // ---------- DELETE ----------
@@ -1397,6 +1487,17 @@ if (action === "update") {
       )
     );
 
+    await insertFutureRepeats({
+  baseStart: newStart,
+  baseEnd: newEnd,
+  repeatRule: payload.repeatRule,
+  occurrences: payload.occurrences,
+  staffIds: normalizedStaffIds,
+  taskTypeId: newTaskTypeId,
+  allDay,
+});
+
+
     toast.success("Task updated");
     handleCloseTaskModal();
     return;
@@ -1440,6 +1541,16 @@ if (action === "update") {
         return row ? mapScheduleBlockRowToEvent(row, stylistList) : ev;
       })
     );
+
+        await insertFutureRepeats({
+  baseStart: newStart,
+  baseEnd: newEnd,
+  repeatRule: payload.repeatRule,
+  occurrences: payload.occurrences,
+  staffIds: normalizedStaffIds,
+  taskTypeId: newTaskTypeId,
+  allDay,
+});
 
     toast.success("Task updated");
     handleCloseTaskModal();
@@ -1498,6 +1609,16 @@ if (action === "update") {
       .filter(Boolean);
     return [...remaining, ...mapped];
   });
+
+      await insertFutureRepeats({
+  baseStart: newStart,
+  baseEnd: newEnd,
+  repeatRule: payload.repeatRule,
+  occurrences: payload.occurrences,
+  staffIds: normalizedStaffIds,
+  taskTypeId: newTaskTypeId,
+  allDay,
+});
 
   toast.success("Task updated");
   handleCloseTaskModal();
