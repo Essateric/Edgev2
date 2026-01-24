@@ -55,12 +55,17 @@ const getStaffWorkingBounds = (baseDate, staffId, stylists) => {
   if (!baseDate || !staffId) return null;
   const staff = (stylists || []).find((s) => s.id === staffId);
   if (!staff) return null;
+
   const dayName = DAY_LABELS[new Date(baseDate).getDay()];
   const hours = staff?.weeklyHours?.[dayName];
   if (!hours || hours.off) return null;
 
-  const [startHour, startMinute] = String(hours.start || "").split(":").map(Number);
-  const [endHour, endMinute] = String(hours.end || "").split(":").map(Number);
+  const [startHour, startMinute] = String(hours.start || "")
+    .split(":")
+    .map(Number);
+  const [endHour, endMinute] = String(hours.end || "")
+    .split(":")
+    .map(Number);
   if (!Number.isFinite(startHour) || !Number.isFinite(endHour)) return null;
 
   const start = new Date(baseDate);
@@ -93,9 +98,12 @@ export default function ScheduleTaskModal({
   stylists = [],
   editingTask = null,
   onSave,
+  supabaseClient: supabaseClientProp, // ✅ ACCEPT THE PROP
 }) {
-  const { supabaseClient } = useAuth();
-  const supabase = supabaseClient;
+  const auth = useAuth();
+
+  // ✅ Use prop first, then auth fallback
+  const supabase = supabaseClientProp || auth?.supabaseClient || null;
 
   const isEditing = !!editingTask?.id;
   const editingSeriesId = editingTask?.repeat_series_id || null;
@@ -119,7 +127,10 @@ export default function ScheduleTaskModal({
       if (cancelled) return;
 
       if (error) {
-        console.warn("[ScheduleTaskModal] failed to load schedule_task_types", error);
+        console.warn(
+          "[ScheduleTaskModal] failed to load schedule_task_types",
+          error
+        );
         toast.error("Couldn’t load task types (check table name / RLS).");
         setTaskTypes([]);
         return;
@@ -170,12 +181,8 @@ export default function ScheduleTaskModal({
     const minEnd = getDefaultEnd(nextStart);
 
     setEnd((cur) => {
-      // if user never touched End, always keep default
-      if (!endTouchedRef.current) return minEnd;
-
-      // if user DID touch End, only bump if it became invalid
-      if (!cur || !(cur > nextStart)) return minEnd;
-
+      if (!endTouchedRef.current) return minEnd; // default behavior
+      if (!cur || !(cur > nextStart)) return minEnd; // repair invalid end
       return cur;
     });
   };
@@ -230,17 +237,15 @@ export default function ScheduleTaskModal({
 
   // Init fields when opening
   useEffect(() => {
+    if (!isOpen) return;
+
     setTaskTypeId(
       String(editingTask?.task_type_id || editingTask?.taskTypeId || "")
     );
 
-    if (!isOpen) return;
-
     setSaving(false);
 
-    // reset end-touch tracking on open:
-    // - creating: not touched (auto default)
-    // - editing: treat as touched (keep existing)
+    // creating: auto default end; editing: preserve
     endTouchedRef.current = isEditing ? true : false;
 
     const s = editingTask?.start
@@ -255,16 +260,13 @@ export default function ScheduleTaskModal({
       ? new Date(slot.end)
       : null;
 
-    // ✅ fix end on open so it never starts in the past / invalid
     let e = eRaw;
     if (s) {
       const minEnd = getDefaultEnd(s);
 
       if (isEditing) {
-        // editing: only repair if invalid
         if (!e || !(e > s)) e = minEnd;
       } else {
-        // creating: default is start + 1 hour (but allow longer if slot.end is later)
         if (!e || !(e > s)) e = minEnd;
         else if (e.getTime() < minEnd.getTime()) e = minEnd;
       }
@@ -289,15 +291,17 @@ export default function ScheduleTaskModal({
     setAllDay(initialAllDay);
     setLockTask(!!editingTask?.is_locked);
 
-    // Repeat defaults
     setRepeatRule("none");
     setOccurrences(1);
     setOccurrencesText("1");
 
     setApplyToSeries(false);
-    setDeleteScope(editingSeriesId ? "occurrence" : "single");
+const multiStaff =
+  Array.isArray(editingTask?.staffIds) && editingTask.staffIds.length > 1;
 
-    // Default staff:
+setDeleteScope(editingSeriesId || multiStaff ? "occurrence" : "single");
+
+
     if (isEditing) {
       const ids = Array.isArray(editingTask?.staffIds)
         ? editingTask.staffIds.filter(Boolean)
@@ -312,8 +316,11 @@ export default function ScheduleTaskModal({
       const rid = slot?.resourceId || null;
       setStaffIds(rid ? [rid] : []);
     }
-  }, [isOpen, isEditing, editingTask, slot]);
+  }, [isOpen, isEditing, editingTask, slot, stylists, editingSeriesId]);
 
+  // ✅ FIX: do NOT include is_locked in the normal update/create payload.
+  // Lock/unlock must be a separate action (handled in CalendarPage via RPC),
+  // otherwise your update path can be blocked by RLS and "delete → insert" flows.
   const onPrimarySave = async () => {
     if (!supabase) return toast.error("No Supabase client available");
 
@@ -344,6 +351,10 @@ export default function ScheduleTaskModal({
 
     setSaving(true);
     try {
+      // Track lock change for edits (so we can call set_lock separately)
+      const prevLocked = !!editingTask?.is_locked;
+      const lockChanged = isEditing && lockTask !== prevLocked;
+
       await onSave?.({
         action: isEditing ? "update" : "create",
         payload: {
@@ -352,7 +363,10 @@ export default function ScheduleTaskModal({
           start: dayStart,
           end: dayEnd,
           allDay,
-          is_locked: lockTask,
+
+          // ❌ IMPORTANT: do NOT send is_locked here
+          // is_locked: lockTask,
+
           staffIds,
           repeatRule,
           occurrences: repeatEnabled
@@ -365,15 +379,33 @@ export default function ScheduleTaskModal({
                 repeat_series_id: editingSeriesId,
                 oldStart: editingTask?.start ? new Date(editingTask.start) : null,
                 oldEnd: editingTask?.end ? new Date(editingTask.end) : null,
-                task_type_id: editingTask?.task_type_id || editingTask?.taskTypeId || null,
+                task_type_id:
+                  editingTask?.task_type_id || editingTask?.taskTypeId || null,
                 staff_id: editingTask?.staff_id || editingTask?.resourceId || null,
                 start: editingTask?.start || null,
                 end: editingTask?.end || null,
                 created_by: editingTask?.created_by || null,
+                occurrenceIds: Array.isArray(editingTask?.occurrenceIds)
+  ? editingTask.occurrenceIds.filter(Boolean)
+  : null,
+
               }
             : null,
         },
       });
+
+      // ✅ Lock/unlock as a separate audited action
+      // (CalendarPage should implement action === "set_lock" using your RPC)
+      if (lockChanged) {
+        await onSave?.({
+          action: "set_lock",
+          payload: {
+            id: editingTask?.id,
+            is_locked: lockTask,
+            reason: null,
+          },
+        });
+      }
     } finally {
       setSaving(false);
     }
@@ -407,6 +439,9 @@ export default function ScheduleTaskModal({
             start: editingTask?.start || null,
             end: editingTask?.end || null,
             created_by: editingTask?.created_by || null,
+             occurrenceIds: Array.isArray(editingTask?.occurrenceIds)
+           ? editingTask.occurrenceIds.filter(Boolean)
+           : null,
           },
         },
       });
@@ -451,7 +486,6 @@ export default function ScheduleTaskModal({
           </div>
         )}
 
-        {/* Task type */}
         <div className="mb-3">
           <label className="block text-sm font-semibold text-gray-700 mb-1">
             Task type
@@ -477,7 +511,6 @@ export default function ScheduleTaskModal({
           />
         </div>
 
-        {/* Start / End */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-2">
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">
@@ -490,14 +523,8 @@ export default function ScheduleTaskModal({
               onChange={(e) => {
                 const d = parseLocalDateTime(e.target.value);
                 if (!d) return;
-
-                if (allDay) {
-                  setStart(d);
-                  return;
-                }
-
                 setStart(d);
-                ensureEndValidForStart(d);
+                ensureEndValidForStart(d); // ✅ keep end valid
               }}
               disabled={saving}
             />
@@ -514,7 +541,7 @@ export default function ScheduleTaskModal({
               onChange={(e) => {
                 const d = parseLocalDateTime(e.target.value);
                 if (!d) return;
-                endTouchedRef.current = true; // ✅ user has manually set an end time
+                endTouchedRef.current = true; // ✅ mark manual edit
                 setEnd(d);
               }}
               disabled={saving}
@@ -543,18 +570,13 @@ export default function ScheduleTaskModal({
                     setAllDay(false);
                     return;
                   }
-
-                  endTouchedRef.current = true; // all-day is controlled
                   setAllDay(true);
                   setStart(bounds.start);
                   setEnd(bounds.end);
                   return;
                 }
 
-                // turning all-day OFF: revert to default end = start + 1 hour (unless user later edits)
                 setAllDay(false);
-                endTouchedRef.current = false;
-                if (start) setEnd(getDefaultEnd(start));
               }}
               disabled={saving}
             />
@@ -572,7 +594,6 @@ export default function ScheduleTaskModal({
           </label>
         </div>
 
-        {/* Staff */}
         <div className="mb-3">
           <label className="block text-sm font-semibold text-gray-700 mb-1">
             Columns / staff
@@ -603,7 +624,6 @@ export default function ScheduleTaskModal({
           />
         </div>
 
-        {/* Repeat + Occurrences */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end mb-3">
           <div className="sm:col-span-2">
             <label className="block text-sm font-semibold text-gray-700 mb-1">
@@ -658,7 +678,6 @@ export default function ScheduleTaskModal({
           </div>
         </div>
 
-        {/* Apply to series (edit only) */}
         {isEditing && !!editingSeriesId && (
           <label className="flex items-center gap-2 text-sm text-gray-700 mb-3">
             <input
@@ -718,7 +737,6 @@ export default function ScheduleTaskModal({
           </div>
         )}
 
-        {/* Footer buttons */}
         <div className="flex items-center justify-between pt-2">
           <button
             type="button"

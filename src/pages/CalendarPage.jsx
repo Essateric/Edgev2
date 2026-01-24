@@ -55,6 +55,45 @@ const localizer = dateFnsLocalizer({
   locales,
 });
 
+const uniq = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
+
+const getScheduleBlockOccurrenceGroup = (clickedEvent, allScheduledTasks) => {
+  const startMs = new Date(clickedEvent.start).getTime();
+  const endMs = new Date(clickedEvent.end).getTime();
+  const typeId = clickedEvent.task_type_id || clickedEvent.taskTypeId || null;
+  const createdBy = clickedEvent.created_by || null;
+
+  const isSameOccurrence = (ev) => {
+    if (!isScheduleBlockEvent(ev)) return false;
+    if (ev.blockSource !== "schedule_blocks" && !ev.isScheduledTask) return false;
+
+    const evStart = new Date(ev.start).getTime();
+    const evEnd = new Date(ev.end).getTime();
+    const evType = ev.task_type_id || ev.taskTypeId || null;
+
+    if (evStart !== startMs) return false;
+    if (evEnd !== endMs) return false;
+    if (evType !== typeId) return false;
+
+    // If created_by exists, use it to avoid accidentally grouping someone else's block
+    if (createdBy && ev.created_by && ev.created_by !== createdBy) return false;
+
+    return true;
+  };
+
+  let group = (allScheduledTasks || []).filter(isSameOccurrence);
+
+  // Safety: make sure the clicked one is included
+  if (!group.some((g) => g.id === clickedEvent.id)) group = [clickedEvent, ...group];
+
+  const ids = uniq(group.map((g) => g.id));
+  const staffIds = uniq(
+    group.map((g) => g.staff_id || g.resourceId || g.resource_id)
+  );
+
+  return { ids, staffIds };
+};
+
 /* ----------------- small date helpers ----------------- */
 
 const CLIENT_SELECT = "id, first_name, last_name, mobile, email, notes, dob, created_at";
@@ -1098,76 +1137,107 @@ const handleSaveTask = async ({ action, payload }) => {
 
   try {
     // ---------- DELETE ----------
-    if (action === "delete") {
-      const meta = payload?.editingMeta || {};
-  const deleteScope = payload?.deleteScope || "single"; // single | occurrence | series
+if (action === "delete") {
+  const meta = payload?.editingMeta || {};
+  const scope = payload?.deleteScope || "single"; // single | occurrence | series
 
-      if (!meta.id) {
-        toast.error("Missing schedule block id for delete");
+  // ✅ 1) SINGLE: delete only the clicked row id
+  if (scope === "single") {
+    if (!meta.id) {
+      toast.error("Missing schedule block id for delete");
+      return;
+    }
+
+    const { error: delErr } = await supabase
+      .from("schedule_blocks")
+      .delete({ count: "exact" })
+      .eq("id", meta.id);
+
+    if (delErr) {
+      toast.error(delErr.message || "Delete failed");
+      return;
+    }
+
+    setScheduledTasks((prev) => prev.filter((ev) => ev.id !== meta.id));
+    toast.success("Task deleted");
+    handleCloseTaskModal();
+    return;
+  }
+
+  // ✅ 2) OCCURRENCE: delete ALL sibling rows in this time slot (all staff columns)
+  if (scope === "occurrence") {
+    const occIds = Array.isArray(meta.occurrenceIds)
+      ? meta.occurrenceIds.filter(Boolean)
+      : [];
+
+    // Best path: delete by explicit ids
+    if (occIds.length) {
+      const { error: delErr, count } = await supabase
+        .from("schedule_blocks")
+        .delete({ count: "exact" })
+        .in("id", occIds);
+
+      if (delErr) {
+        toast.error(delErr.message || "Delete failed");
         return;
       }
 
-      const match = {};
-      let beforeRows = [];
-
-      if (deleteScope === "single") {
-        match.id = meta.id;
-      } else {
-        if (meta.task_type_id) match.task_type_id = meta.task_type_id;
-        if (meta.start) match.start = new Date(meta.start).toISOString();
-        if (meta.end) match.end = new Date(meta.end).toISOString();
-        if (meta.created_by) match.created_by = meta.created_by;
-      }
-
-      if (!Object.keys(match).length) {
-        match.id = meta.id;
-      }
-
-      const { data: fetchedRows } = await supabase
-        .from("schedule_blocks")
-        .select("id,staff_id,task_type_id,start,end,created_by")
-        .match(match);
-      beforeRows = fetchedRows || [];
-
-      const { error } = await supabase.from("schedule_blocks").delete().match(match);
-      if (error) throw error;
-
-      // local UI remove immediately
-      setScheduledTasks((prev) =>
-        prev.filter((ev) => !beforeRows.some((row) => row.id === ev.id))
-      );
-
-      // audit
-      try {
-        const actorEmail = currentUser?.email || currentUser?.user?.email || null;
-        const actorId = currentUser?.id || currentUser?.user?.id || null;
-
-        await logEvent({
-          entityType: "scheduled_task",
-       entityId: meta.id,
-          action: "scheduled_task_deleted",
-          details: {
-            scope: deleteScope,
-            deleted_rows: (beforeRows || []).map((r) => ({
-              id: r.id,
-              staff_id: r.staff_id,
-              start: r.start,
-              end: r.end,
-              task_type_id: r.task_type_id,
-            })),
-          },
-          actorId,
-          actorEmail,
-          supabaseClient: supabase,
-        });
-      } catch (e) {
-        console.warn("[Audit] delete scheduled task failed", e);
-      }
-
-      toast.success("Task deleted");
+      setScheduledTasks((prev) => prev.filter((ev) => !occIds.includes(ev.id)));
+      toast.success(`Occurrence deleted (${count ?? occIds.length})`);
       handleCloseTaskModal();
       return;
     }
+
+    // Fallback: match by same start/end/task_type (+ created_by if available)
+    if (!meta.start || !meta.end || !meta.task_type_id) {
+      toast.error("Not enough info to delete occurrence");
+      return;
+    }
+
+    let q = supabase
+      .from("schedule_blocks")
+      .select("id")
+      .eq("task_type_id", meta.task_type_id)
+      .eq("start", new Date(meta.start).toISOString())
+      .eq("end", new Date(meta.end).toISOString());
+
+    if (meta.created_by) q = q.eq("created_by", meta.created_by);
+
+    const { data, error: fetchErr } = await q;
+    if (fetchErr) {
+      toast.error(fetchErr.message || "Failed to find occurrence");
+      return;
+    }
+
+    const ids = (data || []).map((r) => r.id).filter(Boolean);
+    if (!ids.length) {
+      toast.error("Nothing matched to delete");
+      return;
+    }
+
+    const { error: delErr, count } = await supabase
+      .from("schedule_blocks")
+      .delete({ count: "exact" })
+      .in("id", ids);
+
+    if (delErr) {
+      toast.error(delErr.message || "Delete failed");
+      return;
+    }
+
+    setScheduledTasks((prev) => prev.filter((ev) => !ids.includes(ev.id)));
+    toast.success(`Occurrence deleted (${count ?? ids.length})`);
+    handleCloseTaskModal();
+    return;
+  }
+
+  // ✅ 3) SERIES: you currently have NO repeat_series_id column in the table
+  // So series delete cannot be reliable yet.
+  toast.error(
+    "Series delete needs a repeat_series_id column on schedule_blocks (not present in your schema yet)."
+  );
+  return;
+}
 
     // ---------- CREATE ----------
     if (action === "create") {
@@ -1263,104 +1333,178 @@ const handleSaveTask = async ({ action, payload }) => {
     }
 
     // ---------- UPDATE ----------
-    if (action === "update") {
-      const meta = payload?.editingMeta || {};
-    
-      const newStart = new Date(payload.start);
-      const newEnd = new Date(payload.end);
-     const newTaskTypeId = payload.taskTypeId || meta.task_type_id || null;
-      const newStaffIds = payload.staffIds || [];
- if (!meta.id) {
-        toast.error("Missing schedule block id for update");
-        return;
-      }
- const normalizedStaffIds = newStaffIds.filter(Boolean);
+if (action === "update") {
+  const meta = payload?.editingMeta || {};
 
-    if (normalizedStaffIds.length <= 1) {
-        const staffId = normalizedStaffIds[0] || meta.staff_id || meta.resource_id;
-        const { data: updated, error } = await supabase
-          .from("schedule_blocks")
-          .update({
-            staff_id: staffId,
-            task_type_id: newTaskTypeId,
-            start: newStart.toISOString(),
-            end: newEnd.toISOString(),
-            is_active: true,
-          })
-          .eq("id", meta.id)
-          .select("*, schedule_task_types ( id, name, category, color )")
-          .single();
+  const newStart = new Date(payload.start);
+  const newEnd = new Date(payload.end);
+  const newTaskTypeId = payload.taskTypeId || meta.task_type_id || null;
+  const allDay = !!payload.allDay;
 
-        if (error) throw error;
+  const uniq = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
 
-      setScheduledTasks((prev) =>
-          prev.map((ev) =>
-            ev.id === meta.id
-              ? mapScheduleBlockRowToEvent(updated, stylistList)
-              : ev
-          )
-        );
-      } else {
-        const { error: deleteErr } = await supabase
-          .from("schedule_blocks")
-          .delete()
-          .eq("id", meta.id);
-        if (deleteErr) throw deleteErr;
+  // ✅ occurrenceIds from modal (group ids). Fallback to the single row id.
+  const occIds = uniq(
+    Array.isArray(meta.occurrenceIds) && meta.occurrenceIds.length
+      ? meta.occurrenceIds
+      : meta.id
+      ? [meta.id]
+      : []
+  );
 
-        const rows = normalizedStaffIds.map((staffId) => ({
-          staff_id: staffId,
-          task_type_id: newTaskTypeId,
-          start: newStart.toISOString(),
-          end: newEnd.toISOString(),
-          is_active: true,
-        }));
+  if (!occIds.length) {
+    toast.error("Missing occurrence ids for update");
+    return;
+  }
 
-        const { data: insertedRows, error: insertErr } = await supabase
-          .from("schedule_blocks")
-          .insert(rows)
-         .select("*, schedule_task_types ( id, name, category, color )");
+  // Staff selection in the modal (fallback to the original staff)
+  const normalizedStaffIds = uniq(
+    (payload.staffIds && payload.staffIds.length ? payload.staffIds : [meta.staff_id])
+  );
 
-        if (insertErr) throw insertErr;
+  if (!normalizedStaffIds.length) {
+    toast.error("Pick at least one staff member");
+    return;
+  }
 
-        setScheduledTasks((prev) => {
-          const remaining = prev.filter((ev) => ev.id !== meta.id);
-          const mapped = (insertedRows || [])
-            .map((r) => mapScheduleBlockRowToEvent(r, stylistList))
-            .filter(Boolean);
-          return [...remaining, ...mapped];
-        });
-      }
+  // ✅ SINGLE = 1 row + 1 staff
+  const shouldDoSingleRowUpdate =
+    normalizedStaffIds.length === 1 && occIds.length === 1 && !allDay;
 
-     
-      // audit
-      try {
-        const actorEmail = currentUser?.email || currentUser?.user?.email || null;
-        const actorId = currentUser?.id || currentUser?.user?.id || null;
+  if (shouldDoSingleRowUpdate) {
+    const staffId = normalizedStaffIds[0];
 
-        await logEvent({
-          entityType: "scheduled_task",
-         entityId: meta.id,
-          action: "scheduled_task_updated",
-          details: {
-           block_id: meta.id,
-            start: newStart.toISOString(),
-            end: newEnd.toISOString(),
-            task_type_id: newTaskTypeId,
-            staff_ids: newStaffIds,
-           
-          },
-          actorId,
-          actorEmail,
-          supabaseClient: supabase,
-        });
-      } catch (e) {
-        console.warn("[Audit] update scheduled task failed", e);
-      }
+    const { data: updatedRow, error } = await supabase
+      .from("schedule_blocks")
+      .update({
+        staff_id: staffId,
+        task_type_id: newTaskTypeId,
+        start: newStart.toISOString(),
+        end: newEnd.toISOString(),
+        is_active: true,
+      })
+      .eq("id", occIds[0])
+      .select("*, schedule_task_types ( id, name, category, color )")
+      .single();
 
-      toast.success("Task updated");
-      handleCloseTaskModal();
-      return;
+    if (error) throw error;
+
+    setScheduledTasks((prev) =>
+      prev.map((ev) =>
+        ev.id === updatedRow.id
+          ? mapScheduleBlockRowToEvent(updatedRow, stylistList)
+          : ev
+      )
+    );
+
+    toast.success("Task updated");
+    handleCloseTaskModal();
+    return;
+  }
+
+  // ✅ OCCURRENCE update (multi staff OR grouped occurrence ids OR allDay)
+  // First: load existing rows so we can see if the staff set actually changed
+  const { data: existingRows, error: existingErr } = await supabase
+    .from("schedule_blocks")
+    .select("id, staff_id")
+    .in("id", occIds);
+
+  if (existingErr) throw existingErr;
+
+  const existingStaffIds = uniq((existingRows || []).map((r) => r.staff_id));
+  const nextStaffSet = new Set(normalizedStaffIds);
+  const sameStaffSet =
+    existingStaffIds.length === normalizedStaffIds.length &&
+    existingStaffIds.every((id) => nextStaffSet.has(id));
+
+  // ✅ If staff set is the same AND not allDay, we can update all rows in place
+  if (sameStaffSet && !allDay) {
+    const { data: updatedRows, error: updErr } = await supabase
+      .from("schedule_blocks")
+      .update({
+        task_type_id: newTaskTypeId,
+        start: newStart.toISOString(),
+        end: newEnd.toISOString(),
+        is_active: true,
+      })
+      .in("id", occIds)
+      .select("*, schedule_task_types ( id, name, category, color )");
+
+    if (updErr) throw updErr;
+
+    const updatedMap = new Map((updatedRows || []).map((r) => [r.id, r]));
+
+    setScheduledTasks((prev) =>
+      prev.map((ev) => {
+        const row = updatedMap.get(ev.id);
+        return row ? mapScheduleBlockRowToEvent(row, stylistList) : ev;
+      })
+    );
+
+    toast.success("Task updated");
+    handleCloseTaskModal();
+    return;
+  }
+
+  // ✅ Otherwise: replace occurrence (delete old ids, insert new staff rows)
+  const { error: deleteErr } = await supabase
+    .from("schedule_blocks")
+    .delete()
+    .in("id", occIds);
+
+  if (deleteErr) throw deleteErr;
+
+  const rowsToInsert = [];
+
+  for (const staffId of normalizedStaffIds) {
+    if (allDay) {
+      const window = getStaffWorkingWindow(staffId, newStart, stylistList);
+      if (!window) continue;
+
+      rowsToInsert.push({
+        staff_id: staffId,
+        task_type_id: newTaskTypeId,
+        start: window.start.toISOString(),
+        end: window.end.toISOString(),
+        is_active: true,
+      });
+    } else {
+      rowsToInsert.push({
+        staff_id: staffId,
+        task_type_id: newTaskTypeId,
+        start: newStart.toISOString(),
+        end: newEnd.toISOString(),
+        is_active: true,
+      });
     }
+  }
+
+  if (!rowsToInsert.length) {
+    toast.error("No valid rows to insert (check staff working hours)");
+    return;
+  }
+
+  const { data: insertedRows, error: insertErr } = await supabase
+    .from("schedule_blocks")
+    .insert(rowsToInsert)
+    .select("*, schedule_task_types ( id, name, category, color )");
+
+  if (insertErr) throw insertErr;
+
+  setScheduledTasks((prev) => {
+    const remaining = prev.filter((ev) => !occIds.includes(ev.id));
+    const mapped = (insertedRows || [])
+      .map((r) => mapScheduleBlockRowToEvent(r, stylistList))
+      .filter(Boolean);
+    return [...remaining, ...mapped];
+  });
+
+  toast.success("Task updated");
+  handleCloseTaskModal();
+  return;
+}
+
+
   } catch (err) {
     console.error("[Calendar] task save failed", err);
     toast.error(err?.message || "Task save failed");
@@ -1568,31 +1712,47 @@ elementProps={useTouchDnD ? { onTouchStartCapture: handleTouchStartCapture } : u
     if (event.isUnavailable || event.isSalonClosed || event.isTask) return;
 
     // ✅ ALWAYS open task editor for blocked slots (even if flags are missing)
-    if (isScheduleBlockEvent(event)) {
-      const rid = event.resourceId ?? event.resource_id ?? null;
+if (isScheduleBlockEvent(event)) {
+  const rid = event.resourceId ?? event.resource_id ?? null;
 
-      handleOpenScheduleTask(
-        {
-          start: event.start,
-          end: event.end,
-          resourceId: rid,
-        },
-        {
-          ...event,
-          // ✅ force flags so edit save logic always treats it as a DB block
-          isScheduleBlock: true,
-          resourceId: rid,
-          start: event.start,
-          end: event.end,
-          // ✅ series id hint for later (optional)
-          staffIds:
-            event.staffIds ||
-            (event.staff_id ? [event.staff_id] : rid ? [rid] : []),
-          taskTypeId: event.task_type_id || event.taskTypeId || null,
-        }
-      );
-      return;
+  // ✅ NEW: group all sibling blocks (same time + same task type)
+  const group = getScheduleBlockOccurrenceGroup(event, scheduledTasks);
+
+  handleOpenScheduleTask(
+    {
+      start: event.start,
+      end: event.end,
+      resourceId: rid,
+    },
+    {
+      ...event,
+      isScheduleBlock: true,
+      isScheduledTask: true,
+      blockSource: "schedule_blocks",
+
+      resourceId: rid,
+      start: event.start,
+      end: event.end,
+
+      // ✅ THIS is what makes the modal show Martin + Darren together
+      staffIds: group.staffIds.length
+        ? group.staffIds
+        : event.staff_id
+        ? [event.staff_id]
+        : rid
+        ? [rid]
+        : [],
+
+      // ✅ Pass all row IDs in this “occurrence”
+      occurrenceIds: group.ids.length ? group.ids : [event.id],
+
+      taskTypeId: event.task_type_id || event.taskTypeId || null,
     }
+  );
+
+  return;
+}
+
 
     setSelectedBooking(coerceEventForPopup(event));
   }}
