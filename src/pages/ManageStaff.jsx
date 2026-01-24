@@ -539,10 +539,11 @@ export default function ManageStaff() {
 
       {showAddModal && (
         <AddNewStaffModal
-          open={showAddModal}
-          onClose={() => setShowAddModal(false)}
-          onSaved={fetchData}
-          roleOptions={ROLE_OPTIONS}
+         open={showAddModal}
+    isOpen={showAddModal}
+    onClose={() => setShowAddModal(false)}
+    onSaved={fetchData}
+    roleOptions={ROLE_OPTIONS}
         />
       )}
     </div>
