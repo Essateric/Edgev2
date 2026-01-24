@@ -2034,12 +2034,13 @@ if (isScheduleBlockEvent(event)) {
         }}
         stylistList={stylistList}
         clients={clients}
-        onBookingUpdated={({ booking_id, id, is_locked, booking_tag_id }) => {
+onBookingUpdated={({ booking_id, id, is_locked, booking_tag_id, status }) => {
           setEvents((prev) =>
             prev.map((ev) => {
               const same = booking_id ? ev.booking_id === booking_id : ev.id === id;
               const nextTagId =
           booking_tag_id !== undefined ? booking_tag_id : ev.booking_tag_id;
+          const nextStatus = status !== undefined ? status : ev.status;
 
         const nextTagCode = nextTagId
           ? (tagCodeById?.get(nextTagId) || null)
@@ -2051,6 +2052,7 @@ if (isScheduleBlockEvent(event)) {
                       typeof is_locked === "boolean" ? is_locked : ev.is_locked,
                           booking_tag_id: nextTagId,
           booking_tag_code: nextTagCode, 
+           status: nextStatus,
                   }
                 : ev;
             })

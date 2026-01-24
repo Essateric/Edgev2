@@ -12,7 +12,6 @@ import ModalLarge from "../ModalLarge";
 import BookingHeader from "./popup/BookingHeader";
 import ServicesList from "./popup/ServicesList";
 import ActionsBar from "./popup/ActionsBar";
-import ActionsPopover from "./popup/ActionsPopover";
 import ClientNotesModal from "../clients/ClientNotesModal";
 import RepeatBookingsModal from "./popup/RepeatBookingsModal";
 import { logEvent } from "../../lib/logEvent";
@@ -130,7 +129,6 @@ function BookingPopUpBody({
   // ✅ include currentUser because cancel audit uses it
   const { supabaseClient, currentUser } = useAuth();
 
-  const [showActions, setShowActions] = useState(false);
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [isEditingDob, setIsEditingDob] = useState(false);
   const [showRepeat, setShowRepeat] = useState(false);
@@ -150,6 +148,9 @@ function BookingPopUpBody({
   const [lockBooking, setLockBooking] = useState(false);
   const [lockSaving, setLockSaving] = useState(false);
   const [lockError, setLockError] = useState("");
+
+    const [arrivedSaving, setArrivedSaving] = useState(false);
+  const [arrivedError, setArrivedError] = useState("");
 
   // who is adding notes
   const [currentStaff, setCurrentStaff] = useState(null);
@@ -721,6 +722,38 @@ function BookingPopUpBody({
     }
   };
 
+   const handleMarkArrived = async () => {
+    if (!supabaseClient) return;
+    setArrivedError("");
+    setArrivedSaving(true);
+
+    try {
+      const update = supabaseClient
+        .from("bookings")
+        .update({ status: "arrived" });
+
+      if (booking?.booking_id) {
+        update.eq("booking_id", booking.booking_id);
+      } else {
+        update.eq("id", booking.id);
+      }
+
+      const { error } = await update;
+      if (error) throw error;
+
+      onBookingUpdated?.({
+        id: booking.id,
+        booking_id: booking.booking_id ?? null,
+        status: "arrived",
+      });
+    } catch (e) {
+      console.error("[BookingPopUp] failed to mark arrived:", e);
+      setArrivedError(e?.message || "Failed to mark arrived");
+    } finally {
+      setArrivedSaving(false);
+    }
+  };
+
   const tagLabelById = useMemo(() => {
     const map = new Map();
     (tagOptions || []).forEach((t) => {
@@ -1078,22 +1111,23 @@ function BookingPopUpBody({
         <div className="modal-panel__actions">
           <ActionsBar
             onOpenRepeat={() => setShowRepeat(true)}
-            onOpenActions={() => setShowActions(true)}
             onCancelBooking={handleCancelBooking}
+             onArrived={handleMarkArrived}
+            onReschedule={onEdit}
+            onEdit={onEdit}
             onClose={onClose}
+            arrivedDisabled={arrivedSaving}
+            arrivedLabel={arrivedSaving ? "Arriving..." : "Arrived"}
           />
+          {arrivedError && (
+            <div className="px-2 pb-2 text-xs text-red-600">
+              {arrivedError}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Popover stays outside so it can layer over actions */}
-      <ActionsPopover
-        open={showActions}
-        onClose={() => setShowActions(false)}
-        onEdit={onEdit}
-        onCancelBooking={handleCancelBooking}
-      />
-
-      {/* Notes modal */}
+           {/* Notes modal */}
       {showNotesModal && (
         <ClientNotesModal
           modalZIndex={60}
