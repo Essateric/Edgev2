@@ -2067,6 +2067,7 @@ onBookingUpdated={({ booking_id, id, is_locked, booking_tag_id, status }) => {
     clients={clients}
     selectedSlot={selectedSlot}
     selectedClient={selectedClient}
+    onSlotChange={setSelectedSlot}
     setSelectedClient={(id) => {
       setSelectedClient(id);
       setClientObj(clients.find((c) => c.id === id));
@@ -2095,6 +2096,7 @@ onBookingUpdated={({ booking_id, id, is_locked, booking_tag_id, status }) => {
     booking={selectedBooking}
     selectedSlot={selectedSlot}
     selectedClient={selectedClient}
+     onSlotChange={setSelectedSlot}
     setSelectedClient={async (id) => {
       setSelectedClient(id);
       const local = clients.find((c) => c.id === id);

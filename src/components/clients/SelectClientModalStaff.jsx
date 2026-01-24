@@ -32,6 +32,7 @@ export default function SelectClientModalStaff({
   selectedSlot,
   selectedClient,
   setSelectedClient,
+   onSlotChange,
   onNext,
   onScheduleTask,
   onClientCreated,
@@ -50,6 +51,88 @@ export default function SelectClientModalStaff({
 
      const [tagOptions, setTagOptions] = useState([]);
     const [tagsLoading, setTagsLoading] = useState(false);
+
+    const slotTimes = useMemo(() => {
+    if (!selectedSlot?.start || !selectedSlot?.end) {
+      return { startDate: "", startTime: "", endTime: "", durationMs: 0 };
+    }
+    const start = new Date(selectedSlot.start);
+    const end = new Date(selectedSlot.end);
+    return {
+      startDate: format(start, "yyyy-MM-dd"),
+      startTime: format(start, "HH:mm"),
+      endTime: format(end, "HH:mm"),
+      durationMs: end.getTime() - start.getTime(),
+    };
+  }, [selectedSlot]);
+
+  const updateSlotTimes = useCallback(
+    ({ start, end }) => {
+      if (!selectedSlot || !start || !end) return;
+      onSlotChange?.({
+        ...selectedSlot,
+        start,
+        end,
+      });
+    },
+    [onSlotChange, selectedSlot]
+  );
+
+  const handleDateChange = useCallback(
+    (event) => {
+      if (!selectedSlot?.start || !selectedSlot?.end) return;
+      const nextDate = event.target.value;
+      if (!nextDate) return;
+      const [year, month, day] = nextDate.split("-").map(Number);
+      if (!year || !month || !day) return;
+      const start = new Date(selectedSlot.start);
+      const durationMs = slotTimes.durationMs || 0;
+      start.setFullYear(year, month - 1, day);
+      start.setSeconds(0, 0);
+      const end = new Date(start.getTime() + durationMs);
+      updateSlotTimes({ start, end });
+    },
+    [selectedSlot, slotTimes.durationMs, updateSlotTimes]
+  );
+
+  const handleStartTimeChange = useCallback(
+    (event) => {
+      if (!selectedSlot?.start || !selectedSlot?.end) return;
+      const value = event.target.value;
+      if (!value) return;
+      const [hours, minutes] = value.split(":").map(Number);
+      if (Number.isNaN(hours) || Number.isNaN(minutes)) return;
+      const start = new Date(selectedSlot.start);
+      start.setHours(hours, minutes, 0, 0);
+      const durationMs = slotTimes.durationMs || 0;
+      const end = new Date(start.getTime() + durationMs);
+      updateSlotTimes({ start, end });
+    },
+    [selectedSlot, slotTimes.durationMs, updateSlotTimes]
+  );
+
+  const handleEndTimeChange = useCallback(
+    (event) => {
+      if (!selectedSlot?.start || !selectedSlot?.end) return;
+      const value = event.target.value;
+      if (!value) return;
+      const [hours, minutes] = value.split(":").map(Number);
+      if (Number.isNaN(hours) || Number.isNaN(minutes)) return;
+      const start = new Date(selectedSlot.start);
+      const end = new Date(selectedSlot.end);
+      end.setHours(hours, minutes, 0, 0);
+      if (end.getTime() <= start.getTime()) {
+        const durationMs = slotTimes.durationMs || 0;
+        updateSlotTimes({
+          start,
+          end: new Date(start.getTime() + durationMs),
+        });
+        return;
+      }
+      updateSlotTimes({ start, end });
+    },
+    [selectedSlot, slotTimes.durationMs, updateSlotTimes]
+  );
   
 
   // Keep selected option visible even if it wasn’t in the default list
@@ -324,6 +407,35 @@ const handleCreateOrSelect = async () => {
             <p className="text-sm text-gray-700 mb-3">
               Time: {format(selectedSlot.start, "HH:mm")} – {format(selectedSlot.end, "HH:mm")}
             </p>
+            <div className="grid grid-cols-1 gap-3 mb-4 sm:grid-cols-3">
+              <label className="text-xs text-gray-600">
+                Booking date
+                <input
+                  type="date"
+                  className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm"
+                  value={slotTimes.startDate}
+                  onChange={handleDateChange}
+                />
+              </label>
+              <label className="text-xs text-gray-600">
+                Start time
+                <input
+                  type="time"
+                  className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm"
+                  value={slotTimes.startTime}
+                  onChange={handleStartTimeChange}
+                />
+              </label>
+              <label className="text-xs text-gray-600">
+                End time
+                <input
+                  type="time"
+                  className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm"
+                  value={slotTimes.endTime}
+                  onChange={handleEndTimeChange}
+                />
+              </label>
+            </div>
           </>
         )}
 
