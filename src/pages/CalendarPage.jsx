@@ -16,6 +16,7 @@ import SelectClientModal from "../components/clients/SelectClientModal.jsx";
 import SelectClientModalStaff from "../components/clients/SelectClientModalStaff.jsx";
 import ReviewModal from "../components/ReviewModal";
 import NewBooking from "../components/bookings/NewBooking";
+import RescheduleModal from "../components/RescheduleModal";
 import ScheduleTaskModal from "../components/ScheduleTaskModal.jsx";
 
 import useUnavailableTimeBlocks from "../components/UnavailableTimeBlocks";
@@ -280,6 +281,7 @@ export default function CalendarPage() {
   if (target) e.preventDefault();
 }, []);
 
+const [isRescheduling, setIsRescheduling] = useState(false);
 
 
     const auth = useAuth();
@@ -366,6 +368,7 @@ useEffect(() => {
   const [selectedClient, setSelectedClient] = useState("");
   const [clientObj, setClientObj] = useState(null);
   const [basket, setBasket] = useState([]);
+   const [rescheduleMeta, setRescheduleMeta] = useState(null);
 const [bookingTagId, setBookingTagId] = useState(null);
   const [step, setStep] = useState(1);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -486,6 +489,31 @@ useEffect(() => {
     ];
   }, [events, scheduledTasks, taskEvents, unavailableBlocks, salonClosedBlocks]);
 
+const [selectionOverlaps, setSelectionOverlaps] = useState(false);
+
+  const hasSlotOverlap = useCallback(
+    ({ start, end, resourceId, eventId }) => {
+      if (!start || !end || !resourceId) return false;
+      const startDate = toDate(start);
+      const endDate = toDate(end);
+
+      return calendarEvents.some((ev) => {
+        if (!ev || ev.__isPreview) return false;
+        if (ev.isUnavailable || ev.isSalonClosed) return false;
+
+        const evId = ev.id ?? ev._id ?? null;
+        if (eventId && evId === eventId) return false;
+
+        const evResourceId = ev.resourceId ?? ev.resource_id ?? ev.stylist_id ?? null;
+        if (!evResourceId || evResourceId !== resourceId) return false;
+
+        const evStart = toDate(ev.start);
+        const evEnd = toDate(ev.end);
+        return startDate < evEnd && endDate > evStart;
+      });
+    },
+    [calendarEvents]
+  );
 
   const coerceEventForPopup = (ev) => {
     const rid = ev.resource_id ?? ev.resourceId ?? ev.stylist_id ?? null;
@@ -1051,6 +1079,9 @@ if (sbErr) throw sbErr;
 
 
   const handleCancelBookingFlow = useCallback(() => {
+    setIsRescheduling(false);
+setRescheduleMeta(null);
+
     setIsModalOpen(false);
     setSelectedSlot(null);
     setSelectedClient("");
@@ -1058,6 +1089,7 @@ if (sbErr) throw sbErr;
      setBookingTagId(null);
     setBasket([]);
     setReviewData(null);
+     setRescheduleMeta(null);
     setStep(1);
  }, []);
 
@@ -1783,6 +1815,7 @@ if (action === "update") {
 
 
 <DnDCalendar
+ className={selectionOverlaps ? "calendar-selection-overlap" : undefined}
   localizer={localizer}
   events={calendarEvents}
   startAccessor="start"
@@ -1811,9 +1844,22 @@ elementProps={useTouchDnD ? { onTouchStartCapture: handleTouchStartCapture } : u
     else setVisibleDate(range.start);
   }}
   onSelectSlot={(slot) => {
+    setIsRescheduling(false);
+    setRescheduleMeta(null);
     setSelectedSlot(slot);
     setIsModalOpen(true);
     setStep(1);
+     setSelectionOverlaps(false);
+  }}
+  onSelecting={(range) => {
+    const resourceId = range?.resourceId ?? range?.resource_id ?? null;
+    const hasOverlap = hasSlotOverlap({
+      start: range?.start,
+      end: range?.end,
+      resourceId,
+    });
+    setSelectionOverlaps(hasOverlap);
+    return true;
   }}
   onSelectEvent={(event) => {
     console.log("[Calendar] event selected:", {
@@ -1882,6 +1928,28 @@ if (isScheduleBlockEvent(event)) {
   resizable
   onEventResize={handleMoveEvent}
   eventPropGetter={(event) => {
+     const previewOverlap =
+      event?.__isPreview &&
+      hasSlotOverlap({
+        start: event?.start,
+        end: event?.end,
+        resourceId: event?.resourceId ?? event?.resource_id ?? event?.stylist_id ?? null,
+        eventId: event?.id ?? null,
+      });
+
+    if (previewOverlap) {
+      return {
+        className: "rbc-event-overlap-preview",
+        style: {
+          zIndex: 3,
+          backgroundColor: "#000",
+          color: "#fff",
+          border: "1px solid #000",
+          opacity: 0.95,
+        },
+      };
+    }
+
     if (isScheduleBlockEvent(event)) {
       const scheduledTaskColor = event.taskTypeColor || event.color || null;
 
@@ -2017,13 +2085,50 @@ if (isScheduleBlockEvent(event)) {
         booking={selectedBooking}
         onClose={() => setSelectedBooking(null)}
         onEdit={() => {
+          setIsRescheduling(true);
+           const occurrenceGroupId = selectedBooking?.booking_id || null;
+          const groupRows = occurrenceGroupId
+            ? (events || []).filter((ev) => ev.booking_id === occurrenceGroupId)
+            : (events || []).filter((ev) => ev.id === selectedBooking.id);
+          const sortedGroup = [...groupRows].sort(
+            (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime()
+          );
+          const groupStart =
+            sortedGroup[0]?.start ? new Date(sortedGroup[0].start) : new Date(selectedBooking.start);
+          const groupEnd =
+            sortedGroup.length > 0
+              ? new Date(
+                  sortedGroup
+                    .map((row) => new Date(row.end).getTime())
+                    .reduce((max, ts) => Math.max(max, ts), new Date(selectedBooking.end).getTime())
+                )
+              : new Date(selectedBooking.end);
+
           setSelectedSlot({
-            start: selectedBooking.start,
-            end: selectedBooking.end,
+            start: groupStart,
+            end: groupEnd,
             resourceId: selectedBooking.resourceId,
           });
           setSelectedClient(selectedBooking.client_id);
           setClientObj(clients.find((c) => c.id === selectedBooking.client_id));
+           setBasket(
+            sortedGroup.map((row) => ({
+              id: row.id,
+              name: row.title,
+              displayDuration: row.duration,
+              displayPrice: row.price,
+              category: row.category,
+            }))
+          );
+      const safeRows = (sortedGroup && sortedGroup.length)
+  ? sortedGroup
+  : [selectedBooking];
+
+setRescheduleMeta({
+  booking_id: occurrenceGroupId || selectedBooking?.id || null,
+  bookingRows: safeRows,
+});
+
           setIsModalOpen(true);
           setStep(1);
           setSelectedBooking(null);
@@ -2153,22 +2258,46 @@ onBookingUpdated={({ booking_id, id, is_locked, booking_tag_id, status }) => {
         />
       </RightDrawer>
 
-      <ReviewModal
-        isOpen={step === 3}
-        onClose={handleCancelBookingFlow}
-        onBack={() => setStep(2)}
-        onConfirm={(newEvents) => {
-          setEvents((prev) => [...prev, ...newEvents.map(coerceEventForPopup)]);
-          handleCancelBookingFlow();
-        }}
-        clients={clients}
-        clientObj={clientObj}
-        reviewData={reviewData}
-        stylistList={stylistList}
-        selectedClient={selectedClient}
-        selectedSlot={selectedSlot}
-        basket={basket}
-      />
+{isRescheduling ? (
+  <RescheduleModal
+  isOpen={isRescheduleOpen}
+  onClose={handleCancelBookingFlow}
+ onConfirm={(newEvents) => {
+    const updatedById = new Map(newEvents.map((ev) => [ev.id, ev]));
+    setEvents((prev) =>
+      prev.map((ev) => (updatedById.has(ev.id) ? updatedById.get(ev.id) : ev))
+    );
+    handleCancelBookingFlow();
+  }}
+    clients={clients}
+    clientObj={clientObj}
+    reviewData={reviewData}
+    stylistList={stylistList}
+    selectedClient={selectedClient}
+    selectedSlot={selectedSlot}
+    basket={basket}
+    rescheduleMeta={rescheduleMeta}
+  />
+) : (
+  <ReviewModal
+    isOpen={step === 3}
+    onClose={handleCancelBookingFlow}
+    onBack={() => setStep(2)}
+    onConfirm={(newEvents) => {
+      setEvents((prev) => [...prev, ...newEvents.map(coerceEventForPopup)]);
+      handleCancelBookingFlow();
+    }}
+    clients={clients}
+    clientObj={clientObj}
+    reviewData={reviewData}
+    stylistList={stylistList}
+    selectedClient={selectedClient}
+    selectedSlot={selectedSlot}
+    basket={basket}
+  />
+)}
+
+
 
       <CalendarModal
         isOpen={isCalendarOpen}

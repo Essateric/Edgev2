@@ -14,12 +14,15 @@ import ServicesList from "./popup/ServicesList";
 import ActionsBar from "./popup/ActionsBar";
 import ClientNotesModal from "../clients/ClientNotesModal";
 import RepeatBookingsModal from "./popup/RepeatBookingsModal";
+import RescheduleModal from "../RescheduleModal";
+
 import { logEvent } from "../../lib/logEvent";
 
 /* Layout styles for the roomy popup */
 import "../../styles/modal-tidy.css";
 import { format, differenceInDays } from "date-fns";
 import { Check, X, Clock } from "lucide-react";
+
 
 /* ✅ Small toggle switch (no deps) */
 function ToggleSwitch({ checked, onChange, disabled = false, label }) {
@@ -181,10 +184,63 @@ function BookingPopUpBody({
     blueprint,
     repeatSeriesOccurrences,
   } = useRelatedBookings({
+    
     supabase: supabaseClient,
     bookingGroupId: booking?.booking_id,
     repeatSeriesId: booking?.repeat_series_id || null,
   });
+
+  // ✅ Reschedule modal (its own flow, NOT the booking steps)
+const [showReschedule, setShowReschedule] = useState(false);
+
+const rescheduleRows = useMemo(() => {
+  const rows = Array.isArray(relatedBookings) && relatedBookings.length
+    ? relatedBookings
+    : booking
+    ? [booking]
+    : [];
+
+  return [...rows].sort((a, b) => {
+    const sa = new Date(a.start ?? a.start_time ?? 0).getTime();
+    const sb = new Date(b.start ?? b.start_time ?? 0).getTime();
+    return sa - sb;
+  });
+}, [relatedBookings, booking]);
+
+const rescheduleBasket = useMemo(() => {
+  return (rescheduleRows || []).map((r) => ({
+    name: r.title || r.category || "Service",
+    category: r.category || "",
+    displayDuration: Number(r.duration || 0),
+    duration: Number(r.duration || 0),
+    displayPrice: Number(r.price || 0),
+  }));
+}, [rescheduleRows]);
+
+const rescheduleSelectedSlot = useMemo(() => {
+  if (!rescheduleRows?.length) return null;
+
+  const starts = rescheduleRows
+    .map((r) => new Date(r.start ?? r.start_time))
+    .filter((d) => !Number.isNaN(d.getTime()));
+  const ends = rescheduleRows
+    .map((r) => new Date(r.end ?? r.end_time ?? r.start ?? r.start_time))
+    .filter((d) => !Number.isNaN(d.getTime()));
+
+  const start = starts.length ? new Date(Math.min(...starts.map((d) => d.getTime()))) : null;
+  const end = ends.length ? new Date(Math.max(...ends.map((d) => d.getTime()))) : start;
+
+  return {
+    start,
+    end,
+    resourceId: booking?.resource_id || rescheduleRows?.[0]?.resource_id || null,
+  };
+}, [rescheduleRows, booking?.resource_id]);
+
+const openRescheduleModal = () => {
+  setShowReschedule(true);
+};
+
 
   // notes
   const groupRowIds = useMemo(
@@ -1113,7 +1169,7 @@ function BookingPopUpBody({
             onOpenRepeat={() => setShowRepeat(true)}
             onCancelBooking={handleCancelBooking}
              onArrived={handleMarkArrived}
-            onReschedule={onEdit}
+            onReschedule={() => setShowReschedule(true)}
             onEdit={onEdit}
             onClose={onClose}
             arrivedDisabled={arrivedSaving}
@@ -1171,6 +1227,42 @@ function BookingPopUpBody({
         stylist={stylist}
         supabaseClient={supabaseClient}
       />
+
+      {showReschedule && (
+  <RescheduleModal
+    isOpen={showReschedule}
+    onClose={() => setShowReschedule(false)}
+    onConfirm={(newBookings) => {
+      // close the reschedule modal
+      setShowReschedule(false);
+
+      // ✅ Option A: update calendar immediately (if your CalendarPage supports it)
+      onBookingUpdated?.({
+        type: "rescheduled",
+        booking_id: booking?.booking_id || null,
+        rows: newBookings,
+      });
+
+      // ✅ Option B: force refresh listeners (if you use this elsewhere)
+      window.dispatchEvent(
+        new CustomEvent("bookings:changed", {
+          detail: { type: "booking-rescheduled", booking_id: booking?.booking_id || null },
+        })
+      );
+
+      // optional: close popup after reschedule (most apps do)
+      onClose?.();
+    }}
+    clients={clients}
+    clientObj={displayClient || null}
+    stylistList={stylistList}
+    selectedClient={displayClient?.id || booking?.client_id || null}
+    selectedSlot={rescheduleSelectedSlot}
+    basket={rescheduleBasket}
+    rescheduleMeta={{ bookingRows: rescheduleRows }}
+  />
+)}
+
 
       {/* Cancellation modal */}
       <ModalLarge

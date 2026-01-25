@@ -357,6 +357,18 @@ body {
   box-shadow: none !important;
 }
 
+/* Show overlap while selecting a new booking slot */
+.calendar-selection-overlap .rbc-slot-selection {
+  background: #000 !important;
+  opacity: 0.85 !important;
+}
+
+/* Overlap preview while dragging/resizing an event */
+.rbc-event-overlap-preview {
+  background-color: #000 !important;
+  color: #fff !important;
+}
+
 /* Intentionally no pointer-events override during drag */
 /* Hide the event being dragged (wins over earlier "opacity:1" rules) */
 /* Hide the event being dragged (must be last to beat earlier !important rules) */
