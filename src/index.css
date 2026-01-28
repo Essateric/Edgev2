@@ -173,6 +173,15 @@ body {
   background-color: white !important;
 }
 
+.rbc-time-slot {
+  transition: background-color 150ms ease-in-out;
+}
+
+/* Highlight hovered time slot for clearer pointer feedback */
+.rbc-time-slot.rbc-hover-slot {
+  background-color: #e5e5e5 !important;
+}
+
 /* Force time gutter width to stay fixed */
 .rbc-time-header-gutter,
 .rbc-time-gutter {

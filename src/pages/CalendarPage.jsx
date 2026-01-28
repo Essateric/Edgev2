@@ -22,6 +22,7 @@ import ScheduleTaskModal from "../components/ScheduleTaskModal.jsx";
 import useUnavailableTimeBlocks from "../components/UnavailableTimeBlocks";
 import UseSalonClosedBlocks from "../components/UseSalonClosedBlocks";
 import useAddGridTimeLabels from "../utils/AddGridTimeLabels";
+import useCalendarSlotHover from "../utils/useCalendarSlotHover";
 
 import baseSupabase from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
@@ -381,6 +382,8 @@ const [bookingTagId, setBookingTagId] = useState(null);
   const [ready, setReady] = useState(false); // calendar is allowed to render
    // Add subtle quarter-hour labels to each calendar grid cell (rerun when calendar renders/navigates)
   useAddGridTimeLabels(9, 20, 15, [ready, visibleDate]);
+  useCalendarSlotHover([ready, visibleDate]);
+
   const [showReminders, setShowReminders] = useState(false);
   const [errText, setErrText] = useState("");
   const [reviewData, setReviewData] = useState(null);
@@ -390,6 +393,8 @@ const [bookingTagId, setBookingTagId] = useState(null);
     const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
   const [bookingTags, setBookingTags] = useState([]);
+  const [isRescheduleOpen, setIsRescheduleOpen] = useState(false);
+
 
 useEffect(() => {
   if (!supabase) return;
