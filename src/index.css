@@ -173,15 +173,6 @@ body {
   background-color: white !important;
 }
 
-.rbc-time-slot {
-  transition: background-color 150ms ease-in-out;
-}
-
-/* Highlight hovered time slot for clearer pointer feedback */
-.rbc-time-slot.rbc-hover-slot {
-  background-color: #e5e5e5 !important;
-}
-
 /* Force time gutter width to stay fixed */
 .rbc-time-header-gutter,
 .rbc-time-gutter {
@@ -248,7 +239,7 @@ body {
   right: 0 !important;
   margin: 0 !important;
   padding: 0 !important;
-  border-radius: 0 !important;
+ border-radius: 6px !important;
   transition: top 0.2s ease, height 0.2s ease;
   will-change: top, height;
   overflow: visible;
@@ -368,16 +359,14 @@ body {
 
 /* Show overlap while selecting a new booking slot */
 .calendar-selection-overlap .rbc-slot-selection {
- background: #f59e0b !important;
-  color: #000 !important;
-  border: 1px solid #000 !important;
-  opacity: 0.9 !important;
+  background: #000 !important;
+  opacity: 0.85 !important;
 }
 
 /* Overlap preview while dragging/resizing an event */
 .rbc-event-overlap-preview {
-   background-color: #f59e0b !important;
-  color: #000 !important;
+  background-color: #000 !important;
+  color: #fff !important;
 }
 
 /* Intentionally no pointer-events override during drag */
