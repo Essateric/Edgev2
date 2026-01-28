@@ -261,12 +261,17 @@ const isAdmin = isAdminLike({ permission: myPermission });
     try {
       const { data: existing, error: loadErr } = await supabase
         .from("staff_services")
-        .select("staff_id")
+        .select("staff_id,price,duration")
         .eq("service_id", selectedService.id);
 
       if (loadErr) throw loadErr;
 
       const existingSet = new Set((existing || []).map((r) => r.staff_id));
+       const beforeAssignments = (existing || []).map((row) => ({
+        staff_id: row.staff_id,
+        price: row.price ?? 0,
+        duration: Number(row.duration) || 0,
+      }));
 
       const upserts = Object.entries(assignments)
         .filter(([, v]) => v?.checked)
@@ -277,6 +282,12 @@ const isAdmin = isAdminLike({ permission: myPermission });
           duration: Number(v.mins) || 0,
           active: true,
         }));
+
+        const afterAssignments = upserts.map((row) => ({
+        staff_id: row.staff_id,
+        price: row.price,
+        duration: row.duration,
+      }));
 
       if (upserts.length) {
         const { error: upErr } = await supabase
@@ -317,6 +328,21 @@ const isAdmin = isAdminLike({ permission: myPermission });
             unassigned_staff_ids: toDelete,
             upsert_count: upserts.length,
             delete_count: toDelete.length,
+          },
+          actorId,
+          actorEmail,
+          supabaseClient: supabase,
+        });
+        await logEvent({
+          entityType: "service",
+          entityId: selectedService.id,
+          action: "service_updated",
+          details: {
+            service_id: selectedService.id,
+            service_name: selectedService.name || null,
+            before_assignments: beforeAssignments,
+            after_assignments: afterAssignments,
+            unassigned_staff_ids: toDelete,
           },
           actorId,
           actorEmail,
