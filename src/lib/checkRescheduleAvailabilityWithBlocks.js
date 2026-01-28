@@ -39,7 +39,9 @@ const getDurationMins = (row, basketItem) => {
 const toInList = (ids) => {
   const safe = (ids || []).filter(Boolean);
   if (!safe.length) return null;
-  return `(${safe.map((id) => `"${id}"`).join(",")})`;
+
+  // PostgREST expects: (uuid1,uuid2,uuid3)  — no quotes needed
+  return `(${safe.join(",")})`;
 };
 
 const buildSlots = ({ startDate, orderedRows, basket, chemicalGapMin }) => {
@@ -71,8 +73,9 @@ const buildSlots = ({ startDate, orderedRows, basket, chemicalGapMin }) => {
 
 // overlaps if: existing.start < newEnd AND existing.end > newStart
 const buildOverlapOr = (slots) => {
+  // IMPORTANT: no quotes inside PostgREST or() expression
   return slots
-    .map((s) => `and(start.lt."${s.endISO}",end.gt."${s.startISO}")`)
+    .map((s) => `and(start.lt.${s.endISO},end.gt.${s.startISO})`)
     .join(",");
 };
 
@@ -81,13 +84,15 @@ const buildOverlapOrWithStaff = (slots, staffCol, staffId, includeGlobal = true)
   const groups = [];
 
   for (const s of slots) {
+    // Staff-specific block
     groups.push(
-      `and(${staffCol}.eq."${staffId}",start.lt."${s.endISO}",end.gt."${s.startISO}")`
+      `and(${staffCol}.eq.${staffId},start.lt.${s.endISO},end.gt.${s.startISO})`
     );
 
+    // Global block (null staff)
     if (includeGlobal) {
       groups.push(
-        `and(${staffCol}.is.null,start.lt."${s.endISO}",end.gt."${s.startISO}")`
+        `and(${staffCol}.is.null,start.lt.${s.endISO},end.gt.${s.startISO})`
       );
     }
   }
@@ -97,13 +102,15 @@ const buildOverlapOrWithStaff = (slots, staffCol, staffId, includeGlobal = true)
 
 const isMissingColumnError = (err) => {
   const msg = String(err?.message || "").toLowerCase();
-  return msg.includes("does not exist") || msg.includes("column");
+  const code = String(err?.code || "");
+  // 42703 = undefined_column (Postgres)
+  return code === "42703" || msg.includes("does not exist") || msg.includes("column");
 };
 
 /**
  * Checks:
  * 1) Overlapping BOOKINGS for the stylist (excluding the bookings being moved)
- * 2) Overlapping SCHEDULE_BLOCKS (locked blocks / active blocks)
+ * 2) Overlapping SCHEDULE_BLOCKS (active blocks, including global blocks where staff is null)
  *
  * Returns { ok: true } or { ok: false, message, conflict? }
  */
@@ -146,14 +153,13 @@ export async function checkRescheduleAvailabilityWithBlocks({
   if (bookingHits?.length) {
     return {
       ok: false,
-      message: "That time isn’t available for this stylist (booking conflict).",
+      message:
+        "That time isn’t available for this stylist (booking conflict). Please choose a different time slot.",
       conflict: bookingHits[0],
     };
   }
 
   // ---------- 2) SCHEDULE_BLOCKS overlap ----------
-  // Your RLS allows SELECT only where is_active = true (via public policy),
-  // so we check only active blocks (which is exactly what you want to block bookings).
   const tryBlocksQuery = async (staffCol) => {
     const orExprBlocks = buildOverlapOrWithStaff(slots, staffCol, staffId, true);
 
@@ -167,12 +173,12 @@ export async function checkRescheduleAvailabilityWithBlocks({
     return { data, error };
   };
 
-  // Try common column name first: resource_id
-  let blocksRes = await tryBlocksQuery("resource_id");
+  // ✅ Your app uses staff_id in schedule_blocks, so try that first.
+  let blocksRes = await tryBlocksQuery("staff_id");
 
-  // If their schedule_blocks uses staff_id instead, fallback
+  // Fallback to resource_id if this project happens to use that column name
   if (blocksRes.error && isMissingColumnError(blocksRes.error)) {
-    blocksRes = await tryBlocksQuery("staff_id");
+    blocksRes = await tryBlocksQuery("resource_id");
   }
 
   if (blocksRes.error) throw blocksRes.error;
@@ -180,7 +186,7 @@ export async function checkRescheduleAvailabilityWithBlocks({
   if (blocksRes.data?.length) {
     return {
       ok: false,
-      message: "That time is blocked (schedule block). Pick another slot.",
+      message: "That time is blocked (schedule block). Please choose another slot.",
       conflict: blocksRes.data[0],
     };
   }

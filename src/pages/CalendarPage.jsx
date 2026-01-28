@@ -2139,7 +2139,32 @@ setRescheduleMeta({
         }}
         stylistList={stylistList}
         clients={clients}
-onBookingUpdated={({ booking_id, id, is_locked, booking_tag_id, status }) => {
+onBookingUpdated={({
+          type,
+          rows,
+          booking_id,
+          id,
+          is_locked,
+          booking_tag_id,
+          status,
+        }) => {
+          if (type === "rescheduled" && Array.isArray(rows) && rows.length) {
+            setEvents((prev) => {
+              const updatedMap = new Map(
+                rows.map((row) => [row.id, coerceEventForPopup(row)])
+              );
+              const next = prev.map((ev) =>
+                updatedMap.has(ev.id) ? { ...ev, ...updatedMap.get(ev.id) } : ev
+              );
+              const existingIds = new Set(next.map((ev) => ev.id));
+              const additions = [];
+              updatedMap.forEach((row, rowId) => {
+                if (!existingIds.has(rowId)) additions.push(row);
+              });
+              return additions.length ? [...next, ...additions] : next;
+            });
+            return;
+          }
           setEvents((prev) =>
             prev.map((ev) => {
               const same = booking_id ? ev.booking_id === booking_id : ev.id === id;
@@ -2147,10 +2172,8 @@ onBookingUpdated={({ booking_id, id, is_locked, booking_tag_id, status }) => {
           booking_tag_id !== undefined ? booking_tag_id : ev.booking_tag_id;
           const nextStatus = status !== undefined ? status : ev.status;
 
-        const nextTagCode = nextTagId
-          ? (tagCodeById?.get(nextTagId) || null)
-          : null;
-               return same
+       const nextTagCode = nextTagId ? tagCodeById?.get(nextTagId) || null : null;
+              return same
                 ? {
                     ...ev,
                     is_locked:

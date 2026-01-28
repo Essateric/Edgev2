@@ -2,10 +2,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import Modal from "./Modal";
+import toast from "react-hot-toast";
 import Button from "./Button";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { checkRescheduleAvailability } from "../lib/checkRescheduleAvailability.js";
 import { checkRescheduleAvailabilityWithBlocks } from "../lib/checkRescheduleAvailabilityWithBlocks.js";
+import { logEvent } from "../lib/logEvent.js";
 
 /* ===== Gap after chemical services ===== */
 const CHEMICAL_GAP_MIN = 30;
@@ -57,6 +59,34 @@ const parseLocalDateTime = (s) => {
   return new Date(y, m - 1, d, hh, mm, 0, 0);
 };
 
+const DAY_LABELS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
+const getStaffWorkingWindow = (stylistList, staffId, date) => {
+  if (!staffId || !date) return null;
+  const staff = stylistList?.find((s) => s.id === staffId);
+  if (!staff) return null;
+  const dayName = DAY_LABELS[new Date(date).getDay()];
+  const hours = staff?.weeklyHours?.[dayName] || staff?.weekly_hours?.[dayName];
+  if (!hours || hours.off) return null;
+  const [startHour, startMinute] = String(hours.start || "").split(":").map(Number);
+  const [endHour, endMinute] = String(hours.end || "").split(":").map(Number);
+  if (!Number.isFinite(startHour) || !Number.isFinite(endHour)) return null;
+  const start = new Date(date);
+  start.setHours(startHour || 0, startMinute || 0, 0, 0);
+  const end = new Date(date);
+  end.setHours(endHour || 0, endMinute || 0, 0, 0);
+  if (!(end > start)) return null;
+  return { start, end };
+};
+
 export default function RescheduleModal({
   isOpen,
   onClose,
@@ -69,7 +99,7 @@ export default function RescheduleModal({
   basket,
   rescheduleMeta,
 }) {
-  const { supabaseClient } = useAuth();
+   const { supabaseClient, currentUser } = useAuth();
   const db = supabaseClient;
 
   const [loading, setLoading] = useState(false);
@@ -82,6 +112,14 @@ export default function RescheduleModal({
     );
   }, [rescheduleMeta]);
 
+  const initialStaffId = useMemo(() => {
+    const slotStaff =
+      selectedSlot?.resourceId ?? selectedSlot?.resource_id ?? null;
+    const rowStaff =
+      orderedRows?.[0]?.resource_id ?? orderedRows?.[0]?.resourceId ?? null;
+    return slotStaff || rowStaff || null;
+  }, [orderedRows, selectedSlot?.resourceId, selectedSlot?.resource_id]);
+
   const originalStart = orderedRows?.[0]?.start
     ? new Date(orderedRows[0].start)
     : null;
@@ -89,6 +127,12 @@ export default function RescheduleModal({
   const originalEnd = orderedRows?.length
     ? new Date(Math.max(...orderedRows.map((r) => new Date(r.end).getTime())))
     : null;
+
+    const originalStartValue = useMemo(() => {
+    const slotStart = selectedSlot?.start ? new Date(selectedSlot.start) : null;
+    const base = slotStart || originalStart || null;
+    return base ? toLocalDateTimeValue(base) : "";
+  }, [originalStart, selectedSlot?.start]);
 
   const clientFromList = useMemo(
     () => clients?.find((c) => c.id === selectedClient) || null,
@@ -121,30 +165,29 @@ export default function RescheduleModal({
 
     if (hasTouchedStart) return;
 
-    const slotStaff =
-      selectedSlot?.resourceId ?? selectedSlot?.resource_id ?? null;
-
-    const rowStaff =
-      orderedRows?.[0]?.resource_id ?? orderedRows?.[0]?.resourceId ?? null;
-
-    setStaffId(slotStaff || rowStaff || null);
-
-    const slotStart = selectedSlot?.start ? new Date(selectedSlot.start) : null;
-    const base = slotStart || originalStart || new Date();
-    setNewStartValue(toLocalDateTimeValue(base));
+   setStaffId(initialStaffId);
+    setNewStartValue(originalStartValue);
   }, [
     hasTouchedStart, 
     isOpen,
-    selectedSlot?.start,
-    selectedSlot?.resourceId,
-    selectedSlot?.resource_id,
-    orderedRows,
-    originalStart,
+     initialStaffId,
+    originalStartValue,
   ]);
 
-  const chosenStylist = useMemo(() => {
-    return stylistList?.find((s) => s.id === staffId) || null;
-  }, [stylistList, staffId]);
+ const chosenStylist = useMemo(
+    () => stylistList?.find((s) => s.id === staffId) || null,
+    [stylistList, staffId]
+  );
+
+  const originalStylist = useMemo(
+    () => stylistList?.find((s) => s.id === initialStaffId) || null,
+    [stylistList, initialStaffId]
+  );
+
+  const hasChanges = useMemo(() => {
+    if (!newStartValue || !staffId) return false;
+    return newStartValue !== originalStartValue || staffId !== initialStaffId;
+  }, [newStartValue, staffId, originalStartValue, initialStaffId]);
 
   const previewEnd = useMemo(() => {
     const startDate = parseLocalDateTime(newStartValue);
@@ -194,6 +237,27 @@ export default function RescheduleModal({
     const startDate = parseLocalDateTime(newStartValue);
     if (!startDate) return setErrorMsg("Pick a valid new date/time.");
     if (!staffId) return setErrorMsg("Pick a stylist.");
+     if (!hasChanges) return setErrorMsg("Update the date/time or stylist first.");
+
+    if (!previewEnd)
+      return setErrorMsg(
+        "We couldn’t calculate the new booking end time. Please try another slot."
+      );
+
+    const workingWindow = getStaffWorkingWindow(stylistList, staffId, startDate);
+    if (!workingWindow) {
+      return setErrorMsg(
+        "No working hours found for this stylist on that day. Please choose a different time slot."
+      );
+    }
+    const sameDay =
+      startDate.toDateString() === workingWindow.start.toDateString() &&
+      previewEnd.toDateString() === workingWindow.end.toDateString();
+    if (!sameDay || startDate < workingWindow.start || previewEnd > workingWindow.end) {
+      return setErrorMsg(
+        "That time is outside opening hours. Please select a different time slot."
+      );
+    }
 
     setLoading(true);
 
@@ -206,6 +270,7 @@ export default function RescheduleModal({
         startDate,
         orderedRows,
         basket,
+        weeklyHours: chosenStylist?.weeklyHours || null,
         chemicalGapMin: CHEMICAL_GAP_MIN,
       });
 
@@ -226,6 +291,7 @@ export default function RescheduleModal({
 
       const newBookings = [];
       let currentStart = new Date(startDate);
+      let finalEnd = null;
 
       for (let index = 0; index < orderedRows.length; index++) {
         const row = orderedRows[index];
@@ -243,6 +309,7 @@ export default function RescheduleModal({
         const startISO = currentStart.toISOString();
         const currentEnd = new Date(currentStart.getTime() + durationMins * 60000);
         const endISO = currentEnd.toISOString();
+         finalEnd = currentEnd;
 
         const { data: bookingData, error: bookingError } = await db
           .from("bookings")
@@ -278,6 +345,57 @@ export default function RescheduleModal({
           ? new Date(currentEnd.getTime() + CHEMICAL_GAP_MIN * 60000)
           : new Date(currentEnd);
       }
+
+      try {
+        await logEvent({
+          entityType: "booking",
+          entityId: orderedRows?.[0]?.id || null,
+          bookingId: orderedRows?.[0]?.booking_id || null,
+          action: "rescheduled",
+          details: {
+            from: {
+              start: originalStart?.toISOString() || null,
+              end: originalEnd?.toISOString() || null,
+              stylist_id: initialStaffId,
+              stylist_name: originalStylist?.title || originalStylist?.name || null,
+            },
+            to: {
+              start: startDate.toISOString(),
+              end: finalEnd?.toISOString() || null,
+              stylist_id: staffId,
+              stylist_name: chosenStylist?.title || chosenStylist?.name || null,
+            },
+            booking_row_ids: orderedRows.map((row) => row.id).filter(Boolean),
+          },
+          actorId: currentUser?.id || currentUser?.user?.id || null,
+          actorEmail: currentUser?.email || currentUser?.user?.email || null,
+          supabaseClient: db,
+        });
+      } catch (auditErr) {
+        console.warn("[Audit] reschedule log failed", auditErr);
+      }
+
+      const originalStylistName =
+        originalStylist?.title || originalStylist?.name || "Unknown Stylist";
+      const newStylistName =
+        chosenStylist?.title || chosenStylist?.name || "Unknown Stylist";
+      const originalMessage = originalStart && originalEnd
+        ? `${format(originalStart, "eee dd MMM yyyy, HH:mm")} – ${format(
+            originalEnd,
+            "HH:mm"
+          )}`
+        : "previous time";
+      const newMessage =
+        startDate && finalEnd
+          ? `${format(startDate, "eee dd MMM yyyy, HH:mm")} – ${format(
+              finalEnd,
+              "HH:mm"
+            )}`
+          : "new time";
+
+      toast.success(
+        `${resolvedClientName} has been rescheduled from ${originalMessage} with ${originalStylistName} to ${newMessage} with ${newStylistName}.`
+      );
 
       onConfirm?.(newBookings);
     } catch (err) {
@@ -334,7 +452,7 @@ export default function RescheduleModal({
               setHasTouchedStart(true);
             }}
             onInput={(e) => setNewStartValue(e.target.value)}
-            disabled={loading}
+             disabled={loading || !hasChanges}
             className="w-full border rounded px-3 py-2 text-sm"
           />
         </div>
@@ -369,7 +487,7 @@ export default function RescheduleModal({
             className="bg-green-600 text-white hover:bg-green-700"
             disabled={loading}
           >
-            {loading ? "Rescheduling..." : "Confirm Reschedule"}
+            {loading ? "Saving..." : "Save Reschedule"}
           </Button>
         </div>
       </div>

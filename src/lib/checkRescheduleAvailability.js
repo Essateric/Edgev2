@@ -119,7 +119,7 @@ export async function checkRescheduleAvailability({
   if (data?.length) {
     return {
       ok: false,
-      message: "That time isn’t available for this stylist. Pick another slot.",
+      message: "That time isn’t available for this stylist. Please pick another slot.",
       conflict: data[0],
     };
   }
