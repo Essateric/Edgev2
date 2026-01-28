@@ -1,8 +1,11 @@
+// src/components/RescheduleModal.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import Modal from "./Modal";
 import Button from "./Button";
 import { useAuth } from "../contexts/AuthContext.jsx";
+import { checkRescheduleAvailability } from "../lib/checkRescheduleAvailability.js";
+import { checkRescheduleAvailabilityWithBlocks } from "../lib/checkRescheduleAvailabilityWithBlocks.js";
 
 /* ===== Gap after chemical services ===== */
 const CHEMICAL_GAP_MIN = 30;
@@ -79,11 +82,12 @@ export default function RescheduleModal({
     );
   }, [rescheduleMeta]);
 
-  const originalStart = orderedRows?.[0]?.start ? new Date(orderedRows[0].start) : null;
+  const originalStart = orderedRows?.[0]?.start
+    ? new Date(orderedRows[0].start)
+    : null;
+
   const originalEnd = orderedRows?.length
-    ? new Date(
-        Math.max(...orderedRows.map((r) => new Date(r.end).getTime()))
-      )
+    ? new Date(Math.max(...orderedRows.map((r) => new Date(r.end).getTime())))
     : null;
 
   const clientFromList = useMemo(
@@ -105,13 +109,21 @@ export default function RescheduleModal({
   // chosen staff (default from selected slot, else from first booking row)
   const [staffId, setStaffId] = useState(null);
 
-  // chosen new start datetime-local string
+// chosen new start datetime-local string
   const [newStartValue, setNewStartValue] = useState("");
+  const [hasTouchedStart, setHasTouchedStart] = useState(false);
 
   useEffect(() => {
-    if (!isOpen) return;
+     if (!isOpen) {
+      setHasTouchedStart(false);
+      return;
+    }
 
-    const slotStaff = selectedSlot?.resourceId ?? selectedSlot?.resource_id ?? null;
+    if (hasTouchedStart) return;
+
+    const slotStaff =
+      selectedSlot?.resourceId ?? selectedSlot?.resource_id ?? null;
+
     const rowStaff =
       orderedRows?.[0]?.resource_id ?? orderedRows?.[0]?.resourceId ?? null;
 
@@ -120,7 +132,15 @@ export default function RescheduleModal({
     const slotStart = selectedSlot?.start ? new Date(selectedSlot.start) : null;
     const base = slotStart || originalStart || new Date();
     setNewStartValue(toLocalDateTimeValue(base));
-  }, [isOpen, selectedSlot?.start, selectedSlot?.resourceId, orderedRows, originalStart]);
+  }, [
+    hasTouchedStart, 
+    isOpen,
+    selectedSlot?.start,
+    selectedSlot?.resourceId,
+    selectedSlot?.resource_id,
+    orderedRows,
+    originalStart,
+  ]);
 
   const chosenStylist = useMemo(() => {
     return stylistList?.find((s) => s.id === staffId) || null;
@@ -135,16 +155,26 @@ export default function RescheduleModal({
 
     for (let i = 0; i < orderedRows.length; i++) {
       const row = orderedRows[i];
+
       const durationMins = Math.max(
         1,
-        Number(row?.duration ?? basket?.[i]?.displayDuration ?? basket?.[i]?.duration ?? 0)
+        Number(
+          row?.duration ??
+            basket?.[i]?.displayDuration ??
+            basket?.[i]?.duration ??
+            0
+        )
       );
 
       const end = new Date(current.getTime() + durationMins * 60000);
       lastEnd = end;
 
       const serviceForGap =
-        basket?.[i] ?? { name: row?.title, title: row?.title, category: row?.category };
+        basket?.[i] ?? {
+          name: row?.title,
+          title: row?.title,
+          category: row?.category,
+        };
 
       current = isChemical(serviceForGap)
         ? new Date(end.getTime() + CHEMICAL_GAP_MIN * 60000)
@@ -158,7 +188,8 @@ export default function RescheduleModal({
     setErrorMsg("");
 
     if (!db) return setErrorMsg("No Supabase client available.");
-    if (!orderedRows?.length) return setErrorMsg("No booking rows found to reschedule.");
+    if (!orderedRows?.length)
+      return setErrorMsg("No booking rows found to reschedule.");
 
     const startDate = parseLocalDateTime(newStartValue);
     if (!startDate) return setErrorMsg("Pick a valid new date/time.");
@@ -167,6 +198,32 @@ export default function RescheduleModal({
     setLoading(true);
 
     try {
+      // ✅ availability check before any updates happen
+      // Using the "with blocks" version (your current preference in this file).
+      const availability = await checkRescheduleAvailabilityWithBlocks({
+        db,
+        staffId,
+        startDate,
+        orderedRows,
+        basket,
+        chemicalGapMin: CHEMICAL_GAP_MIN,
+      });
+
+      // If you ever want to use the non-block version instead, swap to:
+      // const availability = await checkRescheduleAvailability({
+      //   db,
+      //   staffId,
+      //   startDate,
+      //   orderedRows,
+      //   basket,
+      //   chemicalGapMin: CHEMICAL_GAP_MIN,
+      // });
+
+      if (!availability.ok) {
+        setErrorMsg(availability.message);
+        return; // finally{} will still run and stop the spinner
+      }
+
       const newBookings = [];
       let currentStart = new Date(startDate);
 
@@ -211,7 +268,11 @@ export default function RescheduleModal({
         });
 
         const serviceForGap =
-          basket?.[index] ?? { name: row?.title, title: row?.title, category: row?.category };
+          basket?.[index] ?? {
+            name: row?.title,
+            title: row?.title,
+            category: row?.category,
+          };
 
         currentStart = isChemical(serviceForGap)
           ? new Date(currentEnd.getTime() + CHEMICAL_GAP_MIN * 60000)
@@ -229,13 +290,19 @@ export default function RescheduleModal({
 
   const originalLabel =
     originalStart && originalEnd
-      ? `${format(originalStart, "eee dd MMM yyyy, HH:mm")} – ${format(originalEnd, "HH:mm")}`
+      ? `${format(originalStart, "eee dd MMM yyyy, HH:mm")} – ${format(
+          originalEnd,
+          "HH:mm"
+        )}`
       : "—";
 
   const newStartDate = parseLocalDateTime(newStartValue);
   const newLabel =
     newStartDate && previewEnd
-      ? `${format(newStartDate, "eee dd MMM yyyy, HH:mm")} – ${format(previewEnd, "HH:mm")}`
+      ? `${format(newStartDate, "eee dd MMM yyyy, HH:mm")} – ${format(
+          previewEnd,
+          "HH:mm"
+        )}`
       : "—";
 
   return (
@@ -262,7 +329,11 @@ export default function RescheduleModal({
           <input
             type="datetime-local"
             value={newStartValue}
-            onChange={(e) => setNewStartValue(e.target.value)}
+            onChange={(e) => {
+              setNewStartValue(e.target.value);
+              setHasTouchedStart(true);
+            }}
+            onInput={(e) => setNewStartValue(e.target.value)}
             disabled={loading}
             className="w-full border rounded px-3 py-2 text-sm"
           />
