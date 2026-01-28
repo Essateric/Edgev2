@@ -496,6 +496,17 @@ useEffect(() => {
 
 const [selectionOverlaps, setSelectionOverlaps] = useState(false);
 
+ const getEventResourceId = useCallback(
+    (event) =>
+      event?.resourceId ??
+      event?.resource_id ??
+      event?.stylist_id ??
+      event?.resource?.id ??
+      event?.resource?.resourceId ??
+      null,
+    []
+  );
+
   const hasSlotOverlap = useCallback(
     ({ start, end, resourceId, eventId }) => {
       if (!start || !end || !resourceId) return false;
@@ -504,12 +515,44 @@ const [selectionOverlaps, setSelectionOverlaps] = useState(false);
 
       return calendarEvents.some((ev) => {
         if (!ev || ev.__isPreview) return false;
-        if (ev.isUnavailable || ev.isSalonClosed) return false;
+        // if (ev.isUnavailable || ev.isSalonClosed) return false;
 
         const evId = ev.id ?? ev._id ?? null;
         if (eventId && evId === eventId) return false;
 
-        const evResourceId = ev.resourceId ?? ev.resource_id ?? ev.stylist_id ?? null;
+         false;
+      const startDate = toDate(event.start);
+      const endDate = toDate(event.end);
+
+      return calendarEvents.some((ev) => {
+        if (!ev || ev.__isPreview) return false;
+        if (!ev.isUnavailable && !ev.isSalonClosed) return false;
+
+        const evResourceId = getEventResourceId(ev);
+        if (!evResourceId || evResourceId !== resourceId) return false;
+
+        const evStart = toDate(ev.start);
+        const evEnd = toDate(ev.end);
+        return startDate < evEnd && endDate > evStart;
+      });
+    },
+    [calendarEvents, getEventResourceId]
+  );
+  const overlapsUnavailableBlock = useCallback(
+    (event) => {
+      if (!event?.start || !event?.end) return false;
+      const resourceId =
+        event.resourceId ?? event.resource_id ?? event.stylist_id ?? null;
+      if (!resourceId) return false;
+      const startDate = toDate(event.start);
+      const endDate = toDate(event.end);
+
+      return calendarEvents.some((ev) => {
+        if (!ev || ev.__isPreview) return false;
+        // if (!ev.isUnavailable && !ev.isSalonClosed) return false;
+
+        const evResourceId =
+          ev.resourceId ?? ev.resource_id ?? ev.stylist_id ?? null;
         if (!evResourceId || evResourceId !== resourceId) return false;
 
         const evStart = toDate(ev.start);
@@ -1933,12 +1976,14 @@ if (isScheduleBlockEvent(event)) {
   resizable
   onEventResize={handleMoveEvent}
   eventPropGetter={(event) => {
+    const isPreviewEvent = Boolean(event?.__isPreview);
+     const previewResourceId = getEventResourceId(event);
      const previewOverlap =
-      event?.__isPreview &&
+       isPreviewEvent &&
       hasSlotOverlap({
         start: event?.start,
         end: event?.end,
-        resourceId: event?.resourceId ?? event?.resource_id ?? event?.stylist_id ?? null,
+        resourceId: previewResourceId,
         eventId: event?.id ?? null,
       });
 
@@ -1947,8 +1992,8 @@ if (isScheduleBlockEvent(event)) {
         className: "rbc-event-overlap-preview",
         style: {
           zIndex: 3,
-          backgroundColor: "#000",
-          color: "#fff",
+          backgroundColor: "#f59e0b",
+          color: "#000",
           border: "1px solid #000",
           opacity: 0.95,
         },
@@ -1996,6 +2041,23 @@ if (isScheduleBlockEvent(event)) {
           opacity: 0.7,
           border: "none",
           pointerEvents: "none",
+        },
+      };
+    }
+
+    const isInvalidBooking =
+      !event.isTask &&
+      !isScheduleBlockEvent(event) &&
+      overlapsUnavailableBlock(event);
+
+    if (isInvalidBooking) {
+      return {
+        style: {
+          zIndex: 2,
+          backgroundColor: "#f59e0b",
+          color: "#000",
+          border: "1px solid #000",
+          opacity: 0.95,
         },
       };
     }
@@ -2365,3 +2427,4 @@ onBookingUpdated={({
     </div>
   );
 }
+  )}

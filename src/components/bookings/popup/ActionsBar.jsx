@@ -41,6 +41,8 @@ export default function ActionsBar({
       >
         Reschedule
       </button>
+        {/* Edit button intentionally hidden for now. */}
+      {/*
       <button
         type="button"
         onClick={onEdit}
@@ -48,7 +50,7 @@ export default function ActionsBar({
         className="bg-bronze hover:bg-bronze/90 text-white px-3 py-1 rounded disabled:opacity-60 disabled:cursor-not-allowed"
       >
         Edit
-      </button>
+      </button> */}
 
       <button
         type="button"

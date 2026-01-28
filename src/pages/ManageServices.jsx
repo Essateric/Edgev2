@@ -5,9 +5,7 @@ import toast from "react-hot-toast";
 import { supabase as defaultSupabase } from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
 import { logEvent } from "../lib/logEvent";
-import { confirmAndDeleteServiceWithAudit } from "../lib/deleteServiceWithAudit";
 import { isAdminLike } from "../utils/roleUtils";
-
 
 export default function ManageServices({ staffId }) {
   const { currentUser, supabaseClient } = useAuth();
@@ -31,7 +29,11 @@ export default function ManageServices({ staffId }) {
   };
 
   const [services, setServices] = useState([]);
-  const [customData, setCustomData] = useState({}); // kept (unused) to preserve existing logic surface
+
+  // kept (unused) to preserve existing logic surface
+  // eslint-disable-next-line no-unused-vars
+  const [customData, setCustomData] = useState({});
+
   const [saving, setSaving] = useState(false);
 
   const [newServiceName, setNewServiceName] = useState("");
@@ -45,18 +47,28 @@ export default function ManageServices({ staffId }) {
 
   const [staffList, setStaffList] = useState([]);
 
-  // NEW: service ⇄ stylist assignments for the modal
+  // service ⇄ stylist assignments for the modal
   // shape: { [staff_id]: { checked: boolean, price: number|string, mins: number } }
   const [assignments, setAssignments] = useState({});
 
-  // NEW: who am I? (permission gate for delete button)
+  // who am I? (permission gate for delete button)
   const [me, setMe] = useState(null);
 
-  // NEW: delete confirm state
+  // delete confirm state
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
-const isAdmin = isAdminLike(me);
+
+  const myPermission =
+  me?.permission ||
+  currentUser?.permission ||
+  currentUser?.user?.permission ||
+  currentUser?.role ||
+  currentUser?.user?.role ||
+  null;
+
+const isAdmin = isAdminLike(myPermission);
+
 
   const categories = [
     "Uncategorized",
@@ -74,16 +86,15 @@ const isAdmin = isAdminLike(me);
   };
 
   const fetchMe = async () => {
-    const uid =
-      staffId ||
-      currentUser?.id ||
-      currentUser?.user?.id ||
-      null;
-
+    const uid = staffId || currentUser?.id || currentUser?.user?.id || null;
     if (!uid) return;
 
     const { data, error } = await withTimeout(
-      supabase.from("staff").select("id,name,permission,email").eq("id", uid).maybeSingle(),
+      supabase
+        .from("staff")
+        .select("id,name,permission,email")
+        .eq("id", uid)
+        .maybeSingle(),
       5000,
       "fetch me"
     );
@@ -145,7 +156,11 @@ const isAdmin = isAdminLike(me);
       base_duration: Number(newBaseDuration) || 0,
     };
 
-    const { error, data } = await supabase.from("services").insert([payload]).select("*").maybeSingle();
+    const { error, data } = await supabase
+      .from("services")
+      .insert([payload])
+      .select("*")
+      .maybeSingle();
 
     if (error) {
       toast.error("Failed to add service");
@@ -159,9 +174,7 @@ const isAdmin = isAdminLike(me);
         entityType: "service",
         entityId: data?.id || null,
         action: "service_created",
-        details: {
-          service: data || payload,
-        },
+        details: { service: data || payload },
         actorId,
         actorEmail,
         supabaseClient: supabase,
@@ -210,6 +223,7 @@ const isAdmin = isAdminLike(me);
   const handleServiceClick = async (service) => {
     setSelectedService(service);
     setShowModal(true);
+    setAssignments({});
 
     const { data, error } = await supabase
       .from("staff_services")
@@ -237,32 +251,8 @@ const isAdmin = isAdminLike(me);
   const handleSaveStylist = async () => {
     if (!selectedService?.id) return;
 
-    // ✅ Add this right after handleSaveStylist
-const handleDeleteService = async () => {
-  try {
-    await confirmAndDeleteServiceWithAudit({
-      supabase,
-      service: selectedService,
-      currentUser,
-      staffId,
-      reason: "Admin deleted service from ManageServices",
-    });
-
-    toast.success("Service deleted");
-    setShowModal(false);
-    setSelectedService(null);
-    setAssignments({});
-    fetchServices();
-  } catch (e) {
-    if (e?.code === "CANCELLED" || e?.message === "CANCELLED") return;
-    console.error(e);
-    toast.error(e?.message || "Failed to delete service");
-  }
-};
-
     setSaving(true);
     try {
-      // What exists now (for delete-diff)
       const { data: existing, error: loadErr } = await supabase
         .from("staff_services")
         .select("staff_id")
@@ -272,7 +262,6 @@ const handleDeleteService = async () => {
 
       const existingSet = new Set((existing || []).map((r) => r.staff_id));
 
-      // Upserts
       const upserts = Object.entries(assignments)
         .filter(([, v]) => v?.checked)
         .map(([staff_id, v]) => ({
@@ -290,7 +279,6 @@ const handleDeleteService = async () => {
         if (upErr) throw upErr;
       }
 
-      // Deletes (those previously assigned but now unchecked)
       const uncheckedStaff = Object.entries(assignments)
         .filter(([, v]) => !v?.checked)
         .map(([staff_id]) => staff_id);
@@ -343,7 +331,7 @@ const handleDeleteService = async () => {
     }
   };
 
-  // NEW: open delete confirmation
+  // open delete confirmation
   const requestDeleteService = (service) => {
     if (!isAdmin) {
       toast.error("Only admins and senior stylists can delete services.");
@@ -352,11 +340,12 @@ const handleDeleteService = async () => {
     setDeleteTarget(service);
   };
 
-  // NEW: actually delete + audit log
+  // actually delete + audit log
   const confirmDeleteService = async () => {
     if (!deleteTarget?.id) return;
+
     if (!isAdmin) {
-     toast.error("Only admins and senior stylists can delete services.");
+      toast.error("Only admins and senior stylists can delete services.");
       setDeleteTarget(null);
       return;
     }
@@ -365,7 +354,6 @@ const handleDeleteService = async () => {
     const svc = deleteTarget;
 
     try {
-      // Optional: count assignments that will be cascade-deleted
       const { count: assignedCount, error: countErr } = await supabase
         .from("staff_services")
         .select("id", { count: "exact", head: true })
@@ -410,7 +398,6 @@ const handleDeleteService = async () => {
       toast.success("Service deleted");
       setDeleteTarget(null);
 
-      // If the modal was open for this service, close it
       if (selectedService?.id === svc.id) {
         setShowModal(false);
         setSelectedService(null);
@@ -442,7 +429,9 @@ const handleDeleteService = async () => {
 
       {/* Add Service */}
       <Card className="mb-4">
-        <h2 className="text-lg text-bronze font-semibold mb-3">Add New Service</h2>
+        <h2 className="text-lg text-bronze font-semibold mb-3">
+          Add New Service
+        </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
           <div className="flex flex-col">
             <label className="text-sm text-gray-700 mb-1">Service Name</label>
@@ -456,7 +445,9 @@ const handleDeleteService = async () => {
           </div>
 
           <div className="flex flex-col">
-            <label className="text-sm text-gray-700 mb-1">Select Category</label>
+            <label className="text-sm text-gray-700 mb-1">
+              Select Category
+            </label>
             <select
               value={newCategory}
               onChange={(e) => setNewCategory(e.target.value)}
@@ -484,7 +475,9 @@ const handleDeleteService = async () => {
           </div>
 
           <div className="flex flex-col">
-            <label className="text-sm text-gray-700 mb-1">Base Duration (mins)</label>
+            <label className="text-sm text-gray-700 mb-1">
+              Base Duration (mins)
+            </label>
             <input
               type="number"
               placeholder="Base Duration (mins)"
@@ -507,7 +500,9 @@ const handleDeleteService = async () => {
 
       {/* Grouped Services */}
       <Card className="mb-4">
-        <h2 className="text-lg font-semibold mb-4 text-bronze">Current Services</h2>
+        <h2 className="text-lg font-semibold mb-4 text-bronze">
+          Current Services
+        </h2>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {Object.entries(groupedServices).map(([category, servicesInCategory]) => (
@@ -533,21 +528,47 @@ const handleDeleteService = async () => {
               <div className={openCategories[category] ? "p-4 block" : "hidden"}>
                 <div className="grid grid-cols-1 gap-3">
                   {servicesInCategory.map((service) => (
-                    <button
+                    <div
                       key={service.id}
                       onClick={() => handleServiceClick(service)}
-                      className="bg-white text-left border border-gray-200 rounded-lg p-3 shadow-sm hover:shadow-md transition"
+                      className="relative bg-white text-left border border-gray-200 rounded-lg p-3 shadow-sm hover:shadow-md transition cursor-pointer"
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleServiceClick(service);
+                        }
+                      }}
                     >
-                      <p className="text-sm text-bronze font-medium">{service.name}</p>
-                      <p className="text-xs text-gray-500 mt-1">
-                        £{Number(service.base_price || 0).toFixed(2)} • {Number(service.base_duration || 0)} mins
+                      {isAdmin && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            requestDeleteService(service);
+                          }}
+                          className="absolute top-2 right-2 text-xs px-2 py-1 rounded-md bg-red-600 text-white hover:bg-red-700"
+                          disabled={deleting || saving}
+                          title="Delete service"
+                        >
+                          Delete
+                        </button>
+                      )}
+
+                      <p className="text-sm text-bronze font-medium pr-16">
+                        {service.name}
                       </p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        £{Number(service.base_price || 0).toFixed(2)} •{" "}
+                        {Number(service.base_duration || 0)} mins
+                      </p>
+
                       {isAdmin && (
                         <p className="text-[11px] text-gray-400 mt-2">
-                          Tip: open this to delete from the modal
+                          Tip: you can delete here or in the modal
                         </p>
                       )}
-                    </button>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -560,20 +581,42 @@ const handleDeleteService = async () => {
       {showModal && selectedService && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-2xl shadow-xl overflow-y-auto max-h-[90vh]">
-            <div className="flex items-start justify-between gap-4 mb-4">
-              <h3 className="text-lg font-semibold text-chrome">
-                {selectedService.name} — Assign stylists
-              </h3>
+           <div className="sticky top-0 z-10 bg-white pb-3 border-b border-gray-200">
+  <div className="flex items-center justify-between gap-3">
+    <h3 className="text-lg font-semibold text-chrome">
+      {selectedService.name} — Assign stylists
+    </h3>
 
-              {isAdmin && (
-                <button
-                  onClick={() => requestDeleteService(selectedService)}
-                  className="text-sm px-3 py-2 rounded-md bg-red-600 text-white hover:bg-red-700"
-                >
-                  Delete service
-                </button>
-              )}
-            </div>
+    <div className="flex items-center gap-2">
+      {isAdmin && (
+        <button
+          onClick={() => requestDeleteService(selectedService)}
+          className="h-9 px-3 text-sm rounded-md bg-red-600 text-white hover:bg-red-700"
+          disabled={saving || deleting}
+        >
+          Delete
+        </button>
+      )}
+
+      <button
+        onClick={() => setShowModal(false)}
+        className="h-9 px-3 text-sm rounded-md bg-gray-300 text-gray-900 hover:bg-gray-400"
+        disabled={saving || deleting}
+      >
+        Cancel
+      </button>
+
+      <Button
+        onClick={handleSaveStylist}
+        className="h-9 px-4 text-sm bg-[#cd7f32] text-white hover:bg-[#b36c2c]"
+        disabled={saving || deleting}
+      >
+        {saving ? "Saving..." : "Save Changes"}
+      </Button>
+    </div>
+  </div>
+</div>
+
 
             <div className="space-y-3">
               {staffList.map((stylist) => {
@@ -591,7 +634,9 @@ const handleDeleteService = async () => {
                       <input
                         type="checkbox"
                         checked={!!rec.checked}
-                        onChange={(e) => setAssigned(stylist.id, e.target.checked)}
+                        onChange={(e) =>
+                          setAssigned(stylist.id, e.target.checked)
+                        }
                       />
                       <span className="text-sm font-semibold text-bronze">
                         {stylist.name}
@@ -599,7 +644,9 @@ const handleDeleteService = async () => {
                     </label>
 
                     <div className="col-span-2 flex flex-col">
-                      <label className="text-xs text-gray-700 mb-1">Price (£)</label>
+                      <label className="text-xs text-gray-700 mb-1">
+                        Price (£)
+                      </label>
                       <input
                         type="number"
                         value={rec.price ?? ""}
@@ -624,7 +671,9 @@ const handleDeleteService = async () => {
                     </div>
 
                     <div className="flex flex-col">
-                      <label className="text-xs text-gray-700 mb-1">Minutes</label>
+                      <label className="text-xs text-gray-700 mb-1">
+                        Minutes
+                      </label>
                       <input
                         type="number"
                         value={mins || ""}
@@ -639,24 +688,6 @@ const handleDeleteService = async () => {
                 );
               })}
             </div>
-
-            <div className="flex justify-end mt-6 gap-2">
-              <button
-                onClick={() => setShowModal(false)}
-                className="bg-gray-400 text-white px-4 py-2 rounded-lg shadow hover:bg-gray-500"
-                disabled={saving || deleting}
-              >
-                Cancel
-              </button>
-
-              <Button
-                onClick={handleSaveStylist}
-                className="bg-[#cd7f32] text-white"
-                disabled={saving || deleting}
-              >
-                {saving ? "Saving..." : "Save Changes"}
-              </Button>
-            </div>
           </div>
         </div>
       )}
@@ -669,9 +700,11 @@ const handleDeleteService = async () => {
               Delete service?
             </h3>
             <p className="text-sm text-gray-700 mb-4">
-              You are about to delete <span className="font-semibold">{deleteTarget.name}</span>.
+              You are about to delete{" "}
+              <span className="font-semibold">{deleteTarget.name}</span>.
               <br />
-              This will remove it from the list and also delete any stylist assignments linked to it.
+              This will remove it from the list and also delete any stylist
+              assignments linked to it.
             </p>
 
             <div className="flex justify-end gap-2">

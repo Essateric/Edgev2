@@ -368,14 +368,16 @@ body {
 
 /* Show overlap while selecting a new booking slot */
 .calendar-selection-overlap .rbc-slot-selection {
-  background: #000 !important;
-  opacity: 0.85 !important;
+ background: #f59e0b !important;
+  color: #000 !important;
+  border: 1px solid #000 !important;
+  opacity: 0.9 !important;
 }
 
 /* Overlap preview while dragging/resizing an event */
 .rbc-event-overlap-preview {
-  background-color: #000 !important;
-  color: #fff !important;
+   background-color: #f59e0b !important;
+  color: #000 !important;
 }
 
 /* Intentionally no pointer-events override during drag */

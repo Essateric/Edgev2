@@ -15,6 +15,8 @@ import ActionsBar from "./popup/ActionsBar";
 import ClientNotesModal from "../clients/ClientNotesModal";
 import RepeatBookingsModal from "./popup/RepeatBookingsModal";
 import RescheduleModal from "../RescheduleModal";
+import EditBookingServicesModal from "./popup/EditBookingServicesModal";
+
 
 import { logEvent } from "../../lib/logEvent";
 
@@ -131,6 +133,7 @@ function BookingPopUpBody({
 }) {
   // ✅ include currentUser because cancel audit uses it
   const { supabaseClient, currentUser } = useAuth();
+  
 
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [isEditingDob, setIsEditingDob] = useState(false);
@@ -154,6 +157,9 @@ function BookingPopUpBody({
 
     const [arrivedSaving, setArrivedSaving] = useState(false);
   const [arrivedError, setArrivedError] = useState("");
+
+  const [showServiceEdit, setShowServiceEdit] = useState(false);
+
 
   // who is adding notes
   const [currentStaff, setCurrentStaff] = useState(null);
@@ -1170,10 +1176,11 @@ const openRescheduleModal = () => {
             onCancelBooking={handleCancelBooking}
              onArrived={handleMarkArrived}
             onReschedule={() => setShowReschedule(true)}
-            onEdit={onEdit}
+             onEdit={() => setShowServiceEdit(true)}
             onClose={onClose}
             arrivedDisabled={arrivedSaving}
             arrivedLabel={arrivedSaving ? "Arriving..." : "Arrived"}
+            
           />
           {arrivedError && (
             <div className="px-2 pb-2 text-xs text-red-600">
@@ -1227,6 +1234,17 @@ const openRescheduleModal = () => {
         stylist={stylist}
         supabaseClient={supabaseClient}
       />
+
+      <EditBookingServicesModal
+  isOpen={showServiceEdit}
+  onClose={() => setShowServiceEdit(false)}
+  supabaseClient={supabaseClient}
+  rows={rescheduleRows} // ✅ same set of service rows you already derive
+  bookingGroupId={booking?.booking_id || null}
+  onUpdated={(payload) => onBookingUpdated?.(payload)}
+  onAdvancedEdit={onEdit} // optional: keeps your old flow available
+/>
+
 
       {showReschedule && (
   <RescheduleModal
