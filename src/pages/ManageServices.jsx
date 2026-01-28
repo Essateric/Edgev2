@@ -67,7 +67,7 @@ export default function ManageServices({ staffId }) {
   currentUser?.user?.role ||
   null;
 
-const isAdmin = isAdminLike(myPermission);
+const isAdmin = isAdminLike({ permission: myPermission });
 
 
   const categories = [
@@ -86,7 +86,13 @@ const isAdmin = isAdminLike(myPermission);
   };
 
   const fetchMe = async () => {
-    const uid = staffId || currentUser?.id || currentUser?.user?.id || null;
+    const uid =
+      staffId ||
+      currentUser?.staff_id ||
+      currentUser?.user?.staff_id ||
+      currentUser?.id ||
+      currentUser?.user?.id ||
+      null;
     if (!uid) return;
 
     const { data, error } = await withTimeout(
@@ -541,21 +547,7 @@ const isAdmin = isAdminLike(myPermission);
                         }
                       }}
                     >
-                      {isAdmin && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            requestDeleteService(service);
-                          }}
-                          className="absolute top-2 right-2 text-xs px-2 py-1 rounded-md bg-red-600 text-white hover:bg-red-700"
-                          disabled={deleting || saving}
-                          title="Delete service"
-                        >
-                          Delete
-                        </button>
-                      )}
-
-                      <p className="text-sm text-bronze font-medium pr-16">
+                     <p className="text-sm text-bronze font-medium">
                         {service.name}
                       </p>
                       <p className="text-xs text-gray-500 mt-1">

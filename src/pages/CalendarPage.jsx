@@ -22,7 +22,6 @@ import ScheduleTaskModal from "../components/ScheduleTaskModal.jsx";
 import useUnavailableTimeBlocks from "../components/UnavailableTimeBlocks";
 import UseSalonClosedBlocks from "../components/UseSalonClosedBlocks";
 import useAddGridTimeLabels from "../utils/AddGridTimeLabels";
-import useCalendarSlotHover from "../utils/useCalendarSlotHover";
 
 import baseSupabase from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
@@ -382,8 +381,6 @@ const [bookingTagId, setBookingTagId] = useState(null);
   const [ready, setReady] = useState(false); // calendar is allowed to render
    // Add subtle quarter-hour labels to each calendar grid cell (rerun when calendar renders/navigates)
   useAddGridTimeLabels(9, 20, 15, [ready, visibleDate]);
-  useCalendarSlotHover([ready, visibleDate]);
-
   const [showReminders, setShowReminders] = useState(false);
   const [errText, setErrText] = useState("");
   const [reviewData, setReviewData] = useState(null);
@@ -393,8 +390,6 @@ const [bookingTagId, setBookingTagId] = useState(null);
     const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
   const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
   const [bookingTags, setBookingTags] = useState([]);
-  const [isRescheduleOpen, setIsRescheduleOpen] = useState(false);
-
 
 useEffect(() => {
   if (!supabase) return;
@@ -496,17 +491,6 @@ useEffect(() => {
 
 const [selectionOverlaps, setSelectionOverlaps] = useState(false);
 
- const getEventResourceId = useCallback(
-    (event) =>
-      event?.resourceId ??
-      event?.resource_id ??
-      event?.stylist_id ??
-      event?.resource?.id ??
-      event?.resource?.resourceId ??
-      null,
-    []
-  );
-
   const hasSlotOverlap = useCallback(
     ({ start, end, resourceId, eventId }) => {
       if (!start || !end || !resourceId) return false;
@@ -515,44 +499,12 @@ const [selectionOverlaps, setSelectionOverlaps] = useState(false);
 
       return calendarEvents.some((ev) => {
         if (!ev || ev.__isPreview) return false;
-        // if (ev.isUnavailable || ev.isSalonClosed) return false;
+        if (ev.isUnavailable || ev.isSalonClosed) return false;
 
         const evId = ev.id ?? ev._id ?? null;
         if (eventId && evId === eventId) return false;
 
-         false;
-      const startDate = toDate(event.start);
-      const endDate = toDate(event.end);
-
-      return calendarEvents.some((ev) => {
-        if (!ev || ev.__isPreview) return false;
-        if (!ev.isUnavailable && !ev.isSalonClosed) return false;
-
-        const evResourceId = getEventResourceId(ev);
-        if (!evResourceId || evResourceId !== resourceId) return false;
-
-        const evStart = toDate(ev.start);
-        const evEnd = toDate(ev.end);
-        return startDate < evEnd && endDate > evStart;
-      });
-    },
-    [calendarEvents, getEventResourceId]
-  );
-  const overlapsUnavailableBlock = useCallback(
-    (event) => {
-      if (!event?.start || !event?.end) return false;
-      const resourceId =
-        event.resourceId ?? event.resource_id ?? event.stylist_id ?? null;
-      if (!resourceId) return false;
-      const startDate = toDate(event.start);
-      const endDate = toDate(event.end);
-
-      return calendarEvents.some((ev) => {
-        if (!ev || ev.__isPreview) return false;
-        // if (!ev.isUnavailable && !ev.isSalonClosed) return false;
-
-        const evResourceId =
-          ev.resourceId ?? ev.resource_id ?? ev.stylist_id ?? null;
+        const evResourceId = ev.resourceId ?? ev.resource_id ?? ev.stylist_id ?? null;
         if (!evResourceId || evResourceId !== resourceId) return false;
 
         const evStart = toDate(ev.start);
@@ -1976,14 +1928,12 @@ if (isScheduleBlockEvent(event)) {
   resizable
   onEventResize={handleMoveEvent}
   eventPropGetter={(event) => {
-    const isPreviewEvent = Boolean(event?.__isPreview);
-     const previewResourceId = getEventResourceId(event);
      const previewOverlap =
-       isPreviewEvent &&
+      event?.__isPreview &&
       hasSlotOverlap({
         start: event?.start,
         end: event?.end,
-        resourceId: previewResourceId,
+        resourceId: event?.resourceId ?? event?.resource_id ?? event?.stylist_id ?? null,
         eventId: event?.id ?? null,
       });
 
@@ -1992,8 +1942,8 @@ if (isScheduleBlockEvent(event)) {
         className: "rbc-event-overlap-preview",
         style: {
           zIndex: 3,
-          backgroundColor: "#f59e0b",
-          color: "#000",
+          backgroundColor: "#000",
+          color: "#fff",
           border: "1px solid #000",
           opacity: 0.95,
         },
@@ -2041,23 +1991,6 @@ if (isScheduleBlockEvent(event)) {
           opacity: 0.7,
           border: "none",
           pointerEvents: "none",
-        },
-      };
-    }
-
-    const isInvalidBooking =
-      !event.isTask &&
-      !isScheduleBlockEvent(event) &&
-      overlapsUnavailableBlock(event);
-
-    if (isInvalidBooking) {
-      return {
-        style: {
-          zIndex: 2,
-          backgroundColor: "#f59e0b",
-          color: "#000",
-          border: "1px solid #000",
-          opacity: 0.95,
         },
       };
     }
@@ -2206,32 +2139,16 @@ setRescheduleMeta({
         }}
         stylistList={stylistList}
         clients={clients}
-onBookingUpdated={({
-          type,
-          rows,
-          booking_id,
-          id,
-          is_locked,
-          booking_tag_id,
-          status,
-        }) => {
-          if (type === "rescheduled" && Array.isArray(rows) && rows.length) {
-            setEvents((prev) => {
-              const updatedMap = new Map(
-                rows.map((row) => [row.id, coerceEventForPopup(row)])
-              );
-              const next = prev.map((ev) =>
-                updatedMap.has(ev.id) ? { ...ev, ...updatedMap.get(ev.id) } : ev
-              );
-              const existingIds = new Set(next.map((ev) => ev.id));
-              const additions = [];
-              updatedMap.forEach((row, rowId) => {
-                if (!existingIds.has(rowId)) additions.push(row);
-              });
-              return additions.length ? [...next, ...additions] : next;
-            });
+onBookingUpdated={(payload) => {
+          if (payload?.type === "rescheduled" && Array.isArray(payload?.rows)) {
+            const updatedById = new Map(payload.rows.map((row) => [row.id, row]));
+            setEvents((prev) =>
+              prev.map((ev) => (updatedById.has(ev.id) ? updatedById.get(ev.id) : ev))
+            );
             return;
           }
+
+          const { booking_id, id, is_locked, booking_tag_id, status } = payload || {};
           setEvents((prev) =>
             prev.map((ev) => {
               const same = booking_id ? ev.booking_id === booking_id : ev.id === id;
@@ -2427,4 +2344,3 @@ onBookingUpdated={({
     </div>
   );
 }
-  )}
