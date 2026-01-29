@@ -275,7 +275,7 @@ const openRescheduleModal = () => {
 
   // DOB
   const { dobInput, setDobInput, savingDOB, dobError, saveDOB } =
-    useSaveClientDOB();
+     useSaveClientDOB({ supabaseClient });
 
   useEffect(() => {
     setNotesPage(1);

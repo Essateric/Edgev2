@@ -10,10 +10,11 @@ import { supabase } from "../../supabaseClient";
  *   const { dobInput, setDobInput, savingDOB, dobError, saveDOB } = useSaveClientDOB();
  *   await saveDOB({ clientId, dob: dobInput });
  */
-export function useSaveClientDOB() {
+export function useSaveClientDOB({ supabaseClient } = {}) {
   const [dobInput, setDobInput] = useState("");
   const [savingDOB, setSavingDOB] = useState(false);
   const [dobError, setDobError] = useState(null);
+   const client = supabaseClient ?? supabase;
 
   const isValidISODate = (iso) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
@@ -39,7 +40,7 @@ export function useSaveClientDOB() {
         throw new Error("Date must be in YYYY-MM-DD format.");
       }
 
-      const { error } = await supabase
+      const { error } = await client
         .from("clients")
         .update({ dob: value }) // ✅ only update the DATE column that exists
         .eq("id", clientId)
@@ -55,7 +56,7 @@ export function useSaveClientDOB() {
     } finally {
       setSavingDOB(false);
     }
-  }, [dobInput]);
+  }, [client, dobInput]);
 
   return {
     dobInput,
