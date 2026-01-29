@@ -105,7 +105,7 @@ function App() {
               <Route
                 path="/staff"
                 element={
-                  <ProtectedRoute requiredRole="admin">
+                <ProtectedRoute requiredRoles={["admin", "senior stylist", "colour specialist"]}>
                     <ManageStaff />
                   </ProtectedRoute>
                 }
@@ -113,7 +113,7 @@ function App() {
               <Route
                 path="/manage-services"
                 element={
-                  <ProtectedRoute requiredRole="admin">
+                 <ProtectedRoute requiredRoles={["admin", "senior stylist", "colour specialist"]}>
                     <ManageServices />
                   </ProtectedRoute>
                 }
@@ -121,7 +121,7 @@ function App() {
               <Route
                 path="/settings"
                 element={
-                  <ProtectedRoute requiredRoles={["admin", "senior stylist"]}>
+                 <ProtectedRoute requiredRoles={["admin", "senior stylist", "colour specialist"]}>
                     <Settings />
                   </ProtectedRoute>
                 }

@@ -1,13 +1,16 @@
 // File: src/pages/ManageStaff.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase as defaultSupabase } from "../supabaseClient";
 import EditHoursModal from "../components/EditHoursModal";
 import EditServicesModal from "../components/EditServicesModal";
 import AddNewStaffModal from "../components/AddNewStaffModal";
 import { useAuth } from "../contexts/AuthContext";
 import PageLoader from "../components/PageLoader.jsx";
-import { hasAtLeastRole } from "../utils/Roles";
-
+import {
+  hasAtLeastRole,
+  canCreateRole,
+  canManageRole,
+} from "../utils/Roles.js";
 
 const daysOrder = [
   "Monday",
@@ -28,8 +31,8 @@ export const ROLE_OPTIONS = [
   "Admin",
   "Manager",
   "Senior Stylist",
-  "Stylist",
   "Colour Specialist",
+  "Stylist",
   "Apprentice",
   "Reception",
 ];
@@ -50,15 +53,43 @@ export default function ManageStaff() {
   const [showRoleModal, setShowRoleModal] = useState(false);
   const [roleStaff, setRoleStaff] = useState(null);
 
-  // ✅ NEW: Change PIN modal state
+  // ✅ Change PIN modal
   const [showPinModal, setShowPinModal] = useState(false);
   const [pinStaff, setPinStaff] = useState(null);
 
   const { currentUser, pageLoading, authLoading, supabaseClient } = useAuth();
   const [loading, setLoading] = useState(true);
-    const canManageStaff = hasAtLeastRole(currentUser?.permission, "senior stylist");
 
   const supabase = supabaseClient || defaultSupabase;
+
+  const myRole =
+    currentUser?.permission ||
+    currentUser?.user?.permission ||
+    currentUser?.role ||
+    currentUser?.user?.role ||
+    "";
+
+  const myId =
+    currentUser?.id ||
+    currentUser?.user?.id ||
+    currentUser?.uid ||
+    null;
+
+  // Global abilities (keep existing intent)
+  const canOpenAddStaff = hasAtLeastRole(myRole, "colour specialist");
+  const canToggleStaffStatusGlobal = hasAtLeastRole(myRole, "colour specialist");
+  const canDeleteStaffGlobal = hasAtLeastRole(myRole, "senior stylist");
+  const canEditRolesGlobal = hasAtLeastRole(myRole, "senior stylist");
+
+  // Keep these existing booleans (in case other logic relies on them)
+  const canToggleStaffStatus = hasAtLeastRole(myRole, "colour specialist");
+  const canDeleteStaff = hasAtLeastRole(myRole, "senior stylist");
+
+  // Allowed roles for pickers
+  const allowedCreateRoleOptions = useMemo(
+    () => ROLE_OPTIONS.filter((r) => canCreateRole(myRole, r)),
+    [myRole]
+  );
 
   useEffect(() => {
     fetchData();
@@ -133,6 +164,15 @@ export default function ManageStaff() {
   };
 
   const openHoursModal = (member) => {
+    const targetRole = member?.permission || "";
+    const isSelf = myId && member?.id === myId;
+    const canManageThis = canManageRole(myRole, targetRole);
+
+    if (!isSelf && !canManageThis) {
+      alert("❌ You cannot edit hours for staff at or above your rank.");
+      return;
+    }
+
     setModalStaff(member);
     setModalHours(normalizeWeeklyHours(member.weekly_hours));
     setShowHoursModal(true);
@@ -203,14 +243,28 @@ export default function ManageStaff() {
     setShowHoursModal(false);
   };
 
-  const handleDelete = async (id) => {
+  const handleDelete = async (id, member) => {
     if (!currentUser?.token) {
       alert("❌ You must be logged in to delete staff.");
       return;
     }
 
-     if (!canManageStaff) {
+    if (!canDeleteStaff) {
       alert("❌ You do not have permission to delete staff.");
+      return;
+    }
+
+    const targetRole = member?.permission || "";
+    const isSelf = myId && member?.id === myId;
+    const canManageThis = canManageRole(myRole, targetRole);
+
+    if (isSelf) {
+      alert("❌ You cannot delete yourself.");
+      return;
+    }
+
+    if (!canManageThis) {
+      alert("❌ You cannot delete staff at or above your rank.");
       return;
     }
 
@@ -252,8 +306,22 @@ export default function ManageStaff() {
       return;
     }
 
-    if (!canManageStaff) {
+    if (!canToggleStaffStatus) {
       alert("❌ You do not have permission to update staff status.");
+      return;
+    }
+
+    const targetRole = member?.permission || "";
+    const isSelf = myId && member?.id === myId;
+    const canManageThis = canManageRole(myRole, targetRole);
+
+    if (isSelf) {
+      alert("❌ You cannot change your own active status here.");
+      return;
+    }
+
+    if (!canManageThis) {
+      alert("❌ You cannot change status for staff at or above your rank.");
       return;
     }
 
@@ -276,11 +344,22 @@ export default function ManageStaff() {
       return;
     }
 
-    alert(`✅ ${member?.name || "Staff"} is now ${nextStatus ? "active" : "inactive"}.`);
+    alert(
+      `✅ ${member?.name || "Staff"} is now ${nextStatus ? "active" : "inactive"}.`
+    );
     await fetchData();
   };
 
   const openEditServicesModal = (staffMember) => {
+    const targetRole = staffMember?.permission || "";
+    const isSelf = myId && staffMember?.id === myId;
+    const canManageThis = canManageRole(myRole, targetRole);
+
+    if (!isSelf && !canManageThis) {
+      alert("❌ You cannot edit services for staff at or above your rank.");
+      return;
+    }
+
     setEditServicesStaff(staffMember);
     setEditServicesModalOpen(true);
   };
@@ -291,6 +370,20 @@ export default function ManageStaff() {
   };
 
   const openRoleModal = (staffMember) => {
+    if (!canEditRolesGlobal) {
+      alert("❌ You do not have permission to edit roles.");
+      return;
+    }
+
+    const targetRole = staffMember?.permission || "";
+    const isSelf = myId && staffMember?.id === myId;
+    const canManageThis = canManageRole(myRole, targetRole);
+
+    if (!isSelf && !canManageThis) {
+      alert("❌ You cannot edit roles for staff at or above your rank.");
+      return;
+    }
+
     setRoleStaff(staffMember);
     setShowRoleModal(true);
   };
@@ -302,6 +395,17 @@ export default function ManageStaff() {
     }
     if (!roleStaff?.id) {
       alert("❌ No staff member selected.");
+      return;
+    }
+
+    if (!canEditRolesGlobal) {
+      alert("❌ You do not have permission to edit roles.");
+      return;
+    }
+
+    // ✅ Prevent assigning a role above your rank
+    if (!canCreateRole(myRole, newRole)) {
+      alert("❌ You cannot assign a role above your rank.");
       return;
     }
 
@@ -322,13 +426,20 @@ export default function ManageStaff() {
     await fetchData();
   };
 
-  // ✅ NEW: open pin modal
   const openPinModal = (staffMember) => {
+    const targetRole = staffMember?.permission || "";
+    const isSelf = myId && staffMember?.id === myId;
+    const canManageThis = canManageRole(myRole, targetRole);
+
+    if (!isSelf && !canManageThis) {
+      alert("❌ You cannot change PIN for staff at or above your rank.");
+      return;
+    }
+
     setPinStaff(staffMember);
     setShowPinModal(true);
   };
 
-  // ✅ NEW: save pin via Edge Function
   const savePin = async (newPin) => {
     if (!currentUser?.token) {
       alert("❌ You must be logged in to change PINs.");
@@ -382,8 +493,15 @@ export default function ManageStaff() {
     <div className="p-6">
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-2xl font-bold text-chrome">Staff Management</h2>
+
         <button
-          onClick={() => setShowAddModal(true)}
+          onClick={() => {
+            if (!canOpenAddStaff) {
+              alert("❌ You do not have permission to add staff.");
+              return;
+            }
+            setShowAddModal(true);
+          }}
           className="bg-bronze text-white px-4 py-2 rounded"
         >
           + Add New Staff
@@ -392,85 +510,123 @@ export default function ManageStaff() {
 
       <div className="mt-6">
         <h3 className="text-lg font-bold text-chrome mb-4">Current Staff</h3>
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {staff.map((member) => (
-            <div
-              key={member.id}
-              className={`bg-white rounded-2xl shadow-md p-4 border border-bronze ${
-                member.is_active === false ? "opacity-70" : ""
-              }`}
-            >
-              <div className="flex justify-between items-start">
-                <div>
-                  <h4
-                    className="text-lg font-bold text-gray-800 cursor-pointer hover:underline"
-                    title="Click to edit role"
-                    onClick={() => openRoleModal(member)}
-                  >
-                    {member.name}
-                  </h4>
-                  <p className="text-sm text-gray-500">Email: {member.email || "N/A"}</p>
-                  <p className="text-sm text-gray-500">Role: {member.permission || "—"}</p>
-                  <p className="text-sm text-gray-500">
-                    Status: {member.is_active === false ? "Inactive" : "Active"}
-                  </p>
+          {staff.map((member) => {
+            const targetRole = member?.permission || "";
+            const isSelf = myId && member?.id === myId;
 
-                  <div className="mt-2">
-                    <h5 className="text-md font-semibold mb-1">Hours:</h5>
-                    <table className="w-full text-[14px]">
-                      <tbody>
-                        {Object.entries(member.weekly_hours || {}).map(
-                          ([day, { start, end, off }]) => (
-                            <tr key={day}>
-                              <td className="pr-2 font-medium">{day}:</td>
-                              <td className="text-gray-600">
-                                {off ? (
-                                  <span className="text-red-500">Off</span>
-                                ) : start && end ? (
-                                  `${start} - ${end}`
-                                ) : (
-                                  "-"
-                                )}
-                              </td>
-                            </tr>
-                          )
-                        )}
-                      </tbody>
-                    </table>
+            const canManageThis = canManageRole(myRole, targetRole); // strictly below
+
+            const canEditHours = isSelf || canManageThis;
+            const canEditServices = isSelf || canManageThis;
+            const canChangePin = isSelf || canManageThis;
+
+            const canToggleStatus =
+              !isSelf && canToggleStaffStatusGlobal && canManageThis;
+
+            const canDelete =
+              !isSelf && canDeleteStaffGlobal && canManageThis;
+
+            const canEditRole =
+              canEditRolesGlobal && (isSelf || canManageThis);
+
+            return (
+              <div
+                key={member.id}
+                className={`bg-white rounded-2xl shadow-md p-4 border border-bronze ${
+                  member.is_active === false ? "opacity-70" : ""
+                }`}
+              >
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h4
+                      className={`text-lg font-bold text-gray-800 ${
+                        canEditRole ? "cursor-pointer hover:underline" : ""
+                      }`}
+                      title={canEditRole ? "Click to edit role" : "Role editing not allowed"}
+                      onClick={() => {
+                        if (!canEditRole) return;
+                        openRoleModal(member);
+                      }}
+                    >
+                      {member.name}
+                    </h4>
+
+                    <p className="text-sm text-gray-500">
+                      Email: {member.email || "N/A"}
+                    </p>
+                    <p className="text-sm text-gray-500">
+                      Role: {member.permission || "—"}
+                    </p>
+                    <p className="text-sm text-gray-500">
+                      Status: {member.is_active === false ? "Inactive" : "Active"}
+                    </p>
+
+                    <div className="mt-2">
+                      <h5 className="text-md font-semibold mb-1">Hours:</h5>
+                      <table className="w-full text-[14px]">
+                        <tbody>
+                          {Object.entries(member.weekly_hours || {}).map(
+                            ([day, { start, end, off }]) => (
+                              <tr key={day}>
+                                <td className="pr-2 font-medium">{day}:</td>
+                                <td className="text-gray-600">
+                                  {off ? (
+                                    <span className="text-red-500">Off</span>
+                                  ) : start && end ? (
+                                    `${start} - ${end}`
+                                  ) : (
+                                    "-"
+                                  )}
+                                </td>
+                              </tr>
+                            )
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
-                </div>
 
-                <div className="flex flex-col gap-2">
-                  <button
-                    onClick={() => openHoursModal(member)}
-                    className="bg-bronze text-white px-3 py-1 rounded"
-                  >
-                    Edit Hours
-                  </button>
-                  <button
-                    onClick={() => openEditServicesModal(member)}
-                    className="bg-green-600 text-white px-3 py-1 rounded"
-                  >
-                    Edit Services
-                  </button>
-                  <button
-                    onClick={() => openRoleModal(member)}
-                    className="bg-indigo-600 text-white px-3 py-1 rounded"
-                  >
-                    Edit Role
-                  </button>
+                  <div className="flex flex-col gap-2">
+                    {canEditHours && (
+                      <button
+                        onClick={() => openHoursModal(member)}
+                        className="bg-bronze text-white px-3 py-1 rounded"
+                      >
+                        Edit Hours
+                      </button>
+                    )}
 
-                  {/* ✅ NEW */}
-                  <button
-                    onClick={() => openPinModal(member)}
-                    className="bg-amber-600 text-white px-3 py-1 rounded"
-                    title="Change this staff member's PIN"
-                  >
-                    Change PIN
-                  </button>
+                    {canEditServices && (
+                      <button
+                        onClick={() => openEditServicesModal(member)}
+                        className="bg-green-600 text-white px-3 py-1 rounded"
+                      >
+                        Edit Services
+                      </button>
+                    )}
 
-                  {canManageStaff ? (
-                    <>
+                    {canEditRole && (
+                      <button
+                        onClick={() => openRoleModal(member)}
+                        className="bg-indigo-600 text-white px-3 py-1 rounded"
+                      >
+                        Edit Role
+                      </button>
+                    )}
+
+                    {canChangePin && (
+                      <button
+                        onClick={() => openPinModal(member)}
+                        className="bg-amber-600 text-white px-3 py-1 rounded"
+                        title="Change this staff member's PIN"
+                      >
+                        Change PIN
+                      </button>
+                    )}
+
+                    {canToggleStatus && (
                       <button
                         onClick={() => toggleActiveStatus(member)}
                         className={`px-3 py-1 rounded text-white ${
@@ -479,18 +635,21 @@ export default function ManageStaff() {
                       >
                         {member.is_active === false ? "Activate" : "Deactivate"}
                       </button>
+                    )}
+
+                    {canDelete && (
                       <button
-                        onClick={() => handleDelete(member.id)}
+                        onClick={() => handleDelete(member.id, member)}
                         className="bg-red-600 text-white px-3 py-1 rounded"
                       >
                         Delete
                       </button>
-                    </>
-                  ) : null}
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
@@ -516,7 +675,7 @@ export default function ManageStaff() {
         <EditRoleModal
           open={showRoleModal}
           staff={roleStaff}
-          roleOptions={ROLE_OPTIONS}
+          roleOptions={allowedCreateRoleOptions}
           onClose={() => {
             setShowRoleModal(false);
             setRoleStaff(null);
@@ -525,7 +684,6 @@ export default function ManageStaff() {
         />
       )}
 
-      {/* ✅ NEW PIN modal */}
       {showPinModal && (
         <EditPinModal
           staff={pinStaff}
@@ -539,11 +697,11 @@ export default function ManageStaff() {
 
       {showAddModal && (
         <AddNewStaffModal
-         open={showAddModal}
-    isOpen={showAddModal}
-    onClose={() => setShowAddModal(false)}
-    onSaved={fetchData}
-    roleOptions={ROLE_OPTIONS}
+          open={showAddModal}
+          isOpen={showAddModal}
+          onClose={() => setShowAddModal(false)}
+          onSaved={fetchData}
+          roleOptions={allowedCreateRoleOptions}
         />
       )}
     </div>
@@ -553,6 +711,13 @@ export default function ManageStaff() {
 /* ========= Role editor modal ========= */
 function EditRoleModal({ open, staff, roleOptions = [], onClose, onSave }) {
   const [selected, setSelected] = useState(staff?.permission || "");
+
+  // Keep selected in sync when staff changes
+  useEffect(() => {
+    setSelected(staff?.permission || "");
+  }, [staff]);
+
+  if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -579,7 +744,10 @@ function EditRoleModal({ open, staff, roleOptions = [], onClose, onSave }) {
         </select>
 
         <div className="flex justify-end gap-2">
-          <button className="px-4 py-2 rounded bg-gray-200 text-gray-800" onClick={onClose}>
+          <button
+            className="px-4 py-2 rounded bg-gray-200 text-gray-800"
+            onClick={onClose}
+          >
             Cancel
           </button>
           <button
@@ -595,7 +763,7 @@ function EditRoleModal({ open, staff, roleOptions = [], onClose, onSave }) {
   );
 }
 
-/* ========= NEW: PIN editor modal ========= */
+/* ========= PIN editor modal ========= */
 function EditPinModal({ staff, onClose, onSave }) {
   const [pin, setPin] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -650,7 +818,10 @@ function EditPinModal({ staff, onClose, onSave }) {
         )}
 
         <div className="flex justify-end gap-2">
-          <button className="px-4 py-2 rounded bg-gray-200 text-gray-800" onClick={onClose}>
+          <button
+            className="px-4 py-2 rounded bg-gray-200 text-gray-800"
+            onClick={onClose}
+          >
             Cancel
           </button>
           <button

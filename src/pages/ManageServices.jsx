@@ -5,7 +5,7 @@ import toast from "react-hot-toast";
 import { supabase as defaultSupabase } from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
 import { logEvent } from "../lib/logEvent";
-import { isAdminLike } from "../utils/roleUtils";
+import { hasAnyRole } from "../utils/roleUtils";
 
 export default function ManageServices({ staffId }) {
   const { currentUser, supabaseClient } = useAuth();
@@ -60,14 +60,17 @@ export default function ManageServices({ staffId }) {
 
 
   const myPermission =
-  me?.permission ||
-  currentUser?.permission ||
-  currentUser?.user?.permission ||
-  currentUser?.role ||
-  currentUser?.user?.role ||
-  null;
+   me?.permission ||
+    currentUser?.permission ||
+    currentUser?.user?.permission ||
+    currentUser?.role ||
+    currentUser?.user?.role ||
+    null;
 
-const isAdmin = isAdminLike({ permission: myPermission });
+  const canDeleteService = hasAnyRole(
+    { permission: myPermission },
+    ["admin", "senior stylist", "colour specialist"]
+  );
 
 
   const categories = [
@@ -365,8 +368,8 @@ const isAdmin = isAdminLike({ permission: myPermission });
 
   // open delete confirmation
   const requestDeleteService = (service) => {
-    if (!isAdmin) {
-      toast.error("Only admins and senior stylists can delete services.");
+   if (!canDeleteService) {
+      toast.error("Only admins, senior stylists, and managers can delete services.");
       return;
     }
     setDeleteTarget(service);
@@ -376,8 +379,8 @@ const isAdmin = isAdminLike({ permission: myPermission });
   const confirmDeleteService = async () => {
     if (!deleteTarget?.id) return;
 
-    if (!isAdmin) {
-      toast.error("Only admins and senior stylists can delete services.");
+   if (!canDeleteService) {
+      toast.error("Only admins, senior stylists, and managers can delete services.");
       setDeleteTarget(null);
       return;
     }
@@ -581,7 +584,7 @@ const isAdmin = isAdminLike({ permission: myPermission });
                         {Number(service.base_duration || 0)} mins
                       </p>
 
-                      {isAdmin && (
+                      {canDeleteService && (
                         <p className="text-[11px] text-gray-400 mt-2">
                           Tip: you can delete here or in the modal
                         </p>
@@ -606,7 +609,7 @@ const isAdmin = isAdminLike({ permission: myPermission });
     </h3>
 
     <div className="flex items-center gap-2">
-      {isAdmin && (
+      {canDeleteService && (
         <button
           onClick={() => requestDeleteService(selectedService)}
           className="h-9 px-3 text-sm rounded-md bg-red-600 text-white hover:bg-red-700"

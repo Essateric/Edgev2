@@ -1,5 +1,5 @@
 // src/lib/deleteServiceWithAudit.js
-import { isAdminLike } from "../utils/roleUtils";
+import { hasAnyRole } from "../utils/roleUtils";
 
 /**
  * Deletes a service and writes an audit_events row.
@@ -50,9 +50,15 @@ export async function confirmAndDeleteServiceWithAudit({
   }
 
   // Front-end permission guard (RLS must still enforce)
- const isAdmin = isAdminLike(me);
-  if (me?.permission && !isAdmin) {
-    throw new Error("Only admins and senior stylists can delete services.");
+ const canDeleteService = hasAnyRole(me, [
+    "admin",
+    "senior stylist",
+    "colour specialist",
+  ]);
+  if (me?.permission && !canDeleteService) {
+    throw new Error(
+      "Only admins, senior stylists, and managers can delete services."
+    );
   }
 
   // Count assignments that will be cascade-deleted (optional, but useful in audit)
