@@ -36,15 +36,16 @@ export default function UseSalonClosedBlocks(stylistList, visibleDate, open = "0
             openHour,
             openMinute
           );
+           const morningEndAdjusted = new Date(morningEnd.getTime() - 1);
 
           // Salon closed after close
           const eveningStart = new Date(date.getFullYear(), date.getMonth(), date.getDate(), closeHour, closeMinute);
           const eveningEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59);
 
-         if (morningEnd) {
+          if (morningEndAdjusted > morningStart) {
             result.push({
               start: morningStart,
-              end: morningEnd,
+              end: morningEndAdjusted,
               resourceId: stylist.id,
               title: "Salon Closed",
               isSalonClosed: true,
