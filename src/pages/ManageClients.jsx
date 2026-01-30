@@ -38,14 +38,6 @@ export default function ManageClients() {
 
   const normalizePhoneDigits = (s = "") => String(s).replace(/\D/g, "");
 
-  const makePhoneTokens = (digits = "") => {
-    const d = String(digits || "");
-    const tokens = [d, d.slice(-6), d.slice(0, 6)]
-      .map((t) => (t || "").trim())
-      .filter((t) => t.length >= 4);
-    return [...new Set(tokens)];
-  };
-
   const namesEqualCI = (a = "", b = "") =>
     String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
 
@@ -253,44 +245,7 @@ export default function ManageClients() {
           return;
         }
 
-        // 2b) also prevent mobile number being reused by ANY other client
-        // Fetch candidates using tokens (helps when DB has spaces in phone numbers)
-        const tokens = makePhoneTokens(mobileDigits);
-        if (tokens.length) {
-          const orClause = tokens.map((t) => `mobile.ilike.%${t}%`).join(",");
-
-          const { data: phoneCandidates, error: phoneErr } = await db
-            .from("clients")
-            .select("id,first_name,last_name,mobile")
-            .or(orClause)
-            .limit(200);
-
-          if (phoneErr) throw phoneErr;
-
-          const exactPhoneMatch = (phoneCandidates ?? []).find((r) => {
-            const rDigits = normalizePhoneDigits(r.mobile || "");
-            return rDigits && rDigits === mobileDigits;
-          });
-
-          if (exactPhoneMatch) {
-            // if phone match exists with a different name, block
-            const sameNameAsMatch =
-              namesEqualCI(exactPhoneMatch.first_name, fn) &&
-              namesEqualCI(exactPhoneMatch.last_name, ln);
-
-            if (!sameNameAsMatch) {
-              setErrorMsg(
-                `That mobile number is already used by ${exactPhoneMatch.first_name || ""} ${exactPhoneMatch.last_name || ""} (${exactPhoneMatch.mobile || ""}). Please use the existing client instead.`
-              );
-              return;
-            }
-            // if same name we would have hit dupSameName already, but keep safe:
-            setErrorMsg(
-              `Client already exists with matching name and number: ${exactPhoneMatch.first_name || ""} ${exactPhoneMatch.last_name || ""} (${exactPhoneMatch.mobile || ""}).`
-            );
-            return;
-          }
-        }
+      // 2b) allow reusing mobile numbers across different clients
       }
 
       // 3) insert new client

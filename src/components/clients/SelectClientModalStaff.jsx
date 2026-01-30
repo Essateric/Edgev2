@@ -12,13 +12,6 @@ const escapeLike = (str = "") =>
 
     const normalizePhoneDigits = (s = "") => String(s || "").replace(/\D/g, "");
 
-const makePhoneTokens = (digits = "") => {
-  const d = String(digits || "");
-  const tokens = [d, d.slice(-6), d.slice(0, 6)]
-    .map((t) => (t || "").trim())
-    .filter((t) => t.length >= 4);
-  return [...new Set(tokens)];
-};
 
 const namesEqualCI = (a = "", b = "") =>
   String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
@@ -317,47 +310,8 @@ const handleCreateOrSelect = async () => {
         return;
       }
 
-      // 2b) Mobile used by ANY other client -> select that client (don’t create)
-      const tokens = makePhoneTokens(mobileDigits);
-      if (tokens.length) {
-        const orClause = tokens.map((t) => `mobile.ilike.%${t}%`).join(",");
-
-        const { data: phoneCandidates, error: phoneErr } = await supabaseClient
-          .from("clients")
-          .select("id, first_name, last_name, mobile, email")
-          .or(orClause)
-          .limit(200);
-
-        if (phoneErr) throw phoneErr;
-
-        const exactPhoneMatch = (phoneCandidates ?? []).find((r) => {
-          const rDigits = normalizePhoneDigits(r.mobile || "");
-          return rDigits && rDigits === mobileDigits;
-        });
-
-        if (exactPhoneMatch) {
-          const sameNameAsMatch =
-            namesEqualCI(exactPhoneMatch.first_name, fn) &&
-            namesEqualCI(exactPhoneMatch.last_name, ln);
-
-          const name = `${exactPhoneMatch.first_name ?? ""} ${exactPhoneMatch.last_name ?? ""}`.trim();
-          const label = exactPhoneMatch.mobile ? `${name} — ${exactPhoneMatch.mobile}` : name;
-
-          setSelectedClient(exactPhoneMatch.id);
-          setSelectedOption({ value: exactPhoneMatch.id, label, client: exactPhoneMatch });
-
-          alert(
-            sameNameAsMatch
-              ? "This client already exists and has been selected."
-              : `That mobile number is already used by ${name}. The existing client has been selected.`
-          );
-
-          onClientCreated?.(exactPhoneMatch);
-          return;
-        }
-      }
+      // 2b) allow reusing mobile numbers across different clients
     }
-
     // 3) Insert new client (same as ManageClients)
     const { data: inserted, error: insErr } = await supabaseClient
       .from("clients")
