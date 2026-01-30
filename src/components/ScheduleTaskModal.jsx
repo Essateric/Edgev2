@@ -378,7 +378,7 @@ const action =
           start: dayStart,
           end: dayEnd,
           allDay,
-          
+          lockTask,
 
           // ❌ IMPORTANT: do NOT send is_locked here
           // is_locked: lockTask,
