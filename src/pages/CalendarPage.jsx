@@ -1176,6 +1176,7 @@ const insertFutureRepeats = async ({
   staffIds,
   taskTypeId,
   allDay,
+  lockTask,
 }) => {
   const rule = String(repeatRule || "none");
   const count = Math.max(1, Math.min(52, Number(occurrences) || 1));
@@ -1206,6 +1207,7 @@ const insertFutureRepeats = async ({
           start: window.start.toISOString(),
           end: window.end.toISOString(),
           is_active: true,
+          is_locked: !!lockTask,
         });
       } else {
         rows.push({
@@ -1214,6 +1216,7 @@ const insertFutureRepeats = async ({
           start: o.start.toISOString(),
           end: o.end.toISOString(),
           is_active: true,
+          is_locked: !!lockTask,
         });
       }
     }
@@ -1269,6 +1272,37 @@ const handleSaveTask = async ({ action, payload }) => {
 
 
   try {
+     if (action === "set_lock") {
+      const ids = Array.isArray(payload?.ids)
+        ? payload.ids.filter(Boolean)
+        : payload?.id
+        ? [payload.id]
+        : [];
+
+      if (!ids.length) {
+        toast.error("Missing schedule block id for lock update");
+        return;
+      }
+
+      const { data: lockedRows, error: lockErr } = await supabase
+        .from("schedule_blocks")
+        .update({ is_locked: !!payload?.is_locked })
+        .in("id", ids)
+        .select("*, schedule_task_types ( id, name, category, color )");
+
+      if (lockErr) throw lockErr;
+
+      const lockedMap = new Map((lockedRows || []).map((row) => [row.id, row]));
+      setScheduledTasks((prev) =>
+        prev.map((ev) => {
+          const row = lockedMap.get(ev.id);
+          return row ? mapScheduleBlockRowToEvent(row, stylistList) : ev;
+        })
+      );
+
+      toast.success(payload?.is_locked ? "Task locked" : "Task unlocked");
+      return;
+    }
     // ---------- DELETE ----------
 if (action === "delete") {
   const meta = payload?.editingMeta || {};
@@ -1381,7 +1415,7 @@ if (action === "delete") {
         staffIds,
         repeatRule,
         occurrences,
-        is_locked,
+        lockTask,
          allDay,
       } = payload;
 
@@ -1406,6 +1440,7 @@ if (action === "delete") {
               start: window.start.toISOString(),
               end: window.end.toISOString(),
                is_active: true,
+               is_locked: !!lockTask,
             });
             continue;
           }
@@ -1417,6 +1452,7 @@ if (action === "delete") {
             start: o.start.toISOString(),
             end: o.end.toISOString(),
              is_active: true,
+             is_locked: !!lockTask,
           });
         }
       }
@@ -1515,6 +1551,7 @@ if (action === "update") {
         start: newStart.toISOString(),
         end: newEnd.toISOString(),
         is_active: true,
+        is_locked: !!lockTask,
       })
       .eq("id", occIds[0])
       .select("*, schedule_task_types ( id, name, category, color )")
@@ -1570,6 +1607,7 @@ if (action === "update") {
         start: newStart.toISOString(),
         end: newEnd.toISOString(),
         is_active: true,
+        is_locked: !!lockTask,
       })
       .in("id", occIds)
       .select("*, schedule_task_types ( id, name, category, color )");
@@ -1621,6 +1659,7 @@ if (action === "update") {
         start: window.start.toISOString(),
         end: window.end.toISOString(),
         is_active: true,
+        is_locked: !!lockTask,
       });
     } else {
       rowsToInsert.push({
@@ -1629,6 +1668,7 @@ if (action === "update") {
         start: newStart.toISOString(),
         end: newEnd.toISOString(),
         is_active: true,
+        is_locked: !!lockTask,
       });
     }
   }
@@ -1661,6 +1701,7 @@ if (action === "update") {
   staffIds: normalizedStaffIds,
   taskTypeId: newTaskTypeId,
   allDay,
+  lockTask: !!payload.lockTask,
 });
 
   toast.success("Task updated");
@@ -1993,6 +2034,8 @@ if (isScheduleBlockEvent(event)) {
       };
     }
 
+    
+
     // ✅ Non-working / salon closed blocks (click-through)
     if (event.isSalonClosed) {
       return {
@@ -2028,6 +2071,20 @@ if (isScheduleBlockEvent(event)) {
           backgroundColor: "#5943b3",
           color: "#3a5578",
           border: "1px solid #a78bfa",
+        },
+      };
+    }
+
+    // ✅ Arrived = lime gradient
+    if (status === "arrived") {
+      return {
+        style: {
+          zIndex: 2,
+          backgroundImage: "linear-gradient(135deg, #3a8232, #4d6f4d, #619914)",
+          backgroundColor: "#84cc16",
+          color: "#0f172a",
+          border: "none",
+          opacity: 0.95,
         },
       };
     }
