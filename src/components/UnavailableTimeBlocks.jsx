@@ -1,7 +1,7 @@
 // useUnavailableTimeBlocks.jsx
 import { useEffect, useState } from "react";
 
-export default function useUnavailableTimeBlocks(stylistList, visibleDate = new Date(), calendarMinHour = 0) {
+export default function useUnavailableTimeBlocks(stylistList, visibleDate = new Date(), calendarMinHour = 0, calendarMaxHour = 24) {
   const [unavailableBlocks, setUnavailableBlocks] = useState([]);
   const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -36,16 +36,32 @@ export default function useUnavailableTimeBlocks(stylistList, visibleDate = new 
             const [endHour, endMinute] = workingHours.end.split(":").map(Number);
                const workingStart = new Date(date.getFullYear(), date.getMonth(), date.getDate(), startHour, startMinute);
             const workingEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate(), endHour, endMinute);
-            const workingStartAdjusted = new Date(workingStart.getTime() - 1);
-            const workingEndAdjusted = new Date(workingEnd.getTime() + 1);
+           
+            
             const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0);
             const dayEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
 
+            const calendarStart = new Date(
+              date.getFullYear(),
+              date.getMonth(),
+              date.getDate(),
+              calendarMinHour,
+              0
+            );
+            const calendarEnd = new Date(
+              date.getFullYear(),
+              date.getMonth(),
+              date.getDate(),
+              calendarMaxHour,
+              0
+            );
+
             // Before staff starts working - unavailable block
-            if (workingStartAdjusted > dayStart) {
+                        if (workingStart > dayStart && workingStart > calendarStart) {
+
               result.push({
-              start: dayStart,
-                end: workingStartAdjusted,
+               start: dayStart,
+                end: workingStart,
                 resourceId: stylist.id,
                 title: "Unavailable",
                 isUnavailable: true,
@@ -53,9 +69,9 @@ export default function useUnavailableTimeBlocks(stylistList, visibleDate = new 
             }
 
             // After staff finishes working - unavailable block
-             if (workingEndAdjusted < dayEnd) {
+           if (workingEnd < dayEnd && workingEnd < calendarEnd) {
               result.push({
-                start: workingEndAdjusted,
+                start: workingEnd,
                 end: dayEnd,
                 resourceId: stylist.id,
                 title: "Unavailable",

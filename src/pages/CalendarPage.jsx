@@ -390,9 +390,8 @@ const [bookingTagId, setBookingTagId] = useState(null);
     const unavailableBlocks = useUnavailableTimeBlocks(
       stylistList,
       visibleDate,
-      "09:00",
-    "20:00",
-      CALENDAR_MIN_HOUR
+      CALENDAR_MIN_HOUR,
+      CALENDAR_MAX_HOUR
     );
   const salonClosedBlocks = UseSalonClosedBlocks(
     stylistList,
