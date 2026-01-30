@@ -1,6 +1,8 @@
 // src/components/calendar/CustomCalendarEvent.jsx
 import React from "react";
 
+const norm = (v) => String(v ?? "").trim().toLowerCase();
+
 export default function CustomCalendarEvent({
   event,
   title,
@@ -73,11 +75,31 @@ export default function CustomCalendarEvent({
     safeMins >= 60
       ? `${Math.floor(safeMins / 60)}h ${
           safeMins % 60 ? `${safeMins % 60}m` : ""
-        }`
+        }`.trim()
       : `${Math.round(safeMins)}m`;
 
   const reminderConfirmed = !!event?.confirmed_via_reminder;
-  const subtitle = isTask ? event?.description : event?.client_name;
+
+  // ✅ BOOKING LABELS (client name must win in compact slots)
+  const bookingClientName = event?.client_name || event?.clientName || "";
+  const serviceFromEvent = event?.service_name || event?.serviceName || "";
+  const fallbackTitle = typeof title === "string" ? title : "";
+  const fallbackEventTitle = event?.title || "";
+
+  // Primary: client (if we have it), otherwise whatever title we have
+  const primaryText =
+    bookingClientName || fallbackTitle || fallbackEventTitle || "Booking";
+
+  // Secondary: service (dedupe if same as primary)
+  const serviceCandidate = serviceFromEvent || fallbackTitle || fallbackEventTitle;
+  const secondaryText =
+    serviceCandidate && norm(serviceCandidate) !== norm(primaryText)
+      ? serviceCandidate
+      : null;
+
+  // Compact rules
+  const isCompact = safeMins > 0 && safeMins <= 30;
+  const isTiny = safeMins > 0 && safeMins <= 15;
 
   const footerText = isTask
     ? event?.resourceName || event?.stylistName || "Task"
@@ -148,7 +170,9 @@ export default function CustomCalendarEvent({
         overflow: "hidden",
         whiteSpace: "normal",
         textOverflow: "ellipsis",
-        borderLeft: reminderConfirmed ? "3px solid #14b8a6" : rbcStyle?.borderLeft,
+        borderLeft: reminderConfirmed
+          ? "3px solid #14b8a6"
+          : rbcStyle?.borderLeft,
       }}
       title={reminderConfirmed ? "Client confirmed via reminder" : undefined}
     >
@@ -171,9 +195,23 @@ export default function CustomCalendarEvent({
         </div>
       ) : null}
 
-      <div className="flex-1 flex flex-col items-center justify-center text-center">
-        <span className="font-semibold break-words">{title}</span>
-        {subtitle && <span className="italic break-words">{subtitle}</span>}
+      {/* Text area */}
+      <div
+        className={
+          isCompact
+            ? "flex-1 flex flex-col justify-start text-left pt-[14px] px-2"
+            : "flex-1 flex flex-col items-center justify-center text-center"
+        }
+      >
+        {/* ✅ Always show client/primary on compact */}
+        <span className="font-semibold break-words">{primaryText}</span>
+
+        {/* For tiny slots, hide service so the name stays readable */}
+        {!isTiny && secondaryText ? (
+          <span className={isCompact ? "text-[10px] italic break-words opacity-90" : "italic break-words"}>
+            {secondaryText}
+          </span>
+        ) : null}
       </div>
 
       <div className="text-center text-[10px]">{footerText}</div>
