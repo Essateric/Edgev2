@@ -1,7 +1,7 @@
 // UseSalonClosedBlocks.jsx
 import { useEffect, useState } from "react";
 
-export default function UseSalonClosedBlocks(stylistList, visibleDate, open = "09:00", close = "20:00") {
+export default function UseSalonClosedBlocks(stylistList, visibleDate, open = "09:00", close = "20:00", calendarMinHour = 0) {
   const [closedBlocks, setClosedBlocks] = useState([]);
 
   useEffect(() => {
@@ -22,21 +22,34 @@ export default function UseSalonClosedBlocks(stylistList, visibleDate, open = "0
 
         stylistList.forEach((stylist) => {
           // Salon closed before open
-          const morningStart = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0);
-          const morningEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate(), openHour, openMinute);
+         const morningStart = new Date(
+            date.getFullYear(),
+            date.getMonth(),
+            date.getDate(),
+            calendarMinHour,
+            0
+          );
+          const morningEnd = new Date(
+            date.getFullYear(),
+            date.getMonth(),
+            date.getDate(),
+            openHour,
+            openMinute
+          );
 
           // Salon closed after close
           const eveningStart = new Date(date.getFullYear(), date.getMonth(), date.getDate(), closeHour, closeMinute);
           const eveningEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59);
 
-          result.push({
-            start: morningStart,
-            end: morningEnd,
-            resourceId: stylist.id,
-            title: "Salon Closed",
-            isSalonClosed: true,
-          });
-
+         if (morningEnd) {
+            result.push({
+              start: morningStart,
+              end: morningEnd,
+              resourceId: stylist.id,
+              title: "Salon Closed",
+              isSalonClosed: true,
+            });
+          }
           result.push({
             start: eveningStart,
             end: eveningEnd,
@@ -49,7 +62,7 @@ export default function UseSalonClosedBlocks(stylistList, visibleDate, open = "0
     }
 
     setClosedBlocks(result);
-  }, [stylistList, visibleDate, open, close]);
+  }, [stylistList, visibleDate, open, close, calendarMinHour]);
 
   return closedBlocks;
 }

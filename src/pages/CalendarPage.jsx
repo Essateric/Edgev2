@@ -388,7 +388,13 @@ const [bookingTagId, setBookingTagId] = useState(null);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [taskDraft, setTaskDraft] = useState(null);
     const unavailableBlocks = useUnavailableTimeBlocks(stylistList, visibleDate);
-  const salonClosedBlocks = UseSalonClosedBlocks(stylistList, visibleDate);
+  const salonClosedBlocks = UseSalonClosedBlocks(
+    stylistList,
+    visibleDate,
+    "09:00",
+    "20:00",
+    CALENDAR_MIN_HOUR
+  );
   const [bookingTags, setBookingTags] = useState([]);
 
 useEffect(() => {
