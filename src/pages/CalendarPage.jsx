@@ -2064,27 +2064,27 @@ if (isScheduleBlockEvent(event)) {
       };
     }
 
-    if (isOnlineBookingSource(event)) {
+       // ✅ Arrived = lime gradient
+    if (status === "arrived") {
+      return {
+        style: {
+          zIndex: 2,
+          backgroundImage: "linear-gradient(135deg, #3a8232, #46ba46, #3a8232)",
+          backgroundColor: "#84cc16",
+          color: "#0f172a",
+          border: "none",
+          opacity: 0.95,
+        },
+      };
+    }
+
+     if (isOnlineBookingSource(event)) {
       return {
         style: {
           zIndex: 2,
           backgroundColor: "#5943b3",
           color: "#3a5578",
           border: "1px solid #a78bfa",
-        },
-      };
-    }
-
-    // ✅ Arrived = lime gradient
-    if (status === "arrived") {
-      return {
-        style: {
-          zIndex: 2,
-          backgroundImage: "linear-gradient(135deg, #3a8232, #4d6f4d, #619914)",
-          backgroundColor: "#84cc16",
-          color: "#0f172a",
-          border: "none",
-          opacity: 0.95,
         },
       };
     }
