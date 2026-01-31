@@ -2146,6 +2146,9 @@ if (isScheduleBlockEvent(event)) {
     }
 
     const status = String(event.status || "").trim().toLowerCase();
+    const isRepeatBooking = Boolean(
+      event?.repeat_series_id || event?.repeatSeriesId
+    );
 
     // ✅ Cancelled = red
     if (isCancelledStatus(status)) {
@@ -2185,12 +2188,24 @@ if (isScheduleBlockEvent(event)) {
       };
     }
 
-    // ✅ Confirmed = green
+     // ✅ Confirmed = green (repeat bookings use purple/blue)
     if (isConfirmedStatus(status)) {
+      if (isRepeatBooking) {
+        return {
+          style: {
+            zIndex: 2,
+            backgroundImage: "linear-gradient(135deg, #4f46e5, #7c3aed, #4f46e5)",
+            backgroundColor: "#6366f1",
+            color: "#ffffff",
+            border: "none",
+            opacity: 0.95,
+          },
+        };
+      }
       return {
         style: {
           zIndex: 2,
-          backgroundColor: "#16a34a",
+            backgroundColor: isRepeatBooking ? "#6366f1" : "#16a34a",
           color: "#ffffff",
           border: "none",
           opacity: 0.95,
