@@ -275,6 +275,13 @@ body {
   justify-content: center;
 }
 
+.calendar-booking--arrived .calendar-booking__text {
+  background-image: linear-gradient(90deg, #090e05, #000000, #090e05);
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
 /* Force the outer container to be a perfect square */
 .outer-container {
   width: 90vw;

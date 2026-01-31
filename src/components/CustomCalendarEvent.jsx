@@ -79,6 +79,7 @@ export default function CustomCalendarEvent({
       : `${Math.round(safeMins)}m`;
 
   const reminderConfirmed = !!event?.confirmed_via_reminder;
+  const isArrived = norm(event?.status) === "arrived";
 
   // ✅ BOOKING LABELS (client name must win in compact slots)
   const bookingClientName = event?.client_name || event?.clientName || "";
@@ -162,13 +163,14 @@ export default function CustomCalendarEvent({
       {...domHandlers}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      className={`${rbcClassName ?? ""} rbc-event-content text-white px-[2px] py-[1px] flex flex-col justify-between h-full leading-tight relative`}
-      style={{
-        ...rbcStyle, // keep RBC placement
+     className={`${rbcClassName ?? ""} rbc-event-content px-[2px] py-[1px] flex flex-col justify-between h-full leading-tight relative${isArrived ? " calendar-booking--arrived" : ""}`}
+           style={{
+            ...rbcStyle, // keep RBC placement
         fontSize: `${fontSize}px`,
         lineHeight: "1.1",
         overflow: "hidden",
         whiteSpace: "normal",
+         color: rbcStyle?.color ?? "#fff",
         textOverflow: "ellipsis",
         borderLeft: reminderConfirmed
           ? "3px solid #14b8a6"
@@ -184,7 +186,7 @@ export default function CustomCalendarEvent({
       )}
 
       {/* ✅ Duration label */}
-      <div className="absolute top-[2px] right-[4px] text-[10px] font-semibold">
+ <div className="absolute top-[2px] right-[4px] text-[10px] font-semibold calendar-booking__text">
         {durationLabel}
       </div>
 
@@ -204,17 +206,25 @@ export default function CustomCalendarEvent({
         }
       >
         {/* ✅ Always show client/primary on compact */}
-        <span className="font-semibold break-words">{primaryText}</span>
+       <span
+            className={`${isCompact ? "text-[10px] italic break-words opacity-90" : "italic break-words"} calendar-booking__text`}
+          >
+          {primaryText}
+        </span>
 
         {/* For tiny slots, hide service so the name stays readable */}
         {!isTiny && secondaryText ? (
-          <span className={isCompact ? "text-[10px] italic break-words opacity-90" : "italic break-words"}>
+           <span
+            className={`${isCompact ? "text-[10px] italic break-words opacity-90" : "italic break-words"} calendar-booking__text`}
+          >
             {secondaryText}
           </span>
         ) : null}
       </div>
 
-      <div className="text-center text-[10px]">{footerText}</div>
+        <div className="text-center text-[10px] calendar-booking__text">
+        {footerText}
+      </div>
     </div>
   );
 }
