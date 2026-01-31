@@ -1,13 +1,11 @@
+// src/pages/AuditLog.jsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase as defaultSupabase } from "../supabaseClient";
 import { useAuth } from "../contexts/AuthContext";
 import PageLoader from "../components/PageLoader.jsx";
 
 const ALLOWED_ROLES = ["admin", "business owner", "manager", "senior stylist"];
-
 const PAGE_SIZES = [25, 50, 100, 200];
-
-
 
 const ACTIVITY_GROUPS = [
   {
@@ -22,6 +20,14 @@ const ACTIVITY_GROUPS = [
     ],
   },
   {
+    title: "Scheduled tasks",
+    items: [
+      { key: "scheduled_task_created", label: "Task created" },
+      { key: "schedule_block_locked", label: "Task locked" },
+      { key: "schedule_block_unlocked", label: "Task unlocked" },
+    ],
+  },
+  {
     title: "Login / Sessions",
     items: [
       { key: "login", label: "User logged in" },
@@ -30,11 +36,13 @@ const ACTIVITY_GROUPS = [
       { key: "session_ended", label: "Session ended" },
     ],
   },
-    {
+  {
     title: "Services",
-    items: [{   key: "service_created", label: "Service created" },
+    items: [
+      { key: "service_created", label: "Service created" },
       { key: "service_deleted", label: "Service deleted" },
-      { key: "staff_services_saved", label: "Staff services updated" },],
+      { key: "staff_services_saved", label: "Staff services updated" },
+    ],
   },
 ];
 
@@ -58,12 +66,71 @@ function formatDateTime(isoString) {
   }
 }
 
+function formatTimeHM(isoString) {
+  if (!isoString) return null;
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(isoString));
+  } catch {
+    return null;
+  }
+}
+
+function formatMoneyGBP(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(n);
+}
+
+function formatDurationMins(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return `${n} mins`;
+}
+
+function entityTypeLabel(entityType) {
+  const t = String(entityType || "").toLowerCase().trim();
+  if (t === "schedule_block" || t === "scheduled_task") return "Scheduled task";
+  if (t === "booking") return "Booking";
+  if (!t) return "—";
+  return t;
+}
+
 function buildSummary(row) {
   const action = row?.action || "—";
   const entityType = row?.entity_type || "—";
   const details = row?.details;
 
-  // --- Service events (friendly) ---
+  // Scheduled task lock/unlock
+  if (action === "schedule_block_locked" || action === "schedule_block_unlocked") {
+    const locked =
+      details?.is_locked ??
+      details?.locked ??
+      (action === "schedule_block_locked");
+
+    const start = details?.start || null;
+    const end = details?.end || null;
+    const startHM = formatTimeHM(start);
+    const endHM = formatTimeHM(end);
+    const window = startHM && endHM ? ` (${startHM}–${endHM})` : "";
+
+    return `${locked ? "Locked" : "Unlocked"} scheduled task${window}`;
+  }
+
+  if (action === "scheduled_task_created") {
+    const start = details?.start || null;
+    const end = details?.end || null;
+    const startHM = formatTimeHM(start);
+    const endHM = formatTimeHM(end);
+    const window = startHM && endHM ? ` (${startHM}–${endHM})` : "";
+    const occ = Number(details?.occurrences || 0);
+    const occText = occ > 1 ? ` • ${occ} occurrence(s)` : "";
+    return `Created scheduled task${window}${occText}`;
+  }
+
+  // Service events
   if (action === "service_deleted") {
     const name = details?.service?.name || "a service";
     const cat = details?.service?.category ? ` (${details.service.category})` : "";
@@ -83,7 +150,7 @@ function buildSummary(row) {
     return `Updated staff assignments for ${serviceName} (${up} saved, ${del} removed)`;
   }
 
-  // --- Booking events (your existing logic) ---
+  // Booking events (existing)
   if (details && typeof details === "object") {
     const fromStart = details?.from_start || details?.previous_start;
     const toStart = details?.to_start || details?.new_start;
@@ -101,29 +168,18 @@ function buildSummary(row) {
     if (details?.message) return String(details.message);
   }
 
-  return `${entityType} • ${action}`;
-}
-
-function formatMoneyGBP(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
-  return new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(n);
-}
-
-function formatDurationMins(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
-  return `${n} mins`;
+  return `${entityTypeLabel(entityType)} • ${action}`;
 }
 
 function buildHumanStatement(row) {
   const when = formatDateTime(row?.created_at);
 
-  const actorName =
-    row?.actor_label || row?.staff_name || row?.actor_email || "Someone";
+  // ✅ ACTOR = logged-in user who performed action
+  const actorName = row?.actor_label || row?.actor_email || "Someone";
   const actorRole = row?.actor_role ? String(row.actor_role).toLowerCase() : "";
-
   const who = actorRole ? `${actorName} (${actorRole})` : actorName;
+
+  const target = row?.target_staff_label ? ` (target: ${row.target_staff_label})` : "";
 
   if (row?.action === "service_deleted") {
     const s = row?.details?.service || {};
@@ -143,7 +199,7 @@ function buildHumanStatement(row) {
     const extra = bits.length ? ` (${bits.join(", ")})` : "";
 
     return {
-      title: `${who} deleted the “${name}” service from Services.${extra}`,
+      title: `${who} deleted the “${name}” service from Services.${extra}${target}`,
       when,
     };
   }
@@ -162,17 +218,46 @@ function buildHumanStatement(row) {
     const extra = bits.length ? ` (${bits.join(", ")})` : "";
 
     return {
-      title: `${who} added the “${name}” service to Services.${extra}`,
+      title: `${who} added the “${name}” service to Services.${extra}${target}`,
       when,
     };
   }
 
-  return {
-    title: buildSummary(row),
-    when,
-  };
-}
+  if (row?.action === "schedule_block_locked" || row?.action === "schedule_block_unlocked") {
+    const locked =
+      row?.details?.is_locked ??
+      row?.details?.locked ??
+      (row?.action === "schedule_block_locked");
 
+    const start = row?.details?.start || null;
+    const end = row?.details?.end || null;
+    const startHM = formatTimeHM(start);
+    const endHM = formatTimeHM(end);
+    const window = startHM && endHM ? ` (${startHM}–${endHM})` : "";
+
+    return {
+      title: `${who} ${locked ? "locked" : "unlocked"} a scheduled task${window}.${target}`,
+      when,
+    };
+  }
+
+  if (row?.action === "scheduled_task_created") {
+    const start = row?.details?.start || null;
+    const end = row?.details?.end || null;
+    const startHM = formatTimeHM(start);
+    const endHM = formatTimeHM(end);
+    const window = startHM && endHM ? ` (${startHM}–${endHM})` : "";
+    const occ = Number(row?.details?.occurrences || 0);
+    const occText = occ > 1 ? ` (${occ} occurrence(s))` : "";
+
+    return {
+      title: `${who} created a scheduled task${window}${occText}.${target}`,
+      when,
+    };
+  }
+
+  return { title: buildSummary(row), when };
+}
 
 function useDebouncedValue(value, delayMs = 350) {
   const [debounced, setDebounced] = useState(value);
@@ -189,10 +274,15 @@ function isUuid(str) {
   );
 }
 
+const normalizeEmail = (v) => String(v || "").trim().toLowerCase();
+
+const escapeOrValue = (v) =>
+  String(v || "")
+    .replace(/,/g, " ")
+    .trim();
+
 export default function AuditLog() {
   const { currentUser, supabaseClient } = useAuth();
-  const [staffById, setStaffById] = useState({});
-
 
   const supabase = supabaseClient || defaultSupabase;
   const role = (currentUser?.permission || "").toLowerCase();
@@ -201,12 +291,15 @@ export default function AuditLog() {
   const [rows, setRows] = useState([]);
   const [errText, setErrText] = useState("");
 
-  // ✅ Split loading states (prevents flicker)
   const [initialLoading, setInitialLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
-    const initialLoadRef = useRef(true);
+  const initialLoadRef = useRef(true);
 
   const [selectedRow, setSelectedRow] = useState(null);
+
+  // ✅ staff maps used for BOTH actor and target
+  const [staffById, setStaffById] = useState({});
+  const [staffByEmail, setStaffByEmail] = useState({});
 
   // Filters
   const [sortDir, setSortDir] = useState("desc");
@@ -229,16 +322,9 @@ export default function AuditLog() {
     []
   );
 
-  const [selectedActions, setSelectedActions] = useState(
-    () => new Set(allActivityKeys)
-  );
+  const [selectedActions, setSelectedActions] = useState(() => new Set(allActivityKeys));
+  const selectedActionsArr = useMemo(() => Array.from(selectedActions).sort(), [selectedActions]);
 
-  const selectedActionsArr = useMemo(
-    () => Array.from(selectedActions).sort(),
-    [selectedActions]
-  );
-
-  // ✅ IMPORTANT: memoise the filters object so it’s stable between renders
   const filters = useMemo(
     () => ({
       sortDir,
@@ -299,7 +385,6 @@ export default function AuditLog() {
     setSelectedActions(new Set(allActivityKeys));
   };
 
-  // Prevent older requests overwriting newer ones
   const reqIdRef = useRef(0);
 
   const fetchAudit = useCallback(async () => {
@@ -308,7 +393,7 @@ export default function AuditLog() {
     const myReqId = ++reqIdRef.current;
 
     setErrText("");
-   // ✅ only show big loader on first load (avoid double-fetch loops)
+
     if (initialLoadRef.current) {
       initialLoadRef.current = false;
       setInitialLoading(true);
@@ -337,9 +422,8 @@ export default function AuditLog() {
 
       const sources = [];
       if (srcPublic) sources.push("public");
-   if (srcAuth) sources.push("app", "authenticated");
+      if (srcAuth) sources.push("app", "authenticated");
 
-      // If user unchecks everything, show nothing (clean UX)
       if (!actions?.length || sources.length === 0) {
         if (myReqId === reqIdRef.current) {
           setRows([]);
@@ -352,12 +436,11 @@ export default function AuditLog() {
         .from("audit_events")
         .select("*", { count: "exact" })
         .in("action", actions)
+        .in("source", sources)
         .order("created_at", { ascending: sDir === "asc" })
         .range(fromIndex, toIndex);
 
-   q = q.in("source", sources);
-
-
+      // Actor filter (actor = logged-in performer)
       if (aQ?.trim()) {
         const needle = aQ.trim();
         if (needle.includes("@")) {
@@ -369,60 +452,101 @@ export default function AuditLog() {
         }
       }
 
+      // Date filters
+      if (dFrom) q = q.gte("created_at", new Date(`${dFrom}T00:00:00`).toISOString());
+      if (dTo) q = q.lte("created_at", new Date(`${dTo}T23:59:59`).toISOString());
+
+      // Combine OR filters
+      const orParts = [];
+
       if (eQ?.trim()) {
-        const needle = eQ.trim();
-        if (isUuid(needle)) {
-          q = q.or(`entity_id.eq.${needle},booking_id.eq.${needle}`);
+        const needleRaw = eQ.trim();
+        if (isUuid(needleRaw)) {
+          const needle = escapeOrValue(needleRaw);
+          orParts.push(`entity_id.eq.${needle}`, `booking_id.eq.${needle}`);
         } else {
-          // partial uuid search isn’t really useful; keep it safe
-          q = q.ilike("entity_type", `%${needle}%`);
+          q = q.ilike("entity_type", `%${needleRaw}%`);
         }
       }
 
-      if (dFrom) {
-        q = q.gte("created_at", new Date(`${dFrom}T00:00:00`).toISOString());
-      }
-      if (dTo) {
-        q = q.lte("created_at", new Date(`${dTo}T23:59:59`).toISOString());
+      if (dQ?.trim()) {
+        const needleRaw = dQ.trim();
+        const needle = escapeOrValue(needleRaw);
+
+        if (isUuid(needleRaw)) {
+          orParts.push(`details->>task_type_id.eq.${needle}`);
+        } else {
+          orParts.push(
+            `details->>message.ilike.%${needle}%`,
+            `details->>reason.ilike.%${needle}%`,
+            `details->>actor_name.ilike.%${needle}%`,
+            `details->>service_name.ilike.%${needle}%`
+          );
+        }
       }
 
-      // NOTE: this may fail depending on your jsonb setup.
-      // If it errors, best fix is adding a searchable text column (details_text).
-      if (dQ?.trim()) {
-        const needle = dQ.trim();
-        q = q.or(`details::text.ilike.%${needle}%`);
-      }
+      if (orParts.length) q = q.or(orParts.join(","));
 
       const { data, error, count } = await q;
       if (error) throw error;
 
-   try {
-  const ids = Array.from(
-    new Set((data || []).map((r) => r.staff_id || r.actor_id).filter(Boolean))
-  );
+      // ✅ Lookup BOTH actor + target staff by id/email
+      try {
+        const idCandidates = Array.from(
+          new Set(
+            (data || [])
+              .flatMap((r) => [r.actor_id, r.staff_id])
+              .filter(Boolean)
+              .filter((x) => isUuid(String(x)))
+          )
+        );
 
-  if (ids.length) {
-    const { data: staffRows, error: staffErr } = await supabase
-      .from("staff")
-      .select("id,name,permission,email")
-      .in("id", ids);
+        const emailCandidates = Array.from(
+          new Set(
+            (data || [])
+              .flatMap((r) => [r.actor_email, r.staff_email])
+              .filter((e) => String(e || "").includes("@"))
+              .map(normalizeEmail)
+              .filter(Boolean)
+          )
+        );
 
-    if (!staffErr) {
-      const map = {};
-      for (const s of staffRows || []) map[s.id] = s;
+        if (idCandidates.length) {
+          const { data: staffRows, error: staffErr } = await supabase
+            .from("staff")
+            .select("id,name,permission,email")
+            .in("id", idCandidates);
 
-      if (myReqId === reqIdRef.current) setStaffById(map);
-    }
-  }
-} catch (e) {
-  console.warn("[Audit] staff lookup failed", e);
-}
+          if (!staffErr) {
+            const map = {};
+            for (const s of staffRows || []) map[s.id] = s;
+            if (myReqId === reqIdRef.current) setStaffById(map);
+          }
+        }
 
-// Only apply if this is the latest request
-if (myReqId === reqIdRef.current) {
-  setRows(data || []);
-  setTotalCount(count || 0);
-}
+        if (emailCandidates.length) {
+          const { data: staffRowsByEmail, error: staffEmailErr } = await supabase
+            .from("staff")
+            .select("id,name,permission,email")
+            .in("email", emailCandidates);
+
+          if (!staffEmailErr) {
+            const map = {};
+            for (const s of staffRowsByEmail || []) {
+              const em = normalizeEmail(s.email);
+              if (em) map[em] = s;
+            }
+            if (myReqId === reqIdRef.current) setStaffByEmail(map);
+          }
+        }
+      } catch (e) {
+        console.warn("[Audit] staff lookup failed", e);
+      }
+
+      if (myReqId === reqIdRef.current) {
+        setRows(data || []);
+        setTotalCount(count || 0);
+      }
     } catch (err) {
       console.error("[Audit] fetch failed", err);
       if (myReqId === reqIdRef.current) {
@@ -434,7 +558,7 @@ if (myReqId === reqIdRef.current) {
         setIsFetching(false);
       }
     }
-}, [debouncedFilters, hasAccess, supabase]);
+  }, [debouncedFilters, hasAccess, supabase]);
 
   useEffect(() => {
     fetchAudit();
@@ -447,25 +571,44 @@ if (myReqId === reqIdRef.current) {
         typeof detailsObj === "object" && detailsObj !== null
           ? safeJsonStringify(detailsObj)
           : row?.details || "—";
-const staffRec = staffById[row.staff_id] || staffById[row.actor_id];
-const roleLabel = staffRec?.permission ? String(staffRec.permission) : "";
 
-const actorLabel =
-  staffRec?.name ||
-  row?.staff_name ||
-  roleLabel ||
-  (row?.source === "public" ? "Public client" : row?.actor_email || "Unknown");
+      // ✅ ACTOR record (logged-in user)
+      const actorRec =
+        staffById[row.actor_id] ||
+        (row?.actor_email ? staffByEmail[normalizeEmail(row.actor_email)] : null) ||
+        null;
 
+      const actorRole = actorRec?.permission ? String(actorRec.permission) : "";
+
+      // ✅ Actor label NEVER falls back to staff_name
+      const actorLabel =
+        actorRec?.name ||
+        row?.actor_email ||
+        (row?.source === "public" ? "Public client" : "Unknown");
+
+      // ✅ TARGET staff (stylist / owner of the block)
+      const targetRec =
+        staffById[row.staff_id] ||
+        (row?.staff_email ? staffByEmail[normalizeEmail(row.staff_email)] : null) ||
+        null;
+
+      const targetLabel =
+        targetRec?.name ||
+        row?.staff_name ||
+        row?.staff_email ||
+        null;
 
       return {
-  ...row,
-  created_at_label: formatDateTime(row?.created_at),
-  actor_label: actorLabel,
-  actor_role: roleLabel || "—",
-  summary: buildSummary(row),
-  details_text: detailsText,
-};    });
-  }, [rows]);
+        ...row,
+        created_at_label: formatDateTime(row?.created_at),
+        actor_label: actorLabel,
+        actor_role: actorRole || "—",
+        target_staff_label: targetLabel,
+        summary: buildSummary(row),
+        details_text: detailsText,
+      };
+    });
+  }, [rows, staffById, staffByEmail]);
 
   const totalPages = useMemo(() => {
     if (!totalCount) return 1;
@@ -495,9 +638,7 @@ const actorLabel =
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-3xl font-semibold">Audit</h1>
-          <p className="text-sm text-gray-600">
-            Filter, search, and sort activity events.
-          </p>
+          <p className="text-sm text-gray-600">Filter, search, and sort activity events.</p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -525,9 +666,7 @@ const actorLabel =
         </div>
       </div>
 
-      {errText && (
-        <div className="p-3 bg-red-50 text-red-700 rounded">{errText}</div>
-      )}
+      {errText && <div className="p-3 bg-red-50 text-red-700 rounded">{errText}</div>}
 
       {/* Filters */}
       <div className="border border-gray-200 rounded bg-white shadow-sm">
@@ -542,7 +681,7 @@ const actorLabel =
           {/* Search */}
           <div className="space-y-3">
             <div>
-              <label className="text-sm font-medium text-gray-700">Actor</label>
+              <label className="text-sm font-medium text-gray-700">Actor (who did it)</label>
               <input
                 value={actorQuery}
                 onChange={(e) => {
@@ -550,7 +689,7 @@ const actorLabel =
                   setActorQuery(e.target.value);
                 }}
                 className="mt-1 w-full px-3 py-2 border border-gray-200 rounded"
-                placeholder="Search email or user id…"
+                placeholder="Search actor email or actor id…"
               />
             </div>
 
@@ -568,9 +707,7 @@ const actorLabel =
             </div>
 
             <div>
-              <label className="text-sm font-medium text-gray-700">
-                Search in details
-              </label>
+              <label className="text-sm font-medium text-gray-700">Search in details</label>
               <input
                 value={detailsQuery}
                 onChange={(e) => {
@@ -578,7 +715,7 @@ const actorLabel =
                   setDetailsQuery(e.target.value);
                 }}
                 className="mt-1 w-full px-3 py-2 border border-gray-200 rounded"
-                placeholder="e.g. reason, old time, new time…"
+                placeholder="e.g. reason, actor_name, service_name, task_type_id…"
               />
             </div>
           </div>
@@ -702,15 +839,10 @@ const actorLabel =
               <div className="space-y-4">
                 {ACTIVITY_GROUPS.map((group) => (
                   <div key={group.title}>
-                    <div className="text-xs font-semibold text-gray-600 mb-2">
-                      {group.title}
-                    </div>
+                    <div className="text-xs font-semibold text-gray-600 mb-2">{group.title}</div>
                     <div className="space-y-2">
                       {group.items.map((item) => (
-                        <label
-                          key={item.key}
-                          className="flex items-center gap-2 text-sm"
-                        >
+                        <label key={item.key} className="flex items-center gap-2 text-sm">
                           <input
                             type="checkbox"
                             checked={selectedActions.has(item.key)}
@@ -755,8 +887,12 @@ const actorLabel =
         </div>
       </div>
 
-      {/* Results (no full-screen loader anymore) */}
-      <div className={`overflow-auto border border-gray-200 rounded shadow-sm bg-white ${isFetching ? "opacity-80" : ""}`}>
+      {/* Results */}
+      <div
+        className={`overflow-auto border border-gray-200 rounded shadow-sm bg-white ${
+          isFetching ? "opacity-80" : ""
+        }`}
+      >
         <table className="min-w-full text-sm">
           <thead className="bg-gray-100 text-left sticky top-0 z-10">
             <tr>
@@ -779,11 +915,18 @@ const actorLabel =
                 </td>
 
                 <td className="px-3 py-2">
-                 <div className="font-semibold">{row.actor_label}</div>
-<div className="text-xs text-gray-500">{row.actor_role}</div>
+                  <div className="font-semibold">{row.actor_label}</div>
+                  <div className="text-xs text-gray-500">{row.actor_role}</div>
+
+                  {/* ✅ Optional: show target staff clearly (but NOT as actor) */}
+                  {row.target_staff_label && (
+                    <div className="text-xs text-gray-500 mt-1">
+                      Target: <span className="font-medium">{row.target_staff_label}</span>
+                    </div>
+                  )}
                 </td>
 
-                      <td className="px-3 py-2 text-gray-700">{row.summary}</td>
+                <td className="px-3 py-2 text-gray-700">{row.summary}</td>
 
                 <td className="px-3 py-2">
                   <button
@@ -810,10 +953,7 @@ const actorLabel =
       {/* Details panel */}
       {selectedRow && (
         <div className="fixed inset-0 z-50">
-          <div
-            className="absolute inset-0 bg-black/30"
-            onClick={() => setSelectedRow(null)}
-          />
+          <div className="absolute inset-0 bg-black/30" onClick={() => setSelectedRow(null)} />
           <div className="absolute right-0 top-0 h-full w-full max-w-2xl bg-white shadow-xl border-l border-gray-200 flex flex-col">
             <div className="p-4 border-b border-gray-100 flex items-start justify-between gap-3">
               <div>
@@ -831,32 +971,37 @@ const actorLabel =
               </button>
             </div>
 
-        <div className="p-3 border border-gray-100 rounded bg-white">
-  <div className="text-xs font-semibold text-gray-600 mb-2">Details</div>
+            <div className="p-4 overflow-auto">
+              <div className="p-3 border border-gray-100 rounded bg-white">
+                <div className="text-xs font-semibold text-gray-600 mb-2">Details</div>
 
-  
-{(() => {
-  const msg = buildHumanStatement(selectedRow);
-  return (
-    <div className="mb-3">
-      <div className="text-sm text-gray-900 font-medium">{msg.title}</div>
-      <div className="text-xs text-gray-500 mt-1">{msg.when}</div>
-    </div>
-  );
-})()}
+                {(() => {
+                  const msg = buildHumanStatement(selectedRow);
+                  return (
+                    <div className="mb-3">
+                      <div className="text-sm text-gray-900 font-medium">{msg.title}</div>
+                      <div className="text-xs text-gray-500 mt-1">{msg.when}</div>
 
+                      {selectedRow.target_staff_label && (
+                        <div className="text-xs text-gray-500 mt-1">
+                          Target staff:{" "}
+                          <span className="font-medium">{selectedRow.target_staff_label}</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
-  {/* Raw JSON (still available) */}
-  <details className="border border-gray-100 rounded bg-gray-50">
-    <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-gray-700">
-      View raw data
-    </summary>
-    <pre className="whitespace-pre-wrap text-xs p-3 overflow-auto">
-      {selectedRow.details_text || "—"}
-    </pre>
-  </details>
-</div>
-
+                <details className="border border-gray-100 rounded bg-gray-50">
+                  <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-gray-700">
+                    View raw data
+                  </summary>
+                  <pre className="whitespace-pre-wrap text-xs p-3 overflow-auto">
+                    {selectedRow.details_text || "—"}
+                  </pre>
+                </details>
+              </div>
+            </div>
           </div>
         </div>
       )}

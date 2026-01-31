@@ -1,12 +1,15 @@
 // src/lib/logEvent.js
-import { supabase } from "../supabaseClient";
+import * as supabaseModule from "../supabaseClient";
+
+// supports either: export default supabase OR export const supabase
+const baseSupabase = supabaseModule.supabase || supabaseModule.default;
 
 export async function logEvent({
-  entityType,     // 'booking' | 'slot' | 'note' | ...
+  entityType, // 'booking' | 'slot' | 'note' | ...
   entityId = null,
   bookingId = null,
-  action,         // 'create' | 'update' | 'move' | ...
-  reason = null,  // 'Manual Booking', 'Online Booking (multi)', etc.
+  action, // 'create' | 'update' | 'move' | ...
+  reason = null, // 'Manual Booking', 'Online Booking (multi)', etc.
   details = null, // JSON: before/after, extra context
   source = "app", // 'public' | 'admin' | 'system' | 'app'
   actorId = null,
@@ -14,16 +17,28 @@ export async function logEvent({
   requestId = null,
   sessionId = null,
   supabaseClient = null,
-}) {
-  const client = supabaseClient || supabase;
-  // If admin path and no actor provided, try resolve from auth
+} = {}) {
+  const client = supabaseClient || baseSupabase;
+  if (!client) throw new Error("No Supabase client available for logEvent");
+
+  // If no actor provided, try resolve from auth (only if this client supports it)
   if (!actorId || !actorEmail) {
-    const { data: { user } = {} } = await client.auth.getUser();
-    if (user) {
-      actorEmail = actorEmail ?? user.email ?? null;
-      // If you map auth.uid -> staff.id, resolve here if you want a staff UUID
-      // Otherwise store auth uid directly in actor_id
-      actorId = actorId ?? user.id ?? null;
+    try {
+      if (typeof client?.auth?.getUser === "function") {
+        const { data } = await client.auth.getUser();
+        const user = data?.user;
+        if (user) {
+          if (!actorEmail) actorEmail = user.email ?? null;
+          if (!actorId) actorId = user.id ?? null;
+        }
+      }
+    } catch (err) {
+      const msg = err?.message || String(err);
+
+      // Avoid noisy console spam for "accessToken option" clients
+      if (!/accessToken option/i.test(msg)) {
+        console.warn("[Audit] auth lookup failed", msg);
+      }
     }
   }
 
@@ -41,6 +56,8 @@ export async function logEvent({
     session_id: sessionId,
   };
 
- const { error } = await client.from("audit_events").insert([payload]);
+  const { error } = await client.from("audit_events").insert([payload]);
   if (error) throw error;
+
+  return payload;
 }

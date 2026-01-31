@@ -31,6 +31,7 @@ import { isAdminLike } from "../utils/roleUtils";
 import { v4 as uuidv4 } from "uuid";
 import { addWeeks, addMonths } from "date-fns";
 import { logEvent } from "../lib/logEvent";
+import { setScheduleBlockLock } from "../lib/scheduleBlockLocks";
 
 
 import "react-big-calendar/lib/css/react-big-calendar.css";
@@ -1304,56 +1305,62 @@ if (!supabase) return;
       }
   
 
- const rpcPayload = {
-        p_ids: ids,
-        p_is_locked: !!payload?.is_locked,
-        p_reason: payload?.reason || null,
-      };
+ const updatedRows = await setScheduleBlockLock({
+        supabase,
+        ids,
+        isLocked: !!payload?.is_locked,
+        reason: payload?.reason || null,
+      });
   let lockErr = null;
       let lockedRows = null;
 
-   const primaryRpc = await supabase.rpc(
-        "set_schedule_blocks_lock",
-        rpcPayload
+   const updatedMap = new Map(
+        (updatedRows || []).map((row) => [row.id, row])
       );
-      lockErr = primaryRpc.error;
-      lockedRows = primaryRpc.data;
+      setScheduledTasks((prev) =>
+        prev.map((ev) => {
+          const row = updatedMap.get(ev.id);
+          return row ? mapScheduleBlockRowToEvent(row, stylistList) : ev;
+        })
+      );
+//       lockErr = primaryRpc.error;
+//       lockedRows = primaryRpc.data;
 
-      if (lockErr && /set_schedule_blocks_lock/i.test(lockErr.message || "")) {
-        const fallbackRpc = await supabase.rpc(
-          "set_schedule_block_lock",
-          rpcPayload
-        );
-        lockErr = fallbackRpc.error;
-        lockedRows = fallbackRpc.data;
-      }
+//       if (lockErr && /set_schedule_blocks_lock/i.test(lockErr.message || "")) {
+//         const fallbackRpc = await supabase.rpc(
+//           "set_schedule_block_lock",
+//           rpcPayload
+//         );
+//         lockErr = fallbackRpc.error;
+//         lockedRows = fallbackRpc.data;
+//       }
 
 
-  if (lockErr) throw lockErr;
-if (Array.isArray(lockedRows) && lockedRows.length) {
-        const lockedMap = new Map(lockedRows.map((row) => [row.id, row]));
-        setScheduledTasks((prev) =>
-          prev.map((ev) => {
-            const row = lockedMap.get(ev.id);
-            return row ? mapScheduleBlockRowToEvent(row, stylistList) : ev;
-          })
-        );
-      } else {
-        const { data: refreshed, error: refreshErr } = await supabase
-          .from("schedule_blocks")
-          .select("*, schedule_task_types ( id, name, category, color )")
-          .in("id", ids);
-  if (refreshErr) throw refreshErr;
-  const refreshedMap = new Map(
-          (refreshed || []).map((row) => [row.id, row])
-        );
-        setScheduledTasks((prev) =>
-          prev.map((ev) => {
-            const row = refreshedMap.get(ev.id);
-            return row ? mapScheduleBlockRowToEvent(row, stylistList) : ev;
-          })
-        );
-      }
+// //   if (lockErr) throw lockErr;
+// // if (Array.isArray(lockedRows) && lockedRows.length) {
+//         const lockedMap = new Map(lockedRows.map((row) => [row.id, row]));
+//         setScheduledTasks((prev) =>
+//           prev.map((ev) => {
+//             const row = lockedMap.get(ev.id);
+//             return row ? mapScheduleBlockRowToEvent(row, stylistList) : ev;
+//           })
+//         );
+//       } else {
+//         const { data: refreshed, error: refreshErr } = await supabase
+//           .from("schedule_blocks")
+//           .select("*, schedule_task_types ( id, name, category, color )")
+//           .in("id", ids);
+//   if (refreshErr) throw refreshErr;
+//   const refreshedMap = new Map(
+//           (refreshed || []).map((row) => [row.id, row])
+//         );
+//         setScheduledTasks((prev) =>
+//           prev.map((ev) => {
+//             const row = refreshedMap.get(ev.id);
+//             return row ? mapScheduleBlockRowToEvent(row, stylistList) : ev;
+//           })
+//         );
+//       }
 
   toast.success(payload?.is_locked ? "Task locked" : "Task unlocked");
   return;
