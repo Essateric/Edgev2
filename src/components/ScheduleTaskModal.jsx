@@ -1,3 +1,4 @@
+// src/components/ScheduleTaskModal.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Select from "react-select";
 import toast from "react-hot-toast";
@@ -91,6 +92,21 @@ const matchesAllDayBounds = (startDate, endDate, staffId, stylists) => {
   );
 };
 
+// ✅ compare dates by minute (avoid seconds/ms mismatch)
+const sameMinute = (a, b) => {
+  if (!a || !b) return false;
+  return Math.floor(a.getTime() / 60000) === Math.floor(b.getTime() / 60000);
+};
+
+// ✅ compare staff arrays as sets
+const sameSet = (a = [], b = []) => {
+  const sa = new Set((a || []).filter(Boolean));
+  const sb = new Set((b || []).filter(Boolean));
+  if (sa.size !== sb.size) return false;
+  for (const v of sa) if (!sb.has(v)) return false;
+  return true;
+};
+
 export default function ScheduleTaskModal({
   isOpen,
   onClose,
@@ -171,6 +187,10 @@ export default function ScheduleTaskModal({
   const [allDay, setAllDay] = useState(false);
   const [lockTask, setLockTask] = useState(false);
 
+  // ✅ lock audit inputs
+  const [lockName, setLockName] = useState(auth?.currentUser?.name || "");
+  const [lockReason, setLockReason] = useState("");
+
   // ✅ tracks if user manually edited End (so we stop auto-changing it)
   const endTouchedRef = useRef(false);
 
@@ -245,6 +265,10 @@ export default function ScheduleTaskModal({
 
     setSaving(false);
 
+    // ✅ default lock name & clear reason each open
+    setLockName((prev) => prev || auth?.currentUser?.name || "");
+    setLockReason("");
+
     // creating: auto default end; editing: preserve
     endTouchedRef.current = isEditing ? true : false;
 
@@ -296,11 +320,11 @@ export default function ScheduleTaskModal({
     setOccurrencesText("1");
 
     setApplyToSeries(false);
-const multiStaff =
-  Array.isArray(editingTask?.staffIds) && editingTask.staffIds.length > 1;
 
-setDeleteScope(editingSeriesId || multiStaff ? "occurrence" : "single");
+    const multiStaff =
+      Array.isArray(editingTask?.staffIds) && editingTask.staffIds.length > 1;
 
+    setDeleteScope(editingSeriesId || multiStaff ? "occurrence" : "single");
 
     if (isEditing) {
       const ids = Array.isArray(editingTask?.staffIds)
@@ -316,7 +340,7 @@ setDeleteScope(editingSeriesId || multiStaff ? "occurrence" : "single");
       const rid = slot?.resourceId || null;
       setStaffIds(rid ? [rid] : []);
     }
-  }, [isOpen, isEditing, editingTask, slot, stylists, editingSeriesId]);
+  }, [isOpen, isEditing, editingTask, slot, stylists, editingSeriesId, auth]);
 
   // ✅ FIX: do NOT include is_locked in the normal update/create payload.
   // Lock/unlock must be a separate action (handled in CalendarPage via RPC),
@@ -346,7 +370,9 @@ setDeleteScope(editingSeriesId || multiStaff ? "occurrence" : "single");
 
     if (!allDay) {
       const durMin = Math.round((dayEnd.getTime() - dayStart.getTime()) / 60000);
-      if (durMin > 12 * 60) return toast.error("Tasks can’t be longer than 12 hours.");
+      if (durMin > 12 * 60) {
+        return toast.error("Tasks can’t be longer than 12 hours.");
+      }
     }
 
     const safeOccurrences = repeatEnabled
@@ -365,10 +391,112 @@ setDeleteScope(editingSeriesId || multiStaff ? "occurrence" : "single");
       const lockChanged = isEditing && lockTask !== prevLocked;
       const convertToSeries = isEditing && repeatEnabled && !editingSeriesId;
 
-// if editing a single task and user picks repeat -> treat it like “convert to series”
-const action =
-  convertToSeries ? "convert_to_series" : isEditing ? "update" : "create";
+      // if editing a single task and user picks repeat -> treat it like “convert to series”
+      const action =
+        convertToSeries ? "convert_to_series" : isEditing ? "update" : "create";
 
+      // ✅ ids to lock/unlock (multi-staff uses occurrenceIds; fallback to single id)
+      const idsToLock =
+        Array.isArray(editingTask?.occurrenceIds) &&
+        editingTask.occurrenceIds.length
+          ? editingTask.occurrenceIds.filter(Boolean)
+          : editingTask?.id
+          ? [editingTask.id]
+          : [];
+
+      const lockNote =
+        lockName?.trim()
+          ? `${lockName.trim()}${
+              lockReason?.trim() ? ` - ${lockReason.trim()}` : ""
+            }`
+          : lockReason?.trim()
+          ? lockReason.trim()
+          : null;
+
+      // ✅ lock-only short-circuit (prevents schedule_blocks PATCH + RLS 403 noise)
+      if (isEditing && lockChanged && !convertToSeries && !repeatEnabled) {
+        const prevStart = editingTask?.start ? new Date(editingTask.start) : null;
+        const prevEnd = editingTask?.end ? new Date(editingTask.end) : null;
+
+        const prevTypeId = String(
+          editingTask?.task_type_id || editingTask?.taskTypeId || ""
+        );
+        const nextTypeId = String(taskTypeId || "");
+
+        const prevStaffIds = Array.isArray(editingTask?.staffIds)
+          ? editingTask.staffIds.filter(Boolean)
+          : editingTask?.staff_id
+          ? [editingTask.staff_id]
+          : editingTask?.resourceId
+          ? [editingTask.resourceId]
+          : [];
+
+        const prevAllDay =
+          typeof editingTask?.allDay === "boolean"
+            ? !!editingTask.allDay
+            : // fallback if older rows don’t store allDay explicitly
+              matchesAllDayBounds(
+                prevStart,
+                prevEnd,
+                prevStaffIds?.[0] || null,
+                stylists
+              );
+
+        const lockOnly =
+          sameMinute(prevStart, dayStart) &&
+          sameMinute(prevEnd, dayEnd) &&
+          prevTypeId === nextTypeId &&
+          sameSet(prevStaffIds, staffIds) &&
+          prevAllDay === !!allDay;
+
+        if (lockOnly) {
+          if (!idsToLock.length) {
+            toast.error("Missing schedule block id(s).");
+            return;
+          }
+          if (!lockName?.trim()) {
+            toast.error("Enter your name to lock/unlock.");
+            return;
+          }
+
+          await onSave?.({
+            action: "set_lock",
+            payload: {
+              ids: idsToLock,
+              is_locked: !!lockTask,
+              reason: lockNote,
+            },
+          });
+
+          toast.success(
+            lockTask ? "Task locked successfully" : "Task unlocked successfully"
+          );
+          onClose?.();
+          return; // ✅ STOP: no update/create, no PATCH
+        }
+      }
+
+      // ✅ IMPORTANT ORDER:
+      // If UNLOCKING, unlock FIRST (otherwise update can be blocked by RLS)
+      if (lockChanged && !lockTask) {
+        if (!idsToLock.length) {
+          toast.error("Missing schedule block id(s) to unlock.");
+          return;
+        }
+        if (!lockName?.trim()) {
+          toast.error("Enter your name to unlock.");
+          return;
+        }
+        await onSave?.({
+          action: "set_lock",
+          payload: {
+            ids: idsToLock,
+            is_locked: false,
+            reason: lockNote,
+          },
+        });
+        toast.success("Task unlocked successfully");
+      }
 
       await onSave?.({
         action,
@@ -385,7 +513,7 @@ const action =
 
           staffIds,
           repeatRule,
-            occurrences: safeOccurrences,
+          occurrences: safeOccurrences,
           applyToSeries: !!applyToSeries,
           editingMeta: isEditing
             ? {
@@ -395,30 +523,38 @@ const action =
                 oldEnd: editingTask?.end ? new Date(editingTask.end) : null,
                 task_type_id:
                   editingTask?.task_type_id || editingTask?.taskTypeId || null,
-                staff_id: editingTask?.staff_id || editingTask?.resourceId || null,
+                staff_id:
+                  editingTask?.staff_id || editingTask?.resourceId || null,
                 start: editingTask?.start || null,
                 end: editingTask?.end || null,
                 created_by: editingTask?.created_by || null,
                 occurrenceIds: Array.isArray(editingTask?.occurrenceIds)
-  ? editingTask.occurrenceIds.filter(Boolean)
-  : null,
-
+                  ? editingTask.occurrenceIds.filter(Boolean)
+                  : null,
               }
             : null,
         },
       });
 
-      // ✅ Lock/unlock as a separate audited action
-      // (CalendarPage should implement action === "set_lock" using your RPC)
-      if (lockChanged) {
+      // ✅ If LOCKING, lock AFTER update
+      if (lockChanged && lockTask) {
+        if (!idsToLock.length) {
+          toast.error("Missing schedule block id(s) to lock.");
+          return;
+        }
+        if (!lockName?.trim()) {
+          toast.error("Enter your name to lock.");
+          return;
+        }
         await onSave?.({
           action: "set_lock",
           payload: {
-            id: editingTask?.id,
-            is_locked: lockTask,
-            reason: null,
+            ids: idsToLock,
+            is_locked: true,
+            reason: lockNote,
           },
         });
+        toast.success("Task locked successfully");
       }
     } finally {
       setSaving(false);
@@ -448,14 +584,15 @@ const action =
           editingMeta: {
             id: editingTask?.id,
             repeat_series_id: editingSeriesId,
-            task_type_id: editingTask?.task_type_id || editingTask?.taskTypeId || null,
+            task_type_id:
+              editingTask?.task_type_id || editingTask?.taskTypeId || null,
             staff_id: editingTask?.staff_id || editingTask?.resourceId || null,
             start: editingTask?.start || null,
             end: editingTask?.end || null,
             created_by: editingTask?.created_by || null,
-             occurrenceIds: Array.isArray(editingTask?.occurrenceIds)
-           ? editingTask.occurrenceIds.filter(Boolean)
-           : null,
+            occurrenceIds: Array.isArray(editingTask?.occurrenceIds)
+              ? editingTask.occurrenceIds.filter(Boolean)
+              : null,
           },
         },
       });
@@ -608,6 +745,37 @@ const action =
           </label>
         </div>
 
+        {/* ✅ lock audit inputs */}
+        {isEditing && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">
+                Your name (required for lock/unlock)
+              </label>
+              <input
+                className="w-full border rounded px-2 py-1 text-sm"
+                value={lockName}
+                onChange={(e) => setLockName(e.target.value)}
+                disabled={saving}
+                placeholder="e.g. Suneha"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">
+                Reason / note (optional)
+              </label>
+              <input
+                className="w-full border rounded px-2 py-1 text-sm"
+                value={lockReason}
+                onChange={(e) => setLockReason(e.target.value)}
+                disabled={saving}
+                placeholder="e.g. Client late"
+              />
+            </div>
+          </div>
+        )}
+
         <div className="mb-3">
           <label className="block text-sm font-semibold text-gray-700 mb-1">
             Columns / staff
@@ -674,13 +842,18 @@ const action =
               max={52}
               step={1}
               className={`w-full border rounded px-2 py-1 text-sm ${
-                !repeatEnabled ? "bg-gray-100 text-gray-500 cursor-not-allowed" : ""
+                !repeatEnabled
+                  ? "bg-gray-100 text-gray-500 cursor-not-allowed"
+                  : ""
               }`}
               value={repeatEnabled ? occurrencesText : "1"}
               onChange={(e) => setOccurrencesText(e.target.value)}
               onBlur={() => {
                 const n = Number(occurrencesText);
-                const safe = Math.max(1, Math.min(52, Number.isFinite(n) ? n : 1));
+                const safe = Math.max(
+                  1,
+                  Math.min(52, Number.isFinite(n) ? n : 1)
+                );
                 setOccurrences(safe);
                 setOccurrencesText(String(safe));
               }}

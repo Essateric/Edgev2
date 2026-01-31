@@ -81,7 +81,8 @@ const getScheduleBlockOccurrenceGroup = (clickedEvent, allScheduledTasks) => {
 
     return true;
   };
-
+  
+  // ✅ Arrived = lime gradient
   let group = (allScheduledTasks || []).filter(isSameOccurrence);
 
   // Safety: make sure the clicked one is included
@@ -1177,6 +1178,7 @@ const insertFutureRepeats = async ({
   taskTypeId,
   allDay,
   lockTask,
+  actorId
 }) => {
   const rule = String(repeatRule || "none");
   const count = Math.max(1, Math.min(52, Number(occurrences) || 1));
@@ -1208,6 +1210,7 @@ const insertFutureRepeats = async ({
           end: window.end.toISOString(),
           is_active: true,
           is_locked: !!lockTask,
+          created_by: actorId,
         });
       } else {
         rows.push({
@@ -1217,6 +1220,7 @@ const insertFutureRepeats = async ({
           end: o.end.toISOString(),
           is_active: true,
           is_locked: !!lockTask,
+          created_by: actorId,
         });
       }
     }
@@ -1265,7 +1269,38 @@ const insertFutureRepeats = async ({
 
 
 const handleSaveTask = async ({ action, payload }) => {
+
+  // inside handleSaveTask...
+
+// CalendarPage.jsx (inside handleSaveTask)
+if (action === "set_lock") {
+  try {
+    const { ids, is_locked, reason } = payload || {};
+    if (!ids?.length) throw new Error("Missing ids for lock/unlock");
+
+    // ✅ IMPORTANT: this must be an RPC / edge fn that can bypass RLS.
+    // Example RPC call:
+    const { error } = await supabase.rpc("set_schedule_blocks_lock", {
+      p_ids: ids,
+      p_is_locked: !!is_locked,
+      p_reason: reason || null,
+    });
+    if (error) throw error;
+
+    toast.success(is_locked ? "Task locked" : "Task unlocked");
+
+    // refresh events (whatever you already use)
+    await refetchCalendarEvents?.();
+  } catch (err) {
+    console.error("[Calendar] set_lock failed", err);
+    toast.error("Couldn’t update lock status");
+  }
+  return; // ✅ THIS is what stops the PATCH schedule_blocks
+}
   
+
+  const actorId = currentUser?.id || currentUser?.user?.id || null;
+
   if (!supabase) return;
 
   if (action === "convert_to_series") action = "update";
@@ -1273,36 +1308,39 @@ const handleSaveTask = async ({ action, payload }) => {
 
   try {
      if (action === "set_lock") {
-      const ids = Array.isArray(payload?.ids)
-        ? payload.ids.filter(Boolean)
-        : payload?.id
-        ? [payload.id]
-        : [];
+  const ids = Array.isArray(payload?.ids)
+    ? payload.ids.filter(Boolean)
+    : payload?.id
+    ? [payload.id]
+    : [];
 
-      if (!ids.length) {
-        toast.error("Missing schedule block id for lock update");
-        return;
-      }
+  if (!ids.length) {
+    toast.error("Missing schedule block id for lock update");
+    return;
+  }
 
-      const { data: lockedRows, error: lockErr } = await supabase
-        .from("schedule_blocks")
-        .update({ is_locked: !!payload?.is_locked })
-        .in("id", ids)
-        .select("*, schedule_task_types ( id, name, category, color )");
-
-      if (lockErr) throw lockErr;
-
-      const lockedMap = new Map((lockedRows || []).map((row) => [row.id, row]));
-      setScheduledTasks((prev) =>
-        prev.map((ev) => {
-          const row = lockedMap.get(ev.id);
-          return row ? mapScheduleBlockRowToEvent(row, stylistList) : ev;
-        })
-      );
-
-      toast.success(payload?.is_locked ? "Task locked" : "Task unlocked");
-      return;
+  const { data: lockedRows, error: lockErr } = await supabase.rpc(
+    "set_schedule_block_lock",
+    {
+      p_ids: ids,
+      p_is_locked: !!payload?.is_locked,
+      p_reason: payload?.reason || null, // optional note stored in audit_events.reason
     }
+  );
+
+  if (lockErr) throw lockErr;
+
+  const lockedMap = new Map((lockedRows || []).map((row) => [row.id, row]));
+  setScheduledTasks((prev) =>
+    prev.map((ev) => {
+      const row = lockedMap.get(ev.id);
+      return row ? mapScheduleBlockRowToEvent(row, stylistList) : ev;
+    })
+  );
+
+  toast.success(payload?.is_locked ? "Task locked" : "Task unlocked");
+  return;
+}
     // ---------- DELETE ----------
 if (action === "delete") {
   const meta = payload?.editingMeta || {};
@@ -1441,6 +1479,7 @@ if (action === "delete") {
               end: window.end.toISOString(),
                is_active: true,
                is_locked: !!lockTask,
+               created_by: actorId,
             });
             continue;
           }
@@ -1453,6 +1492,7 @@ if (action === "delete") {
             end: o.end.toISOString(),
              is_active: true,
              is_locked: !!lockTask,
+             created_by: actorId,
           });
         }
       }
@@ -1509,6 +1549,7 @@ if (action === "update") {
   const newEnd = new Date(payload.end);
   const newTaskTypeId = payload.taskTypeId || meta.task_type_id || null;
   const allDay = !!payload.allDay;
+  const lockTask = !!payload.lockTask;
 
   const uniq = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
 
@@ -1543,6 +1584,54 @@ if (action === "update") {
   if (shouldDoSingleRowUpdate) {
     const staffId = normalizedStaffIds[0];
 
+    const sameMinute = (a, b) => {
+  if (!a || !b) return false;
+  return Math.floor(new Date(a).getTime() / 60000) === Math.floor(new Date(b).getTime() / 60000);
+};
+
+const sameSet = (a = [], b = []) => {
+  const sa = new Set((a || []).filter(Boolean));
+  const sb = new Set((b || []).filter(Boolean));
+  if (sa.size !== sb.size) return false;
+  for (const v of sa) if (!sb.has(v)) return false;
+  return true;
+};
+
+// inside handleSaveTask, right before update logic:
+if (action === "update" && payload?.editingMeta?.id) {
+  const prevLocked = !!editingTask?.is_locked; // or selectedEvent?.is_locked, whichever you use
+  const nextLocked = !!payload.lockTask;
+
+  const lockChanged = prevLocked !== nextLocked;
+
+  if (lockChanged) {
+    const oldStart = payload.editingMeta.oldStart || payload.editingMeta.start;
+    const oldEnd = payload.editingMeta.oldEnd || payload.editingMeta.end;
+
+    const lockOnly =
+      sameMinute(oldStart, payload.start) &&
+      sameMinute(oldEnd, payload.end) &&
+      String(payload.editingMeta.task_type_id || "") === String(payload.taskTypeId || "") &&
+      sameSet([payload.editingMeta.staff_id].filter(Boolean), payload.staffIds) &&
+      (payload.repeatRule === "none" || !payload.repeatRule);
+
+    if (lockOnly) {
+      await handleSaveTask({
+        action: "set_lock",
+        payload: {
+          ids:
+            payload.editingMeta.occurrenceIds?.length
+              ? payload.editingMeta.occurrenceIds
+              : [payload.editingMeta.id],
+          is_locked: nextLocked,
+          reason: payload.lockNote || null,
+        },
+      });
+      return; // ✅ stop update PATCH
+    }
+  }
+}
+
     const { data: updatedRow, error } = await supabase
       .from("schedule_blocks")
       .update({
@@ -1575,6 +1664,8 @@ if (action === "update") {
   staffIds: normalizedStaffIds,
   taskTypeId: newTaskTypeId,
   allDay,
+lockTask,
+actorId
 });
 
 
@@ -1631,6 +1722,8 @@ if (action === "update") {
   staffIds: normalizedStaffIds,
   taskTypeId: newTaskTypeId,
   allDay,
+  lockTask,
+  actorId
 });
 
     toast.success("Task updated");
@@ -1658,8 +1751,9 @@ if (action === "update") {
         task_type_id: newTaskTypeId,
         start: window.start.toISOString(),
         end: window.end.toISOString(),
-        is_active: true,
-        is_locked: !!lockTask,
+     is_active: true,
+is_locked: !!lockTask,
+created_by: actorId,
       });
     } else {
       rowsToInsert.push({
@@ -1701,7 +1795,8 @@ if (action === "update") {
   staffIds: normalizedStaffIds,
   taskTypeId: newTaskTypeId,
   allDay,
-  lockTask: !!payload.lockTask,
+  lockTask,
+  actorId,
 });
 
   toast.success("Task updated");
@@ -1995,7 +2090,8 @@ if (isScheduleBlockEvent(event)) {
         style: {
           zIndex: 3,
           backgroundColor: "#000",
-          color: "#fff",
+    
+           color: "#1b2706",
           border: "1px solid #000",
           opacity: 0.95,
         },
@@ -2095,7 +2191,7 @@ if (isScheduleBlockEvent(event)) {
         style: {
           zIndex: 2,
           backgroundColor: "#16a34a",
-          color: "#fff",
+          color: "#ffffff",
           border: "none",
           opacity: 0.95,
         },
