@@ -1270,73 +1270,90 @@ const insertFutureRepeats = async ({
 
 const handleSaveTask = async ({ action, payload }) => {
 
-  // inside handleSaveTask...
+//   // inside handleSaveTask...
 
-// CalendarPage.jsx (inside handleSaveTask)
-if (action === "set_lock") {
-  try {
-    const { ids, is_locked, reason } = payload || {};
-    if (!ids?.length) throw new Error("Missing ids for lock/unlock");
+// // CalendarPage.jsx (inside handleSaveTask)
+// if (action === "set_lock") {
+//   try {
+//     const { ids, is_locked, reason } = payload || {};
+//     if (!ids?.length) throw new Error("Missing ids for lock/unlock");
 
-    // ✅ IMPORTANT: this must be an RPC / edge fn that can bypass RLS.
-    // Example RPC call:
-    const { error } = await supabase.rpc("set_schedule_blocks_lock", {
-      p_ids: ids,
-      p_is_locked: !!is_locked,
-      p_reason: reason || null,
-    });
-    if (error) throw error;
+//     // ✅ IMPORTANT: this must be an RPC / edge fn that can bypass RLS.
+//     // Example RPC call:
+//     const { error } = await supabase.rpc("set_schedule_blocks_lock", {
+//       p_ids: ids,
+//       p_is_locked: !!is_locked,
+//       p_reason: reason || null,
+//     });
+//     if (error) throw error;
+if (!supabase) return;
 
-    toast.success(is_locked ? "Task locked" : "Task unlocked");
+   if (action === "convert_to_series") action = "update";
 
-    // refresh events (whatever you already use)
-    await refetchCalendarEvents?.();
-  } catch (err) {
-    console.error("[Calendar] set_lock failed", err);
-    toast.error("Couldn’t update lock status");
-  }
-  return; // ✅ THIS is what stops the PATCH schedule_blocks
-}
+   try {
+    if (action === "set_lock") {
+      const ids = Array.isArray(payload?.ids)
+        ? payload.ids.filter(Boolean)
+        : payload?.id
+        ? [payload.id]
+        : [];
+
+      if (!ids.length) {
+        toast.error("Missing schedule block id for lock update");
+        return;
+      }
   
 
-  const actorId = currentUser?.id || currentUser?.user?.id || null;
+ const rpcPayload = {
+        p_ids: ids,
+        p_is_locked: !!payload?.is_locked,
+        p_reason: payload?.reason || null,
+      };
+  let lockErr = null;
+      let lockedRows = null;
 
-  if (!supabase) return;
+   const primaryRpc = await supabase.rpc(
+        "set_schedule_blocks_lock",
+        rpcPayload
+      );
+      lockErr = primaryRpc.error;
+      lockedRows = primaryRpc.data;
 
-  if (action === "convert_to_series") action = "update";
+      if (lockErr && /set_schedule_blocks_lock/i.test(lockErr.message || "")) {
+        const fallbackRpc = await supabase.rpc(
+          "set_schedule_block_lock",
+          rpcPayload
+        );
+        lockErr = fallbackRpc.error;
+        lockedRows = fallbackRpc.data;
+      }
 
-
-  try {
-     if (action === "set_lock") {
-  const ids = Array.isArray(payload?.ids)
-    ? payload.ids.filter(Boolean)
-    : payload?.id
-    ? [payload.id]
-    : [];
-
-  if (!ids.length) {
-    toast.error("Missing schedule block id for lock update");
-    return;
-  }
-
-  const { data: lockedRows, error: lockErr } = await supabase.rpc(
-    "set_schedule_block_lock",
-    {
-      p_ids: ids,
-      p_is_locked: !!payload?.is_locked,
-      p_reason: payload?.reason || null, // optional note stored in audit_events.reason
-    }
-  );
 
   if (lockErr) throw lockErr;
-
-  const lockedMap = new Map((lockedRows || []).map((row) => [row.id, row]));
-  setScheduledTasks((prev) =>
-    prev.map((ev) => {
-      const row = lockedMap.get(ev.id);
-      return row ? mapScheduleBlockRowToEvent(row, stylistList) : ev;
-    })
-  );
+if (Array.isArray(lockedRows) && lockedRows.length) {
+        const lockedMap = new Map(lockedRows.map((row) => [row.id, row]));
+        setScheduledTasks((prev) =>
+          prev.map((ev) => {
+            const row = lockedMap.get(ev.id);
+            return row ? mapScheduleBlockRowToEvent(row, stylistList) : ev;
+          })
+        );
+      } else {
+        const { data: refreshed, error: refreshErr } = await supabase
+          .from("schedule_blocks")
+          .select("*, schedule_task_types ( id, name, category, color )")
+          .in("id", ids);
+  if (refreshErr) throw refreshErr;
+  const refreshedMap = new Map(
+          (refreshed || []).map((row) => [row.id, row])
+        );
+        setScheduledTasks((prev) =>
+          prev.map((ev) => {
+            const row = refreshedMap.get(ev.id);
+            return row ? mapScheduleBlockRowToEvent(row, stylistList) : ev;
+          })
+        );
+      }
 
   toast.success(payload?.is_locked ? "Task locked" : "Task unlocked");
   return;
@@ -1584,53 +1601,53 @@ if (action === "update") {
   if (shouldDoSingleRowUpdate) {
     const staffId = normalizedStaffIds[0];
 
-    const sameMinute = (a, b) => {
-  if (!a || !b) return false;
-  return Math.floor(new Date(a).getTime() / 60000) === Math.floor(new Date(b).getTime() / 60000);
-};
+//     const sameMinute = (a, b) => {
+//   if (!a || !b) return false;
+//   return Math.floor(new Date(a).getTime() / 60000) === Math.floor(new Date(b).getTime() / 60000);
+// };
 
-const sameSet = (a = [], b = []) => {
-  const sa = new Set((a || []).filter(Boolean));
-  const sb = new Set((b || []).filter(Boolean));
-  if (sa.size !== sb.size) return false;
-  for (const v of sa) if (!sb.has(v)) return false;
-  return true;
-};
+// const sameSet = (a = [], b = []) => {
+//   const sa = new Set((a || []).filter(Boolean));
+//   const sb = new Set((b || []).filter(Boolean));
+//   if (sa.size !== sb.size) return false;
+//   for (const v of sa) if (!sb.has(v)) return false;
+//   return true;
+// };
 
-// inside handleSaveTask, right before update logic:
-if (action === "update" && payload?.editingMeta?.id) {
-  const prevLocked = !!editingTask?.is_locked; // or selectedEvent?.is_locked, whichever you use
-  const nextLocked = !!payload.lockTask;
+// // inside handleSaveTask, right before update logic:
+// if (action === "update" && payload?.editingMeta?.id) {
+//   const prevLocked = !!editingTask?.is_locked; // or selectedEvent?.is_locked, whichever you use
+//   const nextLocked = !!payload.lockTask;
 
-  const lockChanged = prevLocked !== nextLocked;
+//   const lockChanged = prevLocked !== nextLocked;
 
-  if (lockChanged) {
-    const oldStart = payload.editingMeta.oldStart || payload.editingMeta.start;
-    const oldEnd = payload.editingMeta.oldEnd || payload.editingMeta.end;
+//   if (lockChanged) {
+//     const oldStart = payload.editingMeta.oldStart || payload.editingMeta.start;
+//     const oldEnd = payload.editingMeta.oldEnd || payload.editingMeta.end;
 
-    const lockOnly =
-      sameMinute(oldStart, payload.start) &&
-      sameMinute(oldEnd, payload.end) &&
-      String(payload.editingMeta.task_type_id || "") === String(payload.taskTypeId || "") &&
-      sameSet([payload.editingMeta.staff_id].filter(Boolean), payload.staffIds) &&
-      (payload.repeatRule === "none" || !payload.repeatRule);
+//     const lockOnly =
+//       sameMinute(oldStart, payload.start) &&
+//       sameMinute(oldEnd, payload.end) &&
+//       String(payload.editingMeta.task_type_id || "") === String(payload.taskTypeId || "") &&
+//       sameSet([payload.editingMeta.staff_id].filter(Boolean), payload.staffIds) &&
+//       (payload.repeatRule === "none" || !payload.repeatRule);
 
-    if (lockOnly) {
-      await handleSaveTask({
-        action: "set_lock",
-        payload: {
-          ids:
-            payload.editingMeta.occurrenceIds?.length
-              ? payload.editingMeta.occurrenceIds
-              : [payload.editingMeta.id],
-          is_locked: nextLocked,
-          reason: payload.lockNote || null,
-        },
-      });
-      return; // ✅ stop update PATCH
-    }
-  }
-}
+//     if (lockOnly) {
+//       await handleSaveTask({
+//         action: "set_lock",
+//         payload: {
+//           ids:
+//             payload.editingMeta.occurrenceIds?.length
+//               ? payload.editingMeta.occurrenceIds
+//               : [payload.editingMeta.id],
+//           is_locked: nextLocked,
+//           reason: payload.lockNote || null,
+//         },
+//       });
+//       return; // ✅ stop update PATCH
+//     }
+//   }
+// }
 
     const { data: updatedRow, error } = await supabase
       .from("schedule_blocks")
@@ -1640,7 +1657,7 @@ if (action === "update" && payload?.editingMeta?.id) {
         start: newStart.toISOString(),
         end: newEnd.toISOString(),
         is_active: true,
-        is_locked: !!lockTask,
+        // is_locked: !!lockTask,
       })
       .eq("id", occIds[0])
       .select("*, schedule_task_types ( id, name, category, color )")
@@ -1752,7 +1769,7 @@ actorId
         start: window.start.toISOString(),
         end: window.end.toISOString(),
      is_active: true,
-is_locked: !!lockTask,
+// is_locked: !!lockTask,
 created_by: actorId,
       });
     } else {
